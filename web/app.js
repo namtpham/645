@@ -871,12 +871,28 @@ function qrBadge(s, { short = false } = {}) {
 
 const resultsOut = (d) => Date.now() >= kstAt(d, RESULTS_TIME).getTime();
 
+const CHECK_FN_URL = () => `${CFG.supabaseUrl}/functions/v1/check-tickets`;
+
 async function checkResults(ticketId) {
   const { data, error } = await S.sb.functions.invoke('check-tickets', {
     body: ticketId ? { ticket_id: ticketId } : {}, region: 'ap-northeast-2',
   });
-  if (error) throw new Error('Result check failed — is the "check-tickets" Edge Function deployed? ' + (error.message || ''));
-  return data;
+  if (!error) return data;
+  // The function answered with an error: show its own message
+  let detail = '';
+  try { detail = (await error.context?.json?.())?.error || ''; } catch { /* not JSON */ }
+  const err = new Error(detail ? `Result check failed: ${detail}` : 'Could not reach the result checker.');
+  err.unreachable = !detail && error.name === 'FunctionsFetchError';
+  throw err;
+}
+
+function checkFailHelp(e) {
+  if (!e.unreachable) return esc(e.message);
+  return `Could not reach the <strong>check-tickets</strong> Edge Function. Usually one of:
+    <ul><li>it is not deployed yet, or has a different name;</li>
+    <li>"Verify JWT" is still on in the function's settings.</li></ul>
+    Test it: <a href="${esc(CHECK_FN_URL())}" target="_blank" rel="noopener">open the function</a> — it should show
+    <code>"ok": true</code>. Anything else (e.g. "Missing authorization header", "NOT_FOUND") tells you which step to redo.`;
 }
 
 /** After 20:50 KST on draw day, the first member who opens the app triggers the check. */
@@ -968,7 +984,12 @@ async function checkLb() {
     renderLbQr();
     toast('Results checked.', 'ok');
     scheduleReload();
-  } catch (e) { fail(e); }
+  } catch (e) {
+    console.warn(e);
+    renderLbQr();
+    $('lb-qr').insertAdjacentHTML('afterbegin', `<div class="form-error qr-error">${checkFailHelp(e)}</div>`);
+    toast(e.unreachable ? 'Could not reach the result checker — see the note under the photo.' : e.message, 'err');
+  }
 }
 
 function editLbItem(i, patch) {
@@ -1282,7 +1303,7 @@ const invColor = (inv) => { const i = S.investors.indexOf(inv); return i >= 0 &&
 function killChart(id) { if (S.charts[id]) { S.charts[id].destroy(); delete S.charts[id]; } }
 
 /** Shared Chart.js options: hairline grid, money ticks & tooltips, hover by column. */
-function chartOpts({ stacked = false, horizontal = false, legend = true, endLabels = false, pct = false } = {}) {
+function chartOpts({ stacked = false, horizontal = false, legend = true, endLabels = false, pct = false, hideZero = false } = {}) {
   const phone = window.innerWidth < 640;
   if (phone) endLabels = false;   // the legend names the lines; keep the narrow plot for data
   const fmt = pct ? (v) => `${(+v).toFixed(0)}%` : (v) => money(v);
@@ -1303,6 +1324,8 @@ function chartOpts({ stacked = false, horizontal = false, legend = true, endLabe
       tooltip: {
         backgroundColor: '#0d1117', borderColor: '#253656', borderWidth: 1, titleColor: '#e2e8f0', bodyColor: '#cbd5e1', padding: 10,
         callbacks: { label: (c) => ` ${c.dataset.label}: ${fmt(horizontal ? c.parsed.x : c.parsed.y)}` },
+        // e.g. investors who did not take part in that draw
+        filter: hideZero ? (c) => (horizontal ? c.parsed.x : c.parsed.y) !== 0 : undefined,
       },
       endLabels: { enabled: endLabels },
     },
@@ -1424,7 +1447,7 @@ function renderCharts() {
   mk('prize', { type: 'bar', data: { labels, datasets: [
     { label: 'Shared to investors', data: weeks.map((w) => w.big_win ? +w.prize_won || 0 : 0), ...barStyle(SERIES.won, true) },
     { label: 'Added to pool', data: weeks.map((w) => w.big_win ? 0 : +w.prize_won || 0), ...barStyle(SERIES.pool, true) },
-  ] }, options: chartOpts({ stacked: true }) });
+  ] }, options: chartOpts({ stacked: true, hideZero: true }) });
 
   const outOpts = chartOpts({ legend: false });
   outOpts.scales.y.ticks.callback = (v) => (Number.isInteger(v) ? v : '');
@@ -1465,9 +1488,11 @@ function renderCharts() {
     ...barStyle(investors.map(invColor)),
   }] }, options: shareOpts });
 
-  mk('wkly', { type: 'bar', data: { labels, datasets: investors.map((inv) => ({
-    label: inv.nickname, data: weeks.map((w) => +w.investments?.[inv.id] || 0), ...barStyle(invColor(inv), true), maxBarThickness: 22,
-  })) }, options: chartOpts({ stacked: true }) });
+  // Only investors who put money in at some point; empty columns per draw are skipped in the tooltip
+  const payers = investors.filter((inv) => weeks.some((w) => +w.investments?.[inv.id] > 0));
+  mk('wkly', { type: 'bar', data: { labels, datasets: payers.map((inv) => ({
+    label: inv.nickname, data: weeks.map((w) => +w.investments?.[inv.id] || null), ...barStyle(invColor(inv), true), maxBarThickness: 22,
+  })) }, options: chartOpts({ stacked: true, hideZero: true }) });
 }
 
 // ─── Activity log ─────────────────────────────────────────────────────────────

@@ -16,10 +16,16 @@
 
 import { createClient } from 'npm:@supabase/supabase-js@2.117.2';
 
-const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
-const SERVICE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ??
-  Object.values(JSON.parse(Deno.env.get('SUPABASE_SECRET_KEYS') ?? '{}'))[0] as string;
-const db = createClient(SUPABASE_URL, SERVICE_KEY, { auth: { persistSession: false } });
+// The service key is provided to every Edge Function automatically (legacy or new key format).
+function serviceKey(): string | undefined {
+  const legacy = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+  if (legacy) return legacy;
+  try { return Object.values(JSON.parse(Deno.env.get('SUPABASE_SECRET_KEYS') ?? '{}'))[0] as string; } catch { return undefined; }
+}
+const SUPABASE_URL = Deno.env.get('SUPABASE_URL') ?? '';
+const SERVICE_KEY = serviceKey();
+// deno-lint-ignore no-explicit-any
+let db: any = null;
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -92,7 +98,22 @@ async function checkQr(url: string): Promise<{ status: string; prize: number | n
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS });
+  // Opening the function URL in a browser is a self-test.
+  if (req.method === 'GET') {
+    return json({ ok: !!(SUPABASE_URL && SERVICE_KEY), function: 'check-tickets', service_key: !!SERVICE_KEY,
+      note: 'If you can read this, the function is deployed and reachable without a login.' });
+  }
   if (req.method !== 'POST') return json({ error: 'POST only' }, 405);
+  if (!SUPABASE_URL || !SERVICE_KEY) return json({ error: 'The function has no SUPABASE_URL / service key in its environment.' }, 500);
+  db ??= createClient(SUPABASE_URL, SERVICE_KEY, { auth: { persistSession: false } });
+  try {
+    return await handle(req);
+  } catch (e) {
+    return json({ error: (e as Error).message ?? String(e) }, 500);
+  }
+});
+
+async function handle(req: Request): Promise<Response> {
   const body = await req.json().catch(() => ({}));
   const member = await callerIsMember(req);
   const force = member && typeof body.ticket_id === 'string';
@@ -129,4 +150,4 @@ Deno.serve(async (req) => {
     }
   }
   return json({ ok: true, checked, updated: summary });
-});
+}

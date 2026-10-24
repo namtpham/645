@@ -573,3 +573,7 @@ body.is-admin .admin-hide { display: none !important; }
   .qr-item { grid-template-columns: 1fr; }
   .qr-edit .fsel { flex: 1; width: auto; }
 }
+
+.qr-error { margin: 0 0 12px; line-height: 1.5; }
+.qr-error ul { margin: 4px 0 4px 18px; }
+.qr-error a { color: #fde68a; }
