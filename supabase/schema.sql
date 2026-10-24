@@ -122,6 +122,15 @@ create table if not exists public.tickets (
 );
 create index if not exists tickets_draw_date_idx on public.tickets (draw_date);
 
+-- Winning numbers per draw, filled in by the check-tickets Edge Function.
+create table if not exists public.draws (
+  round      int primary key,
+  draw_date  date,
+  numbers    int[] not null check (array_length(numbers, 1) = 6),
+  bonus      int not null,
+  fetched_at timestamptz not null default now()
+);
+
 create table if not exists public.audit_log (
   id         bigint generated always as identity primary key,
   at         timestamptz not null default now(),
@@ -349,13 +358,14 @@ alter table public.investors enable row level security;
 alter table public.weeks     enable row level security;
 alter table public.tickets   enable row level security;
 alter table public.audit_log enable row level security;
+alter table public.draws     enable row level security;
 
 do $$
 declare p record;
 begin
   for p in select policyname, tablename from pg_policies
            where schemaname = 'public'
-             and tablename in ('profiles', 'invites', 'settings', 'investors', 'weeks', 'tickets', 'audit_log')
+             and tablename in ('profiles', 'invites', 'settings', 'investors', 'weeks', 'tickets', 'audit_log', 'draws')
   loop
     execute format('drop policy %I on public.%I', p.policyname, p.tablename);
   end loop;
@@ -397,6 +407,7 @@ create policy "correct ticket results" on public.tickets for update to authentic
 create policy "admin delete tickets" on public.tickets for delete to authenticated using (public.is_admin());
 
 create policy "read audit log"  on public.audit_log for select to authenticated using (public.is_member());
+create policy "read draws"      on public.draws     for select to authenticated using (public.is_member());
 
 -- ─── Grants ─────────────────────────────────────────────────────────────────
 
@@ -406,7 +417,7 @@ grant select, insert, delete         on public.tickets   to authenticated;
 grant update (qr_data, result)       on public.tickets   to authenticated;
 grant select, update                 on public.settings  to authenticated;
 grant select, update, delete         on public.invites   to authenticated;
-grant select                         on public.profiles, public.audit_log to authenticated;
+grant select                         on public.profiles, public.audit_log, public.draws to authenticated;
 grant update (display_name)          on public.profiles  to authenticated;
 
 revoke execute on all functions in schema public from public, anon;
@@ -447,7 +458,7 @@ create policy "645 delete tickets" on storage.objects for delete to authenticate
 do $$
 declare t text;
 begin
-  foreach t in array array['investors', 'weeks', 'tickets', 'settings', 'profiles'] loop
+  foreach t in array array['investors', 'weeks', 'tickets', 'settings', 'profiles', 'draws'] loop
     if not exists (select 1 from pg_publication_tables
                    where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = t) then
       execute format('alter publication supabase_realtime add table public.%I', t);

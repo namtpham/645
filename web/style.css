@@ -577,3 +577,41 @@ body.is-admin .admin-hide { display: none !important; }
 .qr-error { margin: 0 0 12px; line-height: 1.5; }
 .qr-error ul { margin: 4px 0 4px 18px; }
 .qr-error a { color: #fde68a; }
+
+/* ─── Time bar ──────────────────────────────────────────────────────── */
+.timebar { display: flex; justify-content: space-between; gap: 6px 16px; flex-wrap: wrap; max-width: 1200px; margin: 0 auto;
+  padding: 8px 20px 0; font-size: 12px; color: var(--muted); }
+.timebar strong { color: var(--dim); font-weight: 500; }
+#tb-clock { font-variant-numeric: tabular-nums; }
+
+/* ─── Result summary (lotto balls, like the official page) ─────────── */
+.ball { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 50%;
+  font: 600 11px var(--mono); color: var(--dim); background: rgba(255,255,255,.05); border: 1px solid var(--border2); margin-right: 3px; }
+.rs-win .ball, .ball.hit { color: #0b0b0b; border: none; }
+.rs-win .ball.b1, .ball.hit.b1 { background: #fbc400; }   /* 1–10  yellow, as on the paper ticket */
+.rs-win .ball.b2, .ball.hit.b2 { background: #69c8f2; }   /* 11–20 blue */
+.rs-win .ball.b3, .ball.hit.b3 { background: #ff7272; }   /* 21–30 red */
+.rs-win .ball.b4, .ball.hit.b4 { background: #aaaaaa; }   /* 31–40 gray */
+.rs-win .ball.b5, .ball.hit.b5 { background: #b0d840; }   /* 41–45 green */
+.ball.hit-bonus { box-shadow: 0 0 0 2px var(--gold); color: var(--text); }
+.plus { margin: 0 4px 0 1px; color: var(--muted); }
+.rs { margin: 6px 0 4px; display: flex; flex-direction: column; gap: 4px; }
+.rs-head { font-size: 12px; color: var(--dim); display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 2px; }
+.rs-win { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 0; }
+.rs-game { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.rs-label { font: 600 11px var(--mono); color: var(--muted); width: 12px; }
+.rs-rank { font-size: 11px; font-weight: 600; padding: 1px 8px; border-radius: 10px; }
+.rs-rank.r0 { color: var(--muted); background: rgba(255,255,255,.04); }
+.rs-rank.r5, .rs-rank.r4 { color: var(--c-pooled); background: rgba(45,212,191,.1); }
+.rs-rank.r3, .rs-rank.r2, .rs-rank.r1 { color: #0b0b0b; background: var(--gold); }
+.rs-verdict { font-size: 13px; font-weight: 600; margin-top: 2px; }
+.rs-verdict span { font-weight: 500; margin-left: 4px; }
+.rs-verdict.win { color: var(--c-shared); }
+.rs-verdict.lose { color: var(--dim); }
+.rs-verdict.wait { color: var(--muted); font-weight: 400; font-size: 12px; }
+.draw-last { flex-basis: 100%; font-size: 12px; color: var(--dim); display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+  border-top: 1px solid rgba(245,158,11,.18); padding-top: 10px; }
+@media (max-width: 640px) {
+  .timebar { padding: 8px 12px 0; flex-direction: column; }
+  .ball { width: 22px; height: 22px; font-size: 10px; }
+}

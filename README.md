@@ -245,16 +245,32 @@ Every change is in the Activity log. A QR that appears in two photos is counted 
 ### One-time setup for the result check
 
 1. **Update the database.** Run the latest [`supabase/schema.sql`](supabase/schema.sql) in the
-   SQL Editor again. This lets members correct QR results.
-2. **Deploy the function.** In Supabase, open **Edge Functions → Deploy a new function → Via
-   Editor**. Name it **`check-tickets`**, paste
+   SQL Editor again. It adds the `draws` table for winning numbers and lets members correct
+   QR results.
+2. **Deploy the function.** Option A, the GitHub Action, is easiest and repeatable:
+   1. Create a Supabase access token at <https://supabase.com/dashboard/account/tokens>.
+   2. In GitHub, open **Settings → Secrets and variables → Actions → New repository secret**.
+      Name it `SUPABASE_ACCESS_TOKEN` and paste the token.
+   3. Open **Actions → Deploy result checker → Run workflow**. It deploys `check-tickets`
+      with "Verify JWT" off, and its last step checks that the function answers. After that,
+      it redeploys automatically whenever the function code changes.
+
+   Option B is the Supabase dashboard: **Edge Functions → Deploy a new function → Via
+   Editor**. Name it exactly `check-tickets`, paste
    [`supabase/functions/check-tickets/index.ts`](supabase/functions/check-tickets/index.ts),
-   and click **Deploy**.
-3. **Turn off "Verify JWT".** In the function's **Details / Settings**, switch off **Verify JWT
-   with legacy secret** ("Enforce JWT verification") and save. The function checks who is
-   calling by itself. Anonymous calls can only check tickets whose results are already out.
-4. **Test it.** Open a photo whose draw is over and click **Check results now**. You can also
-   run **Actions → Check ticket results → Run workflow**.
+   click **Deploy**, then turn **off "Verify JWT"** in its settings.
+3. **Self-test.** Open `https://<your-project>.supabase.co/functions/v1/check-tickets` in a
+   browser. It should show `"ok": true`.
+   - `NOT_FOUND`: the function isn't deployed under that name.
+   - `Missing authorization header`: "Verify JWT" is still on.
+4. **Try it.** Open a photo whose draw is over and click **Check results now**.
+
+**How a result is decided.** The function loads the draw's winning numbers from dhlottery's
+public draw data and compares every game on the ticket (matched numbers, 1등–5등). It also
+reads the ticket's own result page. The page's "축하합니다! 총 N원 당첨" or "낙첨되었습니다"
+wins, and a disagreement with the numbers is flagged. If the page can't be read, the numbers
+decide: no match means no win, and 4등/5등 means ₩50,000/₩5,000. For 1등–3등 the amount
+varies, so it asks you to enter it from the result page.
 
 ---
 

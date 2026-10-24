@@ -28,6 +28,7 @@ const S = {
   ledger: { pool: { total: 0, entries: [] }, perWeek: {}, history: [] },
   charts: {}, tab: 'dashboard', openWeeks: new Set(),
   audit: null, invites: null, uploads: [], lbTicket: null,
+  draws: {}, lastChange: null, loadedAt: null,
 };
 let _wmPool = { total: 0, entries: [] };
 let _wmShare = false, _wmShareTouched = false;   // week modal: share prize now vs. add to pool
@@ -399,6 +400,13 @@ async function loadAll() {
   const err = res.find((r) => r.error)?.error;
   if (err) throw err;
   const [st, pr, iv, wk, tk] = res.map((r) => r.data);
+  const [dr, lc] = await Promise.all([
+    sb.from('draws').select('*').order('round', { ascending: false }).limit(400),
+    sb.from('audit_log').select('*').order('at', { ascending: false }).limit(1),
+  ]);
+  S.draws = Object.fromEntries((dr.data || []).map((d) => [d.round, d]));   // missing table → {}
+  S.lastChange = lc.data?.[0] || null;
+  S.loadedAt = new Date();
   if (st) S.settings = { ...S.settings, ...st, big_win_threshold: +st.big_win_threshold };
   S.profiles = pr || [];
   S.investors = iv || [];
@@ -440,11 +448,34 @@ function stopRealtime() {
 // ═════════════════════════════════════════════════════════════════════════════
 //  Rendering
 // ═════════════════════════════════════════════════════════════════════════════
+// ─── Time bar: local time + last change ───────────────────────────────────────
+const LOCAL_TZ = Intl.DateTimeFormat().resolvedOptions().timeZone;
+function ago(ts) {
+  const m = Math.round((Date.now() - new Date(ts)) / 60000);
+  return m < 1 ? 'just now' : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} d ago`;
+}
+function renderTimebar() {
+  if (!$('tb-clock')) return;
+  const now = new Date();
+  const local = now.toLocaleString('en-GB', { weekday: 'short', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+  const kst = LOCAL_TZ === TZ ? '' : ` · Korea ${now.toLocaleTimeString('en-GB', { timeZone: TZ, hour: '2-digit', minute: '2-digit', hour12: false })}`;
+  $('tb-clock').textContent = `🕒 ${local} (${LOCAL_TZ.replace('_', ' ')})${kst}`;
+  const c = S.lastChange;
+  if (c) {
+    const d = describeChange(c);
+    const at = new Date(c.at).toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false });
+    $('tb-update').innerHTML = `🔄 Last update <strong>${esc(at)}</strong> (${ago(c.at)}) · ${esc(d.self ? userName(d.self) : userName(c.actor))} ${esc(d.head)} ${esc(d.subject || '')}`;
+  } else $('tb-update').textContent = '';
+  $('tb-update').title = S.loadedAt ? `Data loaded ${S.loadedAt.toLocaleTimeString('en-GB', { hour12: false })}` : '';
+}
+setInterval(renderTimebar, 1000);
+
 function renderAll() {
   document.body.classList.toggle('is-admin', isAdmin());
   document.title = S.settings.title || '645';
   $('nav-title').textContent = S.settings.title || '645';
   $('nav-user').textContent = S.me.display_name;
+  renderTimebar();
   renderDashboard();
   renderWeeks();
   renderTickets();
@@ -489,9 +520,13 @@ function renderDrawCard() {
         ${qrSummary(tix).n ? ` · ${qrSummary(tix).n} QR codes ${qrBadge(qrSummary(tix))}` : ''}</div>
     </div>
     <div class="draw-thumbs">${tix.slice(0, 6).map((t) => thumbImg(t)).join('')}</div>
-    <button class="btn btn-primary" data-act="tab" data-tab="tickets">📤 Upload tickets</button>`;
+    <button class="btn btn-primary" data-act="tab" data-tab="tickets">📤 Upload tickets</button>
+    ${lastDraw() ? `<div class="draw-last">Last draw #${lastDraw().round}${lastDraw().draw_date ? ` · ${esc(fmtD(lastDraw().draw_date))}` : ''}
+      <span class="rs-win">${drawBalls(lastDraw())}</span></div>` : ''}`;
   hydrateImages($('draw-card'));
 }
+
+const lastDraw = () => S.draws[Math.max(0, ...Object.keys(S.draws).map(Number))] || null;
 
 function renderDashboard() {
   const weeks = S.weeks, pool = S.ledger.pool;
@@ -607,6 +642,7 @@ function weekRow(w) {
     <div class="week-body ${S.openWeeks.has(w.id) ? 'open' : ''}" id="wb-${esc(w.id)}">
       <div class="flbl mb8">Effective percentages &amp; amounts</div>
       ${pctRows(c.pcts, c.eff) || '<p class="fhelp">No investments recorded.</p>'}
+      ${S.draws[drawNo(w.result_date)] ? `<div class="fhelp" style="margin-top:10px">당첨번호 <span class="rs-win">${drawBalls(S.draws[drawNo(w.result_date)])}</span></div>` : ''}
       ${qs.n ? `<div class="fhelp" style="margin-top:10px">Ticket QR results: ${qs.n} code${qs.n > 1 ? 's' : ''} · ${qs.win} won · ${qs.lose} no win${qs.pending ? ` · ${qs.pending} waiting` : ''} ${qrBadge(qs)}</div>` : ''}
       ${tix.length ? `<div class="thumb-row">${tix.map((t) => thumbImg(t)).join('')}</div>` : ''}
       ${w.notes ? `<div class="week-notes">${esc(w.notes)}</div>` : ''}
@@ -906,6 +942,42 @@ function maybeAutoCheck() {
   checkResults().catch((e) => console.warn(e.message));
 }
 
+// ─── Result summary (like the official result page) ──────────────────────────
+const FIXED_PRIZE = { 4: 50000, 5: 5000 };
+const GAME_LABELS = 'ABCDE';
+const ball = (n, cls = '') => `<span class="ball ${cls} b${Math.ceil(n / 10)}">${String(n).padStart(2, '0')}</span>`;
+
+/** Rank of one game: 6 = 1등, 5+bonus = 2등, 5 = 3등, 4 = 4등, 3 = 5등, else 0. */
+function gameResult(g, draw) {
+  if (g.rank != null && g.match) return g;
+  if (!draw) return null;
+  const match = g.nums.filter((n) => draw.numbers.includes(n)), bonus = g.nums.includes(draw.bonus), k = match.length;
+  return { ...g, match, bonus, rank: k === 6 ? 1 : k === 5 && bonus ? 2 : k === 5 ? 3 : k === 4 ? 4 : k === 3 ? 5 : 0 };
+}
+
+function drawBalls(draw) {
+  return `${draw.numbers.map((n) => ball(n)).join('')}<span class="plus">+</span>${ball(draw.bonus, 'bonus')}`;
+}
+
+function resultSummary(it, drawDate) {
+  const draw = S.draws[it.round];
+  const games = (it.games || []).map((g) => gameResult(g, draw) || g);
+  const verdict = it.status === 'win'
+    ? `<div class="rs-verdict win">축하합니다! <span>총 ${+it.prize > 0 ? esc(money(it.prize)) : '?'} 당첨</span></div>`
+    : it.status === 'lose' ? `<div class="rs-verdict lose">아쉽게도, <span>낙첨되었습니다.</span></div>`
+      : `<div class="rs-verdict wait">${resultsOut(drawDate) ? '⏳ Result not checked yet' : `⏳ Results after ${RESULTS_TIME} KST on ${esc(fmtD(drawDate))}`}</div>`;
+  return `<div class="rs">
+    <div class="rs-head">제${it.round ?? '?'}회${draw?.draw_date ? ` · ${esc(fmtD(draw.draw_date))}` : ''}
+      ${draw ? `<span class="rs-win">당첨번호 ${drawBalls(draw)}</span>` : resultsOut(drawDate) ? '<span class="fhelp">winning numbers not loaded yet</span>' : ''}</div>
+    ${games.map((g, i) => {
+      const hit = (n) => (g.match?.includes(n) ? 'hit' : g.bonus && draw && n === draw.bonus ? 'hit-bonus' : '');
+      const rank = g.rank == null ? '' : g.rank ? `<span class="rs-rank r${g.rank}">${g.rank}등${FIXED_PRIZE[g.rank] ? ' ' + esc(money(FIXED_PRIZE[g.rank])) : ''}</span>` : '<span class="rs-rank r0">낙첨</span>';
+      return `<div class="rs-game"><span class="rs-label">${GAME_LABELS[i] || i + 1}</span><span class="rs-nums">${g.nums.map((n) => ball(n, hit(n))).join('')}</span>${rank}</div>`;
+    }).join('')}
+    ${verdict}
+  </div>`;
+}
+
 // Lightbox panel: the QR codes of one photo, with manual correction.
 function renderLbQr() {
   const t = S.lbTicket, el = $('lb-qr');
@@ -931,7 +1003,7 @@ function renderLbQr() {
             ${it.round && drawN && it.round !== drawN ? `<span class="red fhelp"> ⚠️ this photo is filed under draw #${drawN}</span>` : ''}
             ${elsewhere(it.url) ? `<span class="fhelp"> · also in another photo (counted once)</span>` : ''}
             ${it.manual ? `<span class="badge bg-gray">corrected by hand</span>` : ''}</div>
-          ${it.games?.length ? `<div class="qr-games">${it.games.map((g) => `<span>${g.nums.map((n) => String(n).padStart(2, '0')).join(' ')}</span>`).join('')}</div>` : ''}
+          ${resultSummary(it, t.draw_date)}
           <div class="fhelp">${it.checked_at ? `Checked ${esc(fmtKST(it.checked_at))}` : resultsOut(t.draw_date) ? 'Not checked yet' : `Results after ${RESULTS_TIME} KST on draw day`}${it.message ? ` · ${esc(it.message)}` : ''}</div>
         </div>
         <div class="qr-edit">
