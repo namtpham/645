@@ -28,6 +28,7 @@ const S = {
   audit: null, invites: null, uploads: [], lbTicket: null,
 };
 let _wmPool = { total: 0, entries: [] };
+let _wmShare = false, _wmShareTouched = false;   // week modal: share prize now vs. add to pool
 
 // ─── Small helpers ────────────────────────────────────────────────────────────
 const $ = (id) => document.getElementById(id);
@@ -143,7 +144,7 @@ function calcWeek(investments, poolUsed, pool) {
 }
 
 /**
- * Small prizes (below the big-win threshold) go into the prize pool, remembering who owned which
+ * Prizes not shared out (big_win = false) go into the prize pool, remembering who owned which
  * share. Using pool money in a later week shrinks every entry proportionally and credits it to
  * the original owners.
  */
@@ -264,7 +265,7 @@ function showAuth(tab) {
 }
 
 function setAuthTab(tab) {
-  document.querySelectorAll('.seg-btn').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
+  document.querySelectorAll('#view-auth .seg-btn').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
   show('form-login', tab === 'login');
   show('form-join', tab === 'join');
   (tab === 'login' ? $('li-user') : $('jn-code').value ? $('jn-user') : $('jn-code')).focus();
@@ -424,9 +425,11 @@ function goTab(name) {
 function resultBadge(w, long = false) {
   const prize = +w.prize_won || 0;
   if (prize === 0) return `<span class="badge bg-gray">No win</span>`;
-  return w.big_win
-    ? `<span class="badge bg-gold">🏆 Big Win${long ? ' — ' + esc(money(prize)) : ''}</span>`
-    : `<span class="badge bg-green">${long ? '＋Pool ' + esc(money(prize)) : '→ Added to pool'}</span>`;
+  if (w.big_win) {
+    const label = prize >= S.settings.big_win_threshold ? '🏆 Big Win — shared' : '💸 Shared';
+    return `<span class="badge bg-gold">${label}${long ? ' ' + esc(money(prize)) : ''}</span>`;
+  }
+  return `<span class="badge bg-green">${long ? '＋Pool ' + esc(money(prize)) : '→ Added to pool'}</span>`;
 }
 
 function renderDrawCard() {
@@ -478,7 +481,7 @@ function renderDashboard() {
     }
     pb.innerHTML = h + `</tbody></table></div>`;
   } else {
-    pb.innerHTML = `<div class="empty"><div class="ico">🏦</div><p>Pool is empty. Small wins (below the big-win threshold) will accumulate here.</p></div>`;
+    pb.innerHTML = `<div class="empty"><div class="ico">🏦</div><p>Pool is empty. Prizes you choose to add to the pool will accumulate here.</p></div>`;
   }
 
   const recent = sortWeeks(weeks).reverse().slice(0, 6);
@@ -523,6 +526,7 @@ function renderWeeks() {
         <div class="week-meta">
           <span>Total: <strong>${esc(money(c.total))}</strong></span>
           ${w.pool_used > 0 ? `<span>From pool: <strong class="gold">${esc(money(c.used ?? w.pool_used))}</strong></span>` : ''}
+          ${w.pool_used - (c.used || 0) > 0.005 ? `<span class="red" title="Earlier weeks changed, so the pool no longer had this much">⚠️ entered ${esc(money(w.pool_used))} from pool, only ${esc(money(c.used || 0))} available</span>` : ''}
           ${fresh > 0 ? `<span>Fresh: <strong class="green">${esc(money(fresh))}</strong></span>` : ''}
           ${resultBadge(w, true)}
           ${tix.length ? `<span>🎟️ ${tix.length}</span>` : ''}
@@ -568,6 +572,8 @@ function openWeekModal(wid) {
   $('wm-prize').value = existing ? existing.prize_won || '' : '';
   $('wm-notes').value = existing?.notes || '';
   _wmPool = poolBefore(date, wid);
+  _wmShareTouched = +existing?.prize_won > 0;   // keep the saved choice when editing
+  _wmShare = _wmShareTouched && !!existing.big_win;
   $('wm-pool-used').value = existing ? existing.pool_used || '' : (_wmPool.total > 0 ? Math.round(_wmPool.total * 100) / 100 : '');
 
   // Active investors, plus inactive ones that already have money in this week
@@ -615,10 +621,16 @@ function previewWeek() {
   $('wm-total').textContent = money(c.total);
   $('wm-prize-hint').textContent = prize_won > 0 ? money(prize_won) : '';
   const wl = $('wm-win-label'), threshold = S.settings.big_win_threshold;
+  if (prize_won > 0 && !_wmShareTouched) _wmShare = prize_won >= threshold;
+  show('wm-mode', prize_won > 0);
+  document.querySelectorAll('#wm-mode .seg-btn').forEach((b) => b.classList.toggle('active', (b.dataset.on === 'share') === _wmShare));
+  $('wm-mode-hint').textContent = `Default for this amount: ${prize_won >= threshold ? 'share' : 'add to pool'} ` +
+    `(${prize_won >= threshold ? 'at or above' : 'below'} the ${money(threshold)} threshold).${_wmShareTouched ? '' : ' Tap to change.'}`;
   if (prize_won > 0) {
-    const big = prize_won >= threshold;
-    wl.textContent = big ? '🏆 Big Win! Will be paid out to investors.' : '→ Added to prize pool';
-    wl.className = big ? 'gold' : 'green';
+    wl.textContent = _wmShare
+      ? '💸 Paid out: ' + Object.entries(c.pcts).sort((a, b) => b[1] - a[1]).map(([id, p]) => `${invName(id)} ${money(prize_won * p / 100)}`).join(' · ')
+      : '🏦 Added to prize pool';
+    wl.className = _wmShare ? 'gold' : 'green';
   } else wl.textContent = '';
   if (pool_used > _wmPool.total + 0.005) {
     wl.textContent = `⚠️ Only ${money(_wmPool.total)} is in the pool — that amount will be used.`;
@@ -634,7 +646,7 @@ async function saveWeek() {
   const { investments, pool_used, prize_won } = weekInputs();
   const row = {
     result_date, investments, pool_used, prize_won,
-    big_win: prize_won >= S.settings.big_win_threshold,
+    big_win: prize_won > 0 && _wmShare,
     notes: $('wm-notes').value.trim(),
   };
   $('wm-save-btn').disabled = true;
@@ -984,6 +996,8 @@ function describeChange(r) {
           const a = o[k]?.[id] || 0, b = n[k]?.[id] || 0;
           if (a !== b) details.push(`${invName(id)}: ${money(a)} → ${money(b)}`);
         }
+      } else if (k === 'big_win') {
+        details.push(`prize ${n[k] ? 'shared to investors' : 'added to pool'}`);
       } else if (['pool_used', 'prize_won', 'big_win_threshold'].includes(k)) {
         details.push(`${k.replace(/_/g, ' ')}: ${money(o[k])} → ${money(n[k])}`);
       } else {
@@ -1255,6 +1269,7 @@ const ACTIONS = {
   'week-del': (el, e) => { e.stopPropagation(); deleteWeek(el.dataset.id); },
   'week-toggle': (el) => toggleWeek(el.dataset.id),
   'week-save': () => saveWeek(),
+  'wm-mode': (el) => { _wmShare = el.dataset.on === 'share'; _wmShareTouched = true; previewWeek(); },
   'inv-new': () => openInvModal(null),
   'inv-edit': (el) => openInvModal(el.dataset.id),
   'inv-toggle': (el) => toggleInvestor(el.dataset.id, el.dataset.on === '1'),

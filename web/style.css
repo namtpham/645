@@ -306,6 +306,8 @@ code { font-family: var(--mono); font-size: 12px; background: rgba(255,255,255,.
 .chart-card.wide { grid-column: 1 / -1; }
 .fgrid2, .fgrid3 { margin-bottom: 16px; }
 .pool-banner { margin-bottom: 16px; }
+.prize-mode { margin: -4px 0 16px; }
+.prize-mode .seg { margin-bottom: 6px; }
 .pool-use { min-width: 180px; }
 .wm-totals { margin-top: 10px; display: flex; gap: 18px; font-size: 12px; align-items: center; flex-wrap: wrap; }
 

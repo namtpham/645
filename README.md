@@ -169,14 +169,18 @@ What to keep in mind:
 Each week, members contribute fresh money. Each person's **effective percentage** is their
 share of that week's total.
 
-- **Small win** (below the *big win threshold*, default ₩100,000, e.g. 5th prize ₩5,000 or
-  4th prize ₩50,000): the prize goes into the **prize pool**, remembering each investor's
-  percentage from that week.
+For every prize, the week form has a switch: **🏦 Add to prize pool** or **💸 Share to
+investors now**. The default comes from the *big win threshold* (₩100,000 unless changed in
+Settings). Smaller prizes default to the pool and larger ones to sharing, but you can choose
+either for any week.
+
+- **Added to pool** (e.g. 5th prize ₩5,000): the prize goes into the **prize pool**,
+  remembering each investor's percentage from that week.
 - **Using the pool**: when a later week uses money from the pool, that money is credited
   back to the original owners in proportion to their shares. Fresh money is added on top,
   and the week's percentages are recalculated.
-- **Big win** (≥ threshold): paid out directly to that week's investors by percentage.
-  It does not go into the pool.
+- **Shared** (e.g. 3rd prize, or a ₩50,000 win you decided to split): paid out directly to
+  that week's investors by percentage. It does not go into the pool.
 
 The pool is recalculated by replaying every week in date order, so editing an old week
 always gives consistent numbers.

@@ -118,7 +118,7 @@
       <div class="stat-card em">
         <div class="stat-label">Total Won (paid out)</div>
         <div class="stat-value" id="s-won">—</div>
-        <div class="stat-sub">big wins distributed</div>
+        <div class="stat-sub">prizes shared to investors</div>
       </div>
       <div class="stat-card bl">
         <div class="stat-label">Total Invested</div>
@@ -276,7 +276,7 @@
           <div class="fgrp">
             <label class="flbl" for="cfg-threshold">Big win threshold</label>
             <input type="number" class="finp admin-only-input" id="cfg-threshold" min="0" step="1" inputmode="numeric" data-on-input="money-hint" data-hint="cfg-threshold-hint">
-            <span class="fhelp"><span id="cfg-threshold-hint"></span> Prizes at or above this are paid out to investors; smaller prizes go to the prize pool.</span>
+            <span class="fhelp"><span id="cfg-threshold-hint"></span> Default for new prizes: at or above this they are shared to investors, below it they go to the prize pool. You can change it for each week.</span>
           </div>
           <button class="btn btn-primary admin-only" data-act="save-cfg">Save settings</button>
         </div>
@@ -351,6 +351,15 @@
           <input type="number" class="finp" id="wm-prize" min="0" step="1" inputmode="numeric" placeholder="0" data-on-input="wm-preview">
           <span class="fhelp" id="wm-prize-hint"></span>
         </div>
+      </div>
+
+      <div class="prize-mode" id="wm-mode" hidden>
+        <div class="flbl mb8">What happens to the prize?</div>
+        <div class="seg">
+          <button type="button" class="seg-btn" data-act="wm-mode" data-on="pool">🏦 Add to prize pool</button>
+          <button type="button" class="seg-btn" data-act="wm-mode" data-on="share">💸 Share to investors now</button>
+        </div>
+        <span class="fhelp" id="wm-mode-hint"></span>
       </div>
 
       <div class="pool-banner">
