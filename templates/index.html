@@ -1,1 +1,1135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lucky Pool</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700;900&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;1,400&family=Bebas+Neue&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <style>
+    /* ─── Reset & Variables ──────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
+    :root {
+      --bg:        #07090f;
+      --bg2:       #0d1117;
+      --surface:   #111827;
+      --card:      #131b2e;
+      --card2:     #182236;
+      --border:    #1e2d4a;
+      --border2:   #253656;
+      --gold:      #f59e0b;
+      --goldlt:    #fbbf24;
+      --gold-bg:   rgba(245,158,11,.08);
+      --emerald:   #10b981;
+      --em-bg:     rgba(16,185,129,.08);
+      --blue:      #3b82f6;
+      --red:       #ef4444;
+      --purple:    #8b5cf6;
+      --text:      #e2e8f0;
+      --dim:       #94a3b8;
+      --muted:     #4b5675;
+      --radius:    12px;
+      --mono:      'JetBrains Mono', monospace;
+    }
+
+    html, body { background: var(--bg); color: var(--text); font-family: 'DM Sans', sans-serif; min-height: 100vh; font-size: 14px; }
+
+    ::-webkit-scrollbar { width: 5px; height: 5px; }
+    ::-webkit-scrollbar-track { background: var(--bg); }
+    ::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 3px; }
+
+    /* ─── Navbar ─────────────────────────────────────────────────────── */
+    .navbar {
+      background: var(--bg2);
+      border-bottom: 1px solid var(--border);
+      padding: 0 20px;
+      display: flex;
+      align-items: center;
+      height: 58px;
+      position: sticky; top: 0; z-index: 100;
+      gap: 8px;
+    }
+
+    .nav-logo {
+      font-family: 'Playfair Display', serif;
+      font-size: 19px; font-weight: 900;
+      white-space: nowrap; margin-right: 8px; flex-shrink: 0;
+    }
+    .nav-logo em { color: var(--gold); font-style: normal; }
+
+    .nav-tabs { display: flex; gap: 2px; flex: 1; overflow-x: auto; }
+    .nav-tab {
+      padding: 7px 14px; border-radius: 8px;
+      color: var(--muted); cursor: pointer; font-size: 13px; font-weight: 500;
+      transition: all .15s; border: 1px solid transparent; white-space: nowrap;
+      user-select: none;
+    }
+    .nav-tab:hover { color: var(--dim); background: rgba(255,255,255,.03); }
+    .nav-tab.active { color: var(--gold); background: var(--gold-bg); border-color: rgba(245,158,11,.2); }
+
+    .nav-right { display: flex; align-items: center; gap: 10px; margin-left: auto; flex-shrink: 0; }
+
+    .sync-dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--emerald); box-shadow: 0 0 6px var(--emerald);
+      transition: all .3s; flex-shrink: 0;
+    }
+    .sync-dot.off { background: var(--muted); box-shadow: none; }
+
+    .btn-logout {
+      padding: 6px 12px; border-radius: 7px;
+      border: 1px solid var(--border2); background: transparent;
+      color: var(--dim); font-size: 12px; cursor: pointer; transition: all .15s;
+    }
+    .btn-logout:hover { border-color: var(--red); color: var(--red); }
+
+    /* ─── Layout ─────────────────────────────────────────────────────── */
+    main { max-width: 1200px; margin: 0 auto; padding: 26px 20px; }
+
+    .tab-pane { display: none; }
+    .tab-pane.active { display: block; }
+
+    /* ─── Cards ──────────────────────────────────────────────────────── */
+    .card {
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 20px;
+    }
+    .card + .card { margin-top: 16px; }
+    .card-hd {
+      display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 16px;
+    }
+    .card-title { font-family: 'Playfair Display', serif; font-size: 15px; font-weight: 700; }
+
+    /* ─── Stat Cards ─────────────────────────────────────────────────── */
+    .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 14px; margin-bottom: 24px; }
+    .stat-card {
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 18px 20px;
+      position: relative; overflow: hidden;
+    }
+    .stat-card::after {
+      content: ''; position: absolute;
+      top: 0; left: 0; right: 0; height: 2px;
+      background: var(--ac, var(--gold));
+    }
+    .stat-card.em  { --ac: var(--emerald); }
+    .stat-card.bl  { --ac: var(--blue); }
+    .stat-card.pu  { --ac: var(--purple); }
+    .stat-card.rd  { --ac: var(--red); }
+    .stat-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); margin-bottom: 8px; }
+    .stat-value { font-family: 'Bebas Neue', sans-serif; font-size: 30px; line-height: 1; letter-spacing: 1px; }
+    .stat-sub { font-size: 12px; color: var(--muted); margin-top: 4px; }
+
+    /* ─── Buttons ────────────────────────────────────────────────────── */
+    .btn {
+      display: inline-flex; align-items: center; gap: 5px;
+      padding: 8px 15px; border-radius: 8px; border: none;
+      font-family: 'DM Sans', sans-serif; font-size: 13px; font-weight: 500;
+      cursor: pointer; transition: all .15s;
+    }
+    .btn-primary { background: var(--gold); color: #09090b; }
+    .btn-primary:hover { background: var(--goldlt); }
+    .btn-secondary { background: rgba(255,255,255,.05); color: var(--dim); border: 1px solid var(--border2); }
+    .btn-secondary:hover { background: rgba(255,255,255,.08); }
+    .btn-danger { background: rgba(239,68,68,.08); color: var(--red); border: 1px solid rgba(239,68,68,.2); }
+    .btn-danger:hover { background: rgba(239,68,68,.14); }
+    .btn-ghost { background: transparent; color: var(--muted); border: 1px solid var(--border); }
+    .btn-ghost:hover { color: var(--dim); border-color: var(--border2); }
+    .btn-sm { padding: 4px 10px; font-size: 12px; }
+    .btn:disabled { opacity: .4; cursor: not-allowed; }
+
+    /* ─── Forms ──────────────────────────────────────────────────────── */
+    .fgrp { display: flex; flex-direction: column; gap: 6px; }
+    .flbl { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .8px; color: var(--muted); }
+    .finp, .fsel, .ftxt {
+      background: rgba(255,255,255,.04); border: 1px solid var(--border);
+      border-radius: 8px; padding: 10px 12px;
+      color: var(--text); font-family: 'DM Sans', sans-serif; font-size: 14px;
+      outline: none; transition: border-color .15s, box-shadow .15s; width: 100%;
+    }
+    .finp:focus, .fsel:focus, .ftxt:focus {
+      border-color: var(--gold); box-shadow: 0 0 0 3px rgba(245,158,11,.1);
+    }
+    .finp::placeholder, .ftxt::placeholder { color: var(--muted); }
+    .fsel {
+      appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='7'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%234b5675' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+      background-repeat: no-repeat; background-position: right 12px center; padding-right: 30px;
+    }
+    .ftxt { resize: vertical; min-height: 72px; }
+    .fgrid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    .fgrid3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; }
+
+    /* ─── Tables ─────────────────────────────────────────────────────── */
+    .tbl-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; }
+    th { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .8px; color: var(--muted); padding: 9px 12px; text-align: left; border-bottom: 1px solid var(--border); white-space: nowrap; }
+    td { padding: 11px 12px; border-bottom: 1px solid rgba(30,45,74,.5); vertical-align: middle; }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: rgba(255,255,255,.012); }
+    .mono { font-family: var(--mono); font-size: 13px; }
+
+    /* ─── Badges ─────────────────────────────────────────────────────── */
+    .badge { display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 20px; font-size: 11px; font-weight: 600; white-space: nowrap; }
+    .bg-gold   { background: var(--gold-bg); color: var(--gold);    border: 1px solid rgba(245,158,11,.25); }
+    .bg-green  { background: var(--em-bg);   color: var(--emerald); border: 1px solid rgba(16,185,129,.2); }
+    .bg-gray   { background: rgba(255,255,255,.05); color: var(--dim); border: 1px solid var(--border); }
+    .bg-red    { background: rgba(239,68,68,.08); color: var(--red); border: 1px solid rgba(239,68,68,.2); }
+
+    /* ─── Progress bars ──────────────────────────────────────────────── */
+    .pct-row { display: flex; align-items: center; gap: 10px; margin-bottom: 5px; }
+    .pct-name { font-size: 12px; color: var(--dim); min-width: 76px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .pct-bar { flex: 1; height: 5px; background: var(--border); border-radius: 3px; overflow: hidden; }
+    .pct-fill { height: 100%; border-radius: 3px; background: var(--gold); transition: width .35s; }
+    .pct-val  { font-family: var(--mono); font-size: 11px; color: var(--dim); min-width: 40px; text-align: right; }
+    .pct-amt  { font-family: var(--mono); font-size: 11px; color: var(--muted); min-width: 80px; text-align: right; }
+
+    /* ─── Pool badge ─────────────────────────────────────────────────── */
+    .pool-banner {
+      background: linear-gradient(135deg, rgba(245,158,11,.1) 0%, rgba(245,158,11,.03) 100%);
+      border: 1px solid rgba(245,158,11,.22);
+      border-radius: 10px; padding: 14px 18px;
+      display: flex; align-items: center; justify-content: space-between; gap: 16px;
+      flex-wrap: wrap;
+    }
+    .pool-banner .lbl { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); margin-bottom: 2px; }
+    .pool-banner .val { font-family: 'Bebas Neue', sans-serif; font-size: 26px; color: var(--gold); line-height: 1; }
+
+    /* ─── Week items ─────────────────────────────────────────────────── */
+    .week-item { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 10px; overflow: hidden; }
+    .week-hd { padding: 14px 18px; display: flex; align-items: center; gap: 12px; cursor: pointer; transition: background .12s; flex-wrap: wrap; }
+    .week-hd:hover { background: rgba(255,255,255,.018); }
+    .week-date { font-family: 'Playfair Display', serif; font-size: 15px; font-weight: 700; min-width: 116px; }
+    .week-meta { flex: 1; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
+    .week-meta strong { color: var(--text); }
+    .week-actions { display: flex; gap: 6px; margin-left: auto; }
+    .week-body { display: none; padding: 14px 18px 18px; border-top: 1px solid var(--border); }
+    .week-body.open { display: block; }
+
+    /* ─── Investor cards ─────────────────────────────────────────────── */
+    .inv-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 12px; }
+    .inv-card {
+      background: var(--card2); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 16px;
+      position: relative; transition: border-color .15s;
+    }
+    .inv-card:hover { border-color: var(--border2); }
+    .inv-avatar {
+      width: 42px; height: 42px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-family: 'Playfair Display', serif; font-size: 18px; font-weight: 700; color: #09090b;
+      margin-bottom: 10px;
+    }
+    .inv-name { font-weight: 600; font-size: 15px; }
+    .inv-id { font-family: var(--mono); font-size: 10px; color: var(--muted); margin-top: 2px; }
+    .inv-stats { margin-top: 12px; display: flex; flex-direction: column; gap: 4px; }
+    .inv-stat { display: flex; justify-content: space-between; font-size: 12px; }
+    .inv-stat .k { color: var(--muted); }
+    .inv-stat .v { font-family: var(--mono); color: var(--dim); }
+    .inv-actions { position: absolute; top: 10px; right: 10px; display: flex; gap: 5px; opacity: 0; transition: opacity .15s; }
+    .inv-card:hover .inv-actions { opacity: 1; }
+
+    /* ─── Modal ──────────────────────────────────────────────────────── */
+    .overlay {
+      display: none; position: fixed; inset: 0;
+      background: rgba(0,0,0,.7); backdrop-filter: blur(4px);
+      z-index: 300; align-items: center; justify-content: center; padding: 16px;
+    }
+    .overlay.open { display: flex; }
+    .modal {
+      background: var(--card); border: 1px solid var(--border2);
+      border-radius: 16px; width: 100%; max-width: 640px;
+      max-height: 92vh; overflow-y: auto;
+      animation: pop .22s cubic-bezier(.22,1,.36,1);
+    }
+    @keyframes pop { from { opacity: 0; transform: scale(.95) translateY(8px); } to { opacity: 1; transform: none; } }
+    .modal-hd { padding: 18px 22px 14px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
+    .modal-title { font-family: 'Playfair Display', serif; font-size: 17px; font-weight: 700; }
+    .modal-close { width: 30px; height: 30px; border-radius: 7px; background: transparent; border: 1px solid var(--border); color: var(--dim); cursor: pointer; font-size: 14px; }
+    .modal-close:hover { background: rgba(255,255,255,.05); }
+    .modal-body { padding: 18px 22px; }
+    .modal-ft   { padding: 14px 22px; border-top: 1px solid var(--border); display: flex; gap: 8px; justify-content: flex-end; }
+
+    /* ─── Charts ─────────────────────────────────────────────────────── */
+    .charts-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(460px, 1fr)); gap: 16px; }
+    .chart-card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px; }
+    .chart-title { font-family: 'Playfair Display', serif; font-size: 14px; font-weight: 700; margin-bottom: 14px; }
+
+    /* ─── Toast ──────────────────────────────────────────────────────── */
+    .toast {
+      position: fixed; bottom: 22px; right: 22px;
+      background: var(--card2); border: 1px solid var(--border2);
+      border-radius: 10px; padding: 10px 16px; font-size: 13px;
+      z-index: 500; transform: translateY(10px); opacity: 0;
+      transition: all .22s; pointer-events: none;
+    }
+    .toast.show { transform: none; opacity: 1; }
+    .toast.ok  { border-color: rgba(16,185,129,.4); color: var(--emerald); }
+    .toast.err { border-color: rgba(239,68,68,.35); color: #fca5a5; }
+
+    /* ─── Misc ───────────────────────────────────────────────────────── */
+    .sep { border: none; border-top: 1px solid var(--border); margin: 18px 0; }
+    .sec-title { font-family: 'Playfair Display', serif; font-size: 20px; font-weight: 700; margin-bottom: 18px; }
+    .row-hd { display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px; }
+    .empty { text-align: center; padding: 44px 20px; color: var(--muted); }
+    .empty .ico { font-size: 34px; margin-bottom: 10px; }
+    .empty p { font-size: 13px; }
+
+    /* ─── Investment inputs inside modal ─────────────────────────────── */
+    .inv-inputs { display: flex; flex-direction: column; gap: 8px; }
+    .inv-input-row { display: flex; align-items: center; gap: 10px; }
+    .inv-input-row .nm { flex: 1; font-size: 14px; font-weight: 500; min-width: 70px; }
+    .inv-input-row .amt { width: 130px; flex-shrink: 0; }
+    .inv-input-row .pp { font-family: var(--mono); font-size: 12px; color: var(--muted); min-width: 50px; text-align: right; }
+
+    /* ─── Settings ───────────────────────────────────────────────────── */
+    .sett-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(270px, 1fr)); gap: 16px; }
+
+    /* ─── Responsive ─────────────────────────────────────────────────── */
+    @media (max-width: 640px) {
+      main { padding: 14px 12px; }
+      .charts-grid { grid-template-columns: 1fr; }
+      .nav-tab { padding: 6px 10px; font-size: 12px; }
+      .fgrid2 { grid-template-columns: 1fr; }
+      .fgrid3 { grid-template-columns: 1fr 1fr; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ═══ NAVBAR ════════════════════════════════════════════════════════════ -->
+<nav class="navbar">
+  <div class="nav-logo">Lucky <em>Pool</em></div>
+  <div class="nav-tabs">
+    <div class="nav-tab active" onclick="goTab('dashboard')">📊 Dashboard</div>
+    <div class="nav-tab" onclick="goTab('weeks')">📅 Weeks</div>
+    <div class="nav-tab" onclick="goTab('investors')">👥 Investors</div>
+    <div class="nav-tab" onclick="goTab('charts')">📈 Charts</div>
+    <div class="nav-tab" onclick="goTab('settings')">⚙️ Settings</div>
+  </div>
+  <div class="nav-right">
+    <div class="sync-dot" id="syncDot" title="Live sync"></div>
+    <button class="btn-logout" onclick="location.href='/logout'">Sign out</button>
+  </div>
+</nav>
+
+<main>
+
+  <!-- ═══ DASHBOARD ═══════════════════════════════════════════════════════ -->
+  <div class="tab-pane active" id="tab-dashboard">
+    <div class="stat-grid">
+      <div class="stat-card">
+        <div class="stat-label">Prize Pool</div>
+        <div class="stat-value" id="s-pool">—</div>
+        <div class="stat-sub" id="s-pool-sub">accumulated</div>
+      </div>
+      <div class="stat-card em">
+        <div class="stat-label">Total Won (paid out)</div>
+        <div class="stat-value" id="s-won">—</div>
+        <div class="stat-sub" id="s-won-sub">big wins distributed</div>
+      </div>
+      <div class="stat-card bl">
+        <div class="stat-label">Total Invested</div>
+        <div class="stat-value" id="s-inv">—</div>
+        <div class="stat-sub" id="s-inv-sub">fresh money</div>
+      </div>
+      <div class="stat-card pu">
+        <div class="stat-label">Weeks Played</div>
+        <div class="stat-value" id="s-wks">—</div>
+        <div class="stat-sub">lottery sessions</div>
+      </div>
+    </div>
+
+    <!-- Current Prize Pool -->
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-hd">
+        <div class="card-title">🏦 Current Prize Pool Breakdown</div>
+        <span class="badge bg-gold" id="pool-ttl-badge">—</span>
+      </div>
+      <div id="pool-breakdown"></div>
+    </div>
+
+    <!-- Recent weeks -->
+    <div class="card">
+      <div class="card-hd">
+        <div class="card-title">🕐 Recent Activity</div>
+        <button class="btn btn-ghost btn-sm" onclick="goTab('weeks')">All weeks →</button>
+      </div>
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>Date</th><th>Pool</th><th>Fresh Invested</th><th>Prize Won</th><th>Result</th></tr></thead>
+          <tbody id="recent-body"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ WEEKS ════════════════════════════════════════════════════════════ -->
+  <div class="tab-pane" id="tab-weeks">
+    <div class="row-hd">
+      <h2 class="sec-title" style="margin:0">Weekly Entries</h2>
+      <button class="btn btn-primary" onclick="openWeekModal(null)">+ Add Week</button>
+    </div>
+    <div id="weeks-list"></div>
+  </div>
+
+  <!-- ═══ INVESTORS ════════════════════════════════════════════════════════ -->
+  <div class="tab-pane" id="tab-investors">
+    <div class="row-hd">
+      <h2 class="sec-title" style="margin:0">Investors</h2>
+      <button class="btn btn-primary" onclick="openInvModal(null)">+ Add Investor</button>
+    </div>
+    <div id="inv-grid" class="inv-grid"></div>
+
+    <hr class="sep">
+    <h3 style="font-family:'Playfair Display',serif;font-size:16px;margin-bottom:14px;color:var(--dim)">🏆 Leaderboard</h3>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>#</th><th>Investor</th><th>Invested</th><th>Won</th><th>Net P/L</th><th>ROI</th><th>Weeks</th></tr></thead>
+        <tbody id="leaderboard-body"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ═══ CHARTS ═══════════════════════════════════════════════════════════ -->
+  <div class="tab-pane" id="tab-charts">
+    <h2 class="sec-title">Statistics &amp; Charts</h2>
+    <div class="charts-grid">
+      <div class="chart-card">
+        <div class="chart-title">💰 Prize History by Week</div>
+        <canvas id="ch-prize" height="200"></canvas>
+      </div>
+      <div class="chart-card">
+        <div class="chart-title">📊 Net P/L per Investor</div>
+        <canvas id="ch-netpl" height="200"></canvas>
+      </div>
+      <div class="chart-card">
+        <div class="chart-title">🏦 Prize Pool Balance Over Time</div>
+        <canvas id="ch-pool" height="200"></canvas>
+      </div>
+      <div class="chart-card">
+        <div class="chart-title">🥧 Cumulative Investment Share</div>
+        <canvas id="ch-share" height="200"></canvas>
+      </div>
+      <div class="chart-card" style="grid-column:1/-1">
+        <div class="chart-title">📅 Weekly Fresh Investment by Investor (Stacked)</div>
+        <canvas id="ch-wkly" height="150"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ SETTINGS ══════════════════════════════════════════════════════════ -->
+  <div class="tab-pane" id="tab-settings">
+    <h2 class="sec-title">Settings</h2>
+    <div class="sett-grid">
+      <div class="card">
+        <div class="card-hd"><div class="card-title">⚙️ General</div></div>
+        <div style="display:flex;flex-direction:column;gap:14px">
+          <div class="fgrp"><label class="flbl">App Title</label><input type="text" class="finp" id="cfg-title"></div>
+          <div class="fgrp"><label class="flbl">Currency Symbol</label><input type="text" class="finp" id="cfg-currency" placeholder="e.g. THB, USD, ¥"></div>
+          <div class="fgrp">
+            <label class="flbl">Big Win Threshold</label>
+            <input type="number" class="finp" id="cfg-threshold">
+            <span style="font-size:11px;color:var(--muted)">Prizes ≥ this are paid out directly to investors.</span>
+          </div>
+          <button class="btn btn-primary" onclick="saveCfg()">Save Settings</button>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-hd"><div class="card-title">🔒 Change Password</div></div>
+        <div style="display:flex;flex-direction:column;gap:14px">
+          <div class="fgrp"><label class="flbl">New Password</label><input type="password" class="finp" id="cfg-pw1" placeholder="Leave blank to keep current"></div>
+          <div class="fgrp"><label class="flbl">Confirm Password</label><input type="password" class="finp" id="cfg-pw2"></div>
+          <button class="btn btn-primary" onclick="savePw()">Update Password</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</main>
+
+<!-- ═══ ADD/EDIT WEEK MODAL ══════════════════════════════════════════════════ -->
+<div class="overlay" id="week-overlay">
+  <div class="modal" style="max-width:680px">
+    <div class="modal-hd">
+      <div class="modal-title" id="wm-title">Add Week</div>
+      <button class="modal-close" onclick="closeWeekModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="wm-id">
+
+      <div class="fgrid2" style="margin-bottom:16px">
+        <div class="fgrp">
+          <label class="flbl">Result Date (Saturday)</label>
+          <input type="date" class="finp" id="wm-date">
+        </div>
+        <div class="fgrp">
+          <label class="flbl">Prize Won</label>
+          <input type="number" class="finp" id="wm-prize" min="0" step="1" placeholder="0" oninput="previewWeek()">
+        </div>
+      </div>
+
+      <!-- Prize Pool Row -->
+      <div class="pool-banner" style="margin-bottom:16px">
+        <div>
+          <div class="lbl">Available Prize Pool</div>
+          <div class="val" id="wm-pool-val">0</div>
+          <div style="font-size:11px;color:var(--muted);margin-top:3px" id="wm-pool-entries-info"></div>
+        </div>
+        <div class="fgrp" style="min-width:180px">
+          <label class="flbl">Use from Pool</label>
+          <input type="number" class="finp" id="wm-pool-used" min="0" step="1" placeholder="0" oninput="previewWeek()">
+        </div>
+      </div>
+
+      <!-- Investor inputs -->
+      <div class="flbl" style="margin-bottom:8px">Fresh Investments This Week</div>
+      <div class="inv-inputs" id="wm-inv-inputs"></div>
+
+      <hr class="sep">
+
+      <!-- Live Preview -->
+      <div class="flbl" style="margin-bottom:10px">Effective Percentages Preview</div>
+      <div id="wm-preview"></div>
+      <div style="margin-top:10px;display:flex;gap:18px;font-size:12px;align-items:center">
+        <span>Total pool: <strong id="wm-total" style="color:var(--gold);font-family:var(--mono)">—</strong></span>
+        <span id="wm-win-label" style="color:var(--emerald)"></span>
+      </div>
+
+      <hr class="sep">
+      <div class="fgrp">
+        <label class="flbl">Notes (optional)</label>
+        <textarea class="ftxt" id="wm-notes" placeholder="Any notes for this week…"></textarea>
+      </div>
+    </div>
+    <div class="modal-ft">
+      <button class="btn btn-secondary" onclick="closeWeekModal()">Cancel</button>
+      <button class="btn btn-primary" id="wm-save-btn" onclick="saveWeek()">Save Week</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ INVESTOR MODAL ════════════════════════════════════════════════════════ -->
+<div class="overlay" id="inv-overlay">
+  <div class="modal" style="max-width:360px">
+    <div class="modal-hd">
+      <div class="modal-title" id="im-title">Add Investor</div>
+      <button class="modal-close" onclick="closeInvModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="im-id">
+      <div class="fgrp">
+        <label class="flbl">Nickname / Display Name</label>
+        <input type="text" class="finp" id="im-nick" placeholder="e.g. Alice">
+      </div>
+    </div>
+    <div class="modal-ft">
+      <button class="btn btn-secondary" onclick="closeInvModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="saveInvestor()">Save Investor</button>
+    </div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div class="toast" id="toast"></div>
+
+<script>
+// ─── State ────────────────────────────────────────────────────────────────────
+const S = { data: null, cfg: null, charts: {} };
+
+const COLORS = ['#f59e0b','#10b981','#3b82f6','#8b5cf6','#ef4444','#f97316','#06b6d4','#ec4899','#84cc16','#a855f7'];
+
+let _wmPool = { total: 0, entries: [] }; // pool snapshot for week modal
+
+// ─── Formatting ───────────────────────────────────────────────────────────────
+const CUR = () => S.cfg?.currency || 'THB';
+const fmt   = (n, d=0) => n == null || isNaN(n) ? '—' : new Intl.NumberFormat('en-US',{maximumFractionDigits:d,minimumFractionDigits:d}).format(n);
+const fmtC  = (n) => `${fmt(n)} ${CUR()}`;
+const fmtP  = (n) => `${(+n||0).toFixed(1)}%`;
+const fmtD  = (d) => { if(!d) return '—'; const dt=new Date(d+'T12:00:00'); return dt.toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}); };
+const ini   = (s) => (s||'?')[0].toUpperCase();
+
+// ─── Tab Navigation ───────────────────────────────────────────────────────────
+function goTab(name) {
+  document.querySelectorAll('.tab-pane').forEach(el => el.classList.remove('active'));
+  document.querySelectorAll('.nav-tab').forEach(el => el.classList.remove('active'));
+  document.getElementById('tab-'+name).classList.add('active');
+  const tabs = ['dashboard','weeks','investors','charts','settings'];
+  document.querySelectorAll('.nav-tab')[tabs.indexOf(name)].classList.add('active');
+  if (name === 'charts') setTimeout(renderCharts, 60);
+}
+
+// ─── Data Loading ─────────────────────────────────────────────────────────────
+async function loadAll() {
+  const [dr, cr] = await Promise.all([fetch('/api/data'), fetch('/api/config')]);
+  S.data = await dr.json();
+  S.cfg  = await cr.json();
+  renderDashboard();
+  renderWeeks();
+  renderInvestors();
+  // Refresh charts if visible
+  if (document.getElementById('tab-charts').classList.contains('active')) renderCharts();
+  // Update settings
+  document.getElementById('cfg-title').value     = S.cfg.title     || '';
+  document.getElementById('cfg-currency').value  = S.cfg.currency  || '';
+  document.getElementById('cfg-threshold').value = S.cfg.big_win_threshold || 100000;
+}
+
+// ─── Dashboard ────────────────────────────────────────────────────────────────
+function renderDashboard() {
+  const {data, cfg} = S;
+  if (!data) return;
+  const weeks = data.weeks || [], investors = data.investors || [];
+  const pool  = data.prize_pool || {total:0, entries:[]};
+
+  let totalInv = 0, totalWon = 0;
+  for (const w of weeks) {
+    totalInv += Object.values(w.investments||{}).reduce((a,b)=>a+b,0);
+    if (w.big_win) totalWon += w.prize_won||0;
+  }
+
+  document.getElementById('s-pool').textContent    = fmt(pool.total);
+  document.getElementById('s-pool-sub').textContent = CUR() + ' in current pool';
+  document.getElementById('s-won').textContent      = fmt(totalWon);
+  document.getElementById('s-won-sub').textContent  = CUR() + ' distributed to members';
+  document.getElementById('s-inv').textContent      = fmt(totalInv);
+  document.getElementById('s-inv-sub').textContent  = CUR() + ' fresh contributions';
+  document.getElementById('s-wks').textContent      = weeks.length;
+  document.getElementById('pool-ttl-badge').textContent = fmtC(pool.total);
+
+  // Pool breakdown
+  const pb = document.getElementById('pool-breakdown');
+  if (pool.entries?.length) {
+    const imap = {};
+    for (const inv of investors) imap[inv.id] = inv.nickname;
+    const allIds = [...new Set(pool.entries.flatMap(e => Object.keys(e.percentages||{})))];
+
+    let h = `<div class="tbl-wrap"><table><thead><tr><th>Won On</th><th>Amount in Pool</th>`;
+    for (const id of allIds) h += `<th>${imap[id]||id}</th>`;
+    h += `</tr></thead><tbody>`;
+    for (const e of pool.entries) {
+      h += `<tr><td>${fmtD(e.result_date)}</td><td class="mono" style="color:var(--gold)">${fmtC(e.amount)}</td>`;
+      for (const id of allIds) {
+        const pct = e.percentages?.[id]||0, share = e.amount*pct/100;
+        h += `<td><span class="mono">${fmtC(share)}</span> <span style="font-size:11px;color:var(--muted)">(${pct.toFixed(1)}%)</span></td>`;
+      }
+      h += `</tr>`;
+    }
+    h += `</tbody></table></div>`;
+    pb.innerHTML = h;
+  } else {
+    pb.innerHTML = `<div class="empty"><div class="ico">🏦</div><p>Pool is empty. Small wins (below the big-win threshold) will accumulate here.</p></div>`;
+  }
+
+  // Recent weeks (last 6 reversed)
+  const recent = [...weeks].reverse().slice(0,6);
+  const rb = document.getElementById('recent-body');
+  if (!recent.length) {
+    rb.innerHTML = `<tr><td colspan="5" style="text-align:center;color:var(--muted);padding:22px">No weeks recorded yet.</td></tr>`;
+    return;
+  }
+  rb.innerHTML = recent.map(w => {
+    const prize = w.prize_won||0;
+    const fresh = Object.values(w.investments||{}).reduce((a,b)=>a+b,0);
+    const badge = prize===0
+      ? `<span class="badge bg-gray">No win</span>`
+      : w.big_win
+        ? `<span class="badge bg-gold">🏆 Big Win</span>`
+        : `<span class="badge bg-green">→ Added to pool</span>`;
+    return `<tr>
+      <td><strong>${fmtD(w.result_date)}</strong></td>
+      <td class="mono">${fmtC(w.total_pool)}</td>
+      <td class="mono" style="color:var(--emerald)">${fmtC(fresh)}</td>
+      <td class="mono" style="color:${prize>0?'var(--gold)':'var(--muted)'}">${prize>0?fmtC(prize):'—'}</td>
+      <td>${badge}</td>
+    </tr>`;
+  }).join('');
+}
+
+// ─── Weeks ────────────────────────────────────────────────────────────────────
+function renderWeeks() {
+  const {data} = S;
+  if (!data) return;
+  const weeks = [...(data.weeks||[])].reverse();
+  const imap = {}; for (const i of data.investors||[]) imap[i.id]=i;
+  const el = document.getElementById('weeks-list');
+
+  if (!weeks.length) {
+    el.innerHTML = `<div class="empty"><div class="ico">📅</div><p>No weeks yet. Click "+ Add Week" to start tracking.</p></div>`;
+    return;
+  }
+
+  el.innerHTML = weeks.map(w => {
+    const prize = w.prize_won||0;
+    const poolUsed = w.pool_used||0;
+    const fresh = Object.values(w.investments||{}).reduce((a,b)=>a+b,0);
+    const badge = prize===0
+      ? `<span class="badge bg-gray">No win</span>`
+      : w.big_win
+        ? `<span class="badge bg-gold">🏆 Big Win — ${fmtC(prize)}</span>`
+        : `<span class="badge bg-green">＋Pool ${fmtC(prize)}</span>`;
+
+    const pctRows = Object.entries(w.percentages||{})
+      .sort((a,b)=>b[1]-a[1])
+      .map(([id,pct]) => {
+        const name = imap[id]?.nickname || id;
+        const eff = w.effective_amounts?.[id]||0;
+        return `<div class="pct-row">
+          <span class="pct-name">${name}</span>
+          <div class="pct-bar"><div class="pct-fill" style="width:${pct}%"></div></div>
+          <span class="pct-val">${pct.toFixed(1)}%</span>
+          <span class="pct-amt">${fmtC(eff)}</span>
+        </div>`;
+      }).join('');
+
+    return `<div class="week-item">
+      <div class="week-hd" onclick="toggleWeek('wb-${w.id}')">
+        <div class="week-date">${fmtD(w.result_date)}</div>
+        <div class="week-meta">
+          <span>Pool: <strong>${fmtC(w.total_pool)}</strong></span>
+          ${poolUsed>0?`<span>From pool: <strong style="color:var(--gold)">${fmtC(poolUsed)}</strong></span>`:''}
+          ${fresh>0?`<span>Fresh: <strong style="color:var(--emerald)">${fmtC(fresh)}</strong></span>`:''}
+          ${badge}
+        </div>
+        <div class="week-actions">
+          <button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();openWeekModal('${w.id}')">Edit</button>
+          <button class="btn btn-danger btn-sm" onclick="event.stopPropagation();deleteWeek('${w.id}')">Delete</button>
+        </div>
+      </div>
+      <div class="week-body" id="wb-${w.id}">
+        <div style="padding-top:12px">
+          <div class="flbl" style="margin-bottom:10px">Effective Percentages &amp; Amounts</div>
+          ${pctRows}
+          ${w.notes?`<div style="margin-top:12px;font-size:12px;color:var(--muted);padding:10px 12px;background:rgba(255,255,255,.02);border-radius:7px;border:1px solid var(--border)">${w.notes}</div>`:''}
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function toggleWeek(id) {
+  document.getElementById(id)?.classList.toggle('open');
+}
+
+// ─── Week Modal ───────────────────────────────────────────────────────────────
+async function openWeekModal(wid) {
+  const {data} = S;
+  const existing = wid ? data.weeks.find(w=>w.id===wid) : null;
+
+  // Get pool state as of just before this week
+  if (existing) {
+    const res = await fetch(`/api/pool_at?before=${existing.result_date}&exclude=${wid}`);
+    _wmPool = await res.json();
+  } else {
+    _wmPool = data.prize_pool || {total:0, entries:[]};
+  }
+
+  document.getElementById('wm-title').textContent = wid ? 'Edit Week' : 'Add Week';
+  document.getElementById('wm-id').value       = wid || '';
+  document.getElementById('wm-date').value      = existing?.result_date || '';
+  document.getElementById('wm-prize').value     = existing?.prize_won || '';
+  document.getElementById('wm-pool-used').value = existing?.pool_used ?? (_wmPool.total > 0 ? _wmPool.total : '');
+  document.getElementById('wm-notes').value     = existing?.notes || '';
+  document.getElementById('wm-pool-val').textContent = fmtC(_wmPool.total);
+  const entries = _wmPool.entries||[];
+  document.getElementById('wm-pool-entries-info').textContent =
+    entries.length ? `from ${entries.length} winning week${entries.length>1?'s':''}` : '';
+
+  // Investor inputs
+  const active = (data.investors||[]).filter(i=>i.active);
+  document.getElementById('wm-inv-inputs').innerHTML = active.map(inv => {
+    const val = existing?.investments?.[inv.id] || '';
+    return `<div class="inv-input-row">
+      <div class="nm">${inv.nickname}</div>
+      <input type="number" class="finp amt" id="wi-${inv.id}" min="0" step="1" placeholder="0" value="${val}" oninput="previewWeek()">
+      <span class="pp" id="wp-${inv.id}">—</span>
+    </div>`;
+  }).join('');
+
+  previewWeek();
+  document.getElementById('week-overlay').classList.add('open');
+}
+
+function closeWeekModal() { document.getElementById('week-overlay').classList.remove('open'); }
+
+function previewWeek() {
+  const {data, cfg} = S;
+  if (!data) return;
+  const active = (data.investors||[]).filter(i=>i.active);
+  const imap   = {}; for (const i of data.investors||[]) imap[i.id]=i.nickname;
+  const threshold = cfg?.big_win_threshold || 100000;
+  const pool = _wmPool;
+
+  const investments = {};
+  for (const inv of active) {
+    const v = parseFloat(document.getElementById('wi-'+inv.id)?.value||0);
+    if (v>0) investments[inv.id]=v;
+  }
+
+  const rawUsed = parseFloat(document.getElementById('wm-pool-used').value||0);
+  const poolUsed = Math.min(rawUsed, pool.total);
+  const prize    = parseFloat(document.getElementById('wm-prize').value||0);
+
+  // Compute effective amounts
+  const eff = {...investments};
+  if (poolUsed>0 && pool.total>0) {
+    const blended = {};
+    for (const e of pool.entries||[]) {
+      const w = e.amount/pool.total;
+      for (const [iid,pct] of Object.entries(e.percentages||{})) blended[iid]=(blended[iid]||0)+pct*w;
+    }
+    for (const [iid,pct] of Object.entries(blended)) eff[iid]=(eff[iid]||0)+poolUsed*pct/100;
+  }
+
+  const total = Object.values(eff).reduce((a,b)=>a+b,0);
+  const pcts  = {};
+  for (const [id,amt] of Object.entries(eff)) pcts[id]=total>0?amt/total*100:0;
+
+  // Per-investor preview tags
+  for (const inv of active) {
+    const el = document.getElementById('wp-'+inv.id);
+    if (el) el.textContent = pcts[inv.id] ? fmtP(pcts[inv.id]) : '—';
+  }
+
+  document.getElementById('wm-total').textContent = fmtC(total);
+
+  const wl = document.getElementById('wm-win-label');
+  if (prize>0) {
+    wl.textContent = prize>=threshold ? '🏆 Big Win! Will be paid out to investors.' : `→ Added to prize pool`;
+    wl.style.color = prize>=threshold ? 'var(--gold)' : 'var(--emerald)';
+  } else { wl.textContent = ''; }
+
+  // Percentage preview bars
+  const prev = document.getElementById('wm-preview');
+  const sorted = Object.entries(pcts).sort((a,b)=>b[1]-a[1]);
+  prev.innerHTML = sorted.map(([id,pct]) => `
+    <div class="pct-row">
+      <span class="pct-name">${imap[id]||id}</span>
+      <div class="pct-bar"><div class="pct-fill" style="width:${pct}%"></div></div>
+      <span class="pct-val">${pct.toFixed(1)}%</span>
+      <span class="pct-amt">${fmtC(eff[id]||0)}</span>
+    </div>`).join('');
+}
+
+async function saveWeek() {
+  const {data} = S;
+  const active = (data.investors||[]).filter(i=>i.active);
+  const investments = {};
+  for (const inv of active) {
+    const v = parseFloat(document.getElementById('wi-'+inv.id)?.value||0);
+    if (v>0) investments[inv.id]=v;
+  }
+
+  const body = {
+    id:          document.getElementById('wm-id').value || null,
+    result_date: document.getElementById('wm-date').value,
+    investments,
+    pool_used:   parseFloat(document.getElementById('wm-pool-used').value||0),
+    prize_won:   parseFloat(document.getElementById('wm-prize').value||0),
+    notes:       document.getElementById('wm-notes').value,
+  };
+
+  if (!body.result_date) { toast('Please select a result date.','err'); return; }
+  document.getElementById('wm-save-btn').disabled = true;
+
+  try {
+    const res = await fetch('/api/week',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    const j = await res.json();
+    if (j.ok) { toast('Week saved!','ok'); closeWeekModal(); await loadAll(); }
+    else       { toast('Error saving week.','err'); }
+  } catch { toast('Network error.','err'); }
+  finally { document.getElementById('wm-save-btn').disabled = false; }
+}
+
+async function deleteWeek(wid) {
+  if (!confirm('Delete this week? This will also recalculate the prize pool.')) return;
+  await fetch('/api/week/'+wid,{method:'DELETE'});
+  toast('Week deleted.','ok');
+  await loadAll();
+}
+
+// ─── Investors ────────────────────────────────────────────────────────────────
+function renderInvestors() {
+  const {data} = S;
+  if (!data) return;
+  const investors = data.investors||[], weeks = data.weeks||[];
+
+  // Per-investor stats
+  const stats = {};
+  for (const inv of investors) stats[inv.id]={invested:0,won:0,weeks:0};
+  for (const w of weeks) {
+    for (const [id,amt] of Object.entries(w.investments||{})) {
+      if (stats[id]) { stats[id].invested+=amt; stats[id].weeks+=1; }
+    }
+    if (w.big_win && (w.prize_won||0)>0) {
+      for (const [id,pct] of Object.entries(w.percentages||{})) {
+        if (stats[id]) stats[id].won+=w.prize_won*pct/100;
+      }
+    }
+  }
+
+  // Cards
+  const active   = investors.filter(i=> i.active);
+  const inactive = investors.filter(i=>!i.active);
+  const all = [...active,...inactive];
+
+  const grid = document.getElementById('inv-grid');
+  if (!all.length) {
+    grid.innerHTML = `<div class="empty" style="grid-column:1/-1"><div class="ico">👥</div><p>No investors yet. Add your first one!</p></div>`;
+  } else {
+    grid.innerHTML = all.map((inv,idx) => {
+      const s   = stats[inv.id]||{};
+      const net = (s.won||0)-(s.invested||0);
+      const nc  = net>=0?'var(--emerald)':'var(--red)';
+      const clr = COLORS[idx%COLORS.length];
+      return `<div class="inv-card" style="${!inv.active?'opacity:.5':''}">
+        <div class="inv-actions">
+          <button class="btn btn-ghost btn-sm" onclick="openInvModal('${inv.id}')">✏️</button>
+          ${inv.active
+            ? `<button class="btn btn-danger btn-sm" onclick="toggleInv('${inv.id}',false)" title="Deactivate">×</button>`
+            : `<button class="btn btn-secondary btn-sm" onclick="toggleInv('${inv.id}',true)" title="Reactivate">+</button>`}
+        </div>
+        <div class="inv-avatar" style="background:${clr}22;color:${clr};border:2px solid ${clr}44">${ini(inv.nickname)}</div>
+        <div class="inv-name">${inv.nickname} ${!inv.active?'<span class="badge bg-gray" style="font-size:10px">inactive</span>':''}</div>
+        <div class="inv-id">ID: ${inv.id}</div>
+        <div class="inv-stats">
+          <div class="inv-stat"><span class="k">Invested</span><span class="v">${fmtC(s.invested||0)}</span></div>
+          <div class="inv-stat"><span class="k">Won (paid out)</span><span class="v">${fmtC(s.won||0)}</span></div>
+          <div class="inv-stat"><span class="k">Net P/L</span><span class="v" style="color:${nc}">${net>=0?'+':''}${fmtC(net)}</span></div>
+          <div class="inv-stat"><span class="k">Weeks</span><span class="v">${s.weeks||0}</span></div>
+        </div>
+      </div>`;
+    }).join('');
+  }
+
+  // Leaderboard
+  const sorted = investors.map(inv => {
+    const s=stats[inv.id]||{}, net=(s.won||0)-(s.invested||0);
+    return {...inv,...s, net, roi: s.invested>0?net/s.invested*100:0};
+  }).sort((a,b)=>b.net-a.net);
+
+  document.getElementById('leaderboard-body').innerHTML = sorted.map((inv,i) => {
+    const nc=inv.net>=0?'var(--emerald)':'var(--red)';
+    const rc=inv.roi>=0?'var(--emerald)':'var(--red)';
+    return `<tr>
+      <td style="color:var(--muted)">${i+1}</td>
+      <td><strong>${inv.nickname}</strong></td>
+      <td class="mono">${fmtC(inv.invested||0)}</td>
+      <td class="mono">${fmtC(inv.won||0)}</td>
+      <td class="mono" style="color:${nc}">${inv.net>=0?'+':''}${fmtC(inv.net)}</td>
+      <td class="mono" style="color:${rc}">${inv.roi.toFixed(1)}%</td>
+      <td>${inv.weeks||0}</td>
+    </tr>`;
+  }).join('');
+}
+
+function openInvModal(invId) {
+  document.getElementById('im-title').textContent = invId ? 'Edit Investor' : 'Add Investor';
+  document.getElementById('im-id').value   = invId||'';
+  const inv = invId ? S.data.investors.find(i=>i.id===invId) : null;
+  document.getElementById('im-nick').value = inv?.nickname||'';
+  document.getElementById('inv-overlay').classList.add('open');
+  setTimeout(()=>document.getElementById('im-nick').focus(),80);
+}
+function closeInvModal() { document.getElementById('inv-overlay').classList.remove('open'); }
+
+async function saveInvestor() {
+  const nick = document.getElementById('im-nick').value.trim();
+  if (!nick) { toast('Please enter a name.','err'); return; }
+  const body = {id:document.getElementById('im-id').value||null, nickname:nick};
+  const res  = await fetch('/api/investor',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  const j    = await res.json();
+  if (j.ok) { toast('Investor saved!','ok'); closeInvModal(); await loadAll(); }
+}
+
+async function toggleInv(id, active) {
+  await fetch('/api/investor',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id,active})});
+  await loadAll();
+}
+
+// ─── Charts ───────────────────────────────────────────────────────────────────
+const CD = { // Chart.js shared defaults
+  plugins:{
+    legend:{labels:{color:'#94a3b8',font:{family:"'DM Sans',sans-serif",size:12}}},
+    tooltip:{backgroundColor:'#131b2e',borderColor:'#1e2d4a',borderWidth:1,titleColor:'#e2e8f0',bodyColor:'#94a3b8'}
+  },
+  scales:{
+    x:{ticks:{color:'#4b5675',font:{size:11}},grid:{color:'rgba(30,45,74,.5)'}},
+    y:{ticks:{color:'#4b5675',font:{size:11}},grid:{color:'rgba(30,45,74,.5)'}}
+  }
+};
+
+function mkOpts(extra={}) {
+  return JSON.parse(JSON.stringify({...CD, ...extra}));
+}
+
+function killChart(id) { if(S.charts[id]){S.charts[id].destroy();delete S.charts[id];} }
+
+function renderCharts() {
+  const {data} = S;
+  if (!data) return;
+  const weeks = data.weeks||[], investors = data.investors||[];
+  const imap  = {}; investors.forEach((inv,i)=>imap[inv.id]={name:inv.nickname,clr:COLORS[i%COLORS.length]});
+  const labels = weeks.map(w=>fmtD(w.result_date));
+
+  // 1. Prize History
+  killChart('prize');
+  {
+    const ctx = document.getElementById('ch-prize');
+    if (ctx) S.charts.prize = new Chart(ctx,{
+      type:'bar',
+      data:{
+        labels,
+        datasets:[{
+          label:'Prize Won',
+          data: weeks.map(w=>w.prize_won||0),
+          backgroundColor: weeks.map(w=>w.big_win?'rgba(245,158,11,.65)':'rgba(16,185,129,.5)'),
+          borderColor:     weeks.map(w=>w.big_win?'#f59e0b':'#10b981'),
+          borderWidth:1, borderRadius:4
+        }]
+      },
+      options: mkOpts({plugins:{...CD.plugins,legend:{display:false}},scales:{...CD.scales,y:{...CD.scales.y,beginAtZero:true}}})
+    });
+  }
+
+  // 2. Net P/L
+  killChart('netpl');
+  if (investors.length) {
+    const netPL = investors.map(inv=>{
+      let inv_=0,won_=0;
+      for(const w of weeks){inv_+=w.investments?.[inv.id]||0;if(w.big_win)won_+=(w.prize_won||0)*((w.percentages?.[inv.id]||0)/100);}
+      return {name:inv.nickname,net:won_-inv_};
+    });
+    killChart('netpl');
+    const ctx = document.getElementById('ch-netpl');
+    if(ctx) S.charts.netpl = new Chart(ctx,{
+      type:'bar',
+      data:{
+        labels:netPL.map(x=>x.name),
+        datasets:[{
+          label:'Net P/L',
+          data:netPL.map(x=>x.net),
+          backgroundColor:netPL.map(x=>x.net>=0?'rgba(16,185,129,.55)':'rgba(239,68,68,.45)'),
+          borderColor:netPL.map(x=>x.net>=0?'#10b981':'#ef4444'),
+          borderWidth:1,borderRadius:4
+        }]
+      },
+      options:mkOpts({plugins:{...CD.plugins,legend:{display:false}},scales:{...CD.scales,y:{...CD.scales.y}}})
+    });
+  }
+
+  // 3. Pool balance over time
+  killChart('pool');
+  {
+    let running=0;
+    const poolHist = weeks.map(w=>{
+      running -= Math.min(w.pool_used||0, running);
+      running  = Math.max(0,running);
+      if(!w.big_win&&(w.prize_won||0)>0) running+=w.prize_won;
+      return running;
+    });
+    const ctx = document.getElementById('ch-pool');
+    if(ctx) S.charts.pool = new Chart(ctx,{
+      type:'line',
+      data:{
+        labels,
+        datasets:[{
+          label:'Pool Balance',
+          data:poolHist,
+          borderColor:'#f59e0b',backgroundColor:'rgba(245,158,11,.07)',
+          fill:true,tension:.3,pointBackgroundColor:'#f59e0b',pointRadius:4
+        }]
+      },
+      options:mkOpts({plugins:{...CD.plugins,legend:{display:false}},scales:{...CD.scales,y:{...CD.scales.y,beginAtZero:true}}})
+    });
+  }
+
+  // 4. Cumulative share doughnut
+  killChart('share');
+  if(investors.length){
+    const totals=investors.map(inv=>weeks.reduce((s,w)=>s+(w.investments?.[inv.id]||0),0));
+    const ctx=document.getElementById('ch-share');
+    if(ctx) S.charts.share = new Chart(ctx,{
+      type:'doughnut',
+      data:{
+        labels:investors.map(i=>i.nickname),
+        datasets:[{
+          data:totals,
+          backgroundColor:investors.map((_,i)=>COLORS[i%COLORS.length]+'bb'),
+          borderColor:investors.map((_,i)=>COLORS[i%COLORS.length]),
+          borderWidth:2
+        }]
+      },
+      options:{plugins:{legend:CD.plugins.legend,tooltip:CD.plugins.tooltip}}
+    });
+  }
+
+  // 5. Weekly stacked bar
+  killChart('wkly');
+  if(investors.length&&weeks.length){
+    const ctx=document.getElementById('ch-wkly');
+    if(ctx) S.charts.wkly = new Chart(ctx,{
+      type:'bar',
+      data:{
+        labels,
+        datasets: investors.map((inv,i)=>({
+          label:inv.nickname,
+          data:weeks.map(w=>w.investments?.[inv.id]||0),
+          backgroundColor:COLORS[i%COLORS.length]+'88',
+          borderColor:COLORS[i%COLORS.length],
+          borderWidth:1,borderRadius:2
+        }))
+      },
+      options:mkOpts({
+        scales:{
+          x:{...CD.scales.x,stacked:true},
+          y:{...CD.scales.y,stacked:true,beginAtZero:true}
+        }
+      })
+    });
+  }
+}
+
+// ─── Settings ─────────────────────────────────────────────────────────────────
+async function saveCfg() {
+  const body={
+    currency:   document.getElementById('cfg-currency').value.trim(),
+    big_win_threshold: parseFloat(document.getElementById('cfg-threshold').value),
+    title:      document.getElementById('cfg-title').value.trim(),
+  };
+  const j = await (await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
+  if(j.ok){toast('Settings saved!','ok');await loadAll();}
+}
+
+async function savePw() {
+  const p1=document.getElementById('cfg-pw1').value, p2=document.getElementById('cfg-pw2').value;
+  if(!p1){toast('Enter a new password.','err');return;}
+  if(p1!==p2){toast('Passwords do not match.','err');return;}
+  const j=await(await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({new_password:p1})})).json();
+  if(j.ok){toast('Password updated!','ok');document.getElementById('cfg-pw1').value='';document.getElementById('cfg-pw2').value='';}
+}
+
+// ─── Toast ────────────────────────────────────────────────────────────────────
+function toast(msg,type='ok'){
+  const el=document.getElementById('toast');
+  el.textContent=msg; el.className='toast '+type+' show';
+  clearTimeout(el._t); el._t=setTimeout(()=>el.classList.remove('show'),3200);
+}
+
+// ─── SSE / Real-time ──────────────────────────────────────────────────────────
+function connectSSE(){
+  const es=new EventSource('/api/events');
+  es.onopen  = ()=>document.getElementById('syncDot').classList.remove('off');
+  es.onerror = ()=>{ document.getElementById('syncDot').classList.add('off'); setTimeout(connectSSE,5000); };
+  es.onmessage = e=>{ if(e.data==='update') loadAll(); };
+}
+
+// ─── Boot ────────────────────────────────────────────────────────────────────
+loadAll();
+connectSSE();
+</script>
+</body>
+</html>
