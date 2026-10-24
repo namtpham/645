@@ -925,8 +925,9 @@ async function checkResults(ticketId) {
 function checkFailHelp(e) {
   if (!e.unreachable) return esc(e.message);
   return `Could not reach the <strong>check-tickets</strong> Edge Function. Usually one of:
-    <ul><li>it is not deployed yet, or has a different name;</li>
-    <li>"Verify JWT" is still on in the function's settings.</li></ul>
+    <ul><li>it is not deployed yet: in GitHub run <em>Actions → Deploy result checker → Run workflow</em>
+      (needs the <code>SUPABASE_ACCESS_TOKEN</code> secret, see README);</li>
+    <li>"Verify JWT" is still on in the function's settings (only if deployed from the Supabase dashboard).</li></ul>
     Test it: <a href="${esc(CHECK_FN_URL())}" target="_blank" rel="noopener">open the function</a> — it should show
     <code>"ok": true</code>. Anything else (e.g. "Missing authorization header", "NOT_FOUND") tells you which step to redo.`;
 }
