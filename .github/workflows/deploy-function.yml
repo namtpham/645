@@ -31,7 +31,14 @@ jobs:
           fi
           URL=$(grep -oP "supabaseUrl:\s*'\K[^']+" web/config.js)
           REF=$(echo "$URL" | sed -E 's#https://([a-z0-9]+)\.supabase\.co.*#\1#')
-          supabase functions deploy check-tickets --project-ref "$REF" --no-verify-jwt
+          set +e
+          supabase functions deploy check-tickets --project-ref "$REF" --no-verify-jwt 2>&1 | tee deploy.log
+          code=${PIPESTATUS[0]}
+          set -e
+          if grep -q 'missing_permissions' deploy.log; then
+            echo "::error::The SUPABASE_ACCESS_TOKEN secret lacks permission to deploy Edge Functions. Create a new Supabase access token with Edge Functions read & write access for this project (or full access), replace the GitHub secret, and run this workflow again."
+          fi
+          exit $code
       - name: Self-test
         if: env.SKIP != '1'
         run: |

@@ -249,6 +249,9 @@ Every change is in the Activity log. A QR that appears in two photos is counted 
    QR results.
 2. **Deploy the function.** Option A, the GitHub Action, is easiest and repeatable:
    1. Create a Supabase access token at <https://supabase.com/dashboard/account/tokens>.
+      Give it **write access to Edge Functions** for this project, or full access.
+      A read-only token fails with `Missing required permission(s): edge_functions_write`.
+      A token's access can't be edited later, so make a new token instead.
    2. In GitHub, open **Settings → Secrets and variables → Actions → New repository secret**.
       Name it `SUPABASE_ACCESS_TOKEN` and paste the token.
    3. Open **Actions → Deploy result checker → Run workflow**. It deploys `check-tickets`
