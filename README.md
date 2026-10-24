@@ -29,7 +29,10 @@ with an invitation key from the admin.
 
 - **Dashboard**: this week's draw number, countdown to the 20:00 KST sales close,
   ticket photos uploaded so far, prize pool, totals, recent weeks.
-- **Weeks**: per-draw investments, use of the prize pool, prize won, and live percentage preview.
+- **Weeks**: one row for **every draw** since 17 May 2025, newest first, led by the draw number
+  (회차). Draws you didn't play are shown as *Not played* with a **+ Add** button. Total, fresh
+  money, money from the pool, prize and tickets each have their own aligned, colour-coded column.
+  On phones each draw becomes a compact card.
 - **Tickets**: upload one or many photos per draw (each photo may show several tickets).
   Photos are resized to keep QR codes sharp and stamped with the upload time by the
   server. Each one shows **"✓ before draw"** if it was uploaded before 20:35 KST on draw day.
@@ -209,15 +212,49 @@ always gives consistent numbers.
 
 ---
 
-## Next phase: automatic result check (planned)
+## Automatic result check (ticket QR codes)
 
-Each Lotto 6/45 ticket has a QR code linking to the official result checker. The plan:
+Every Lotto 6/45 ticket carries a Data Matrix, a PDF417 and a **QR code**. The QR code is a
+link to that ticket's result page on dhlottery.co.kr.
 
-1. On upload, read every QR code in the photo in the browser and store the payloads in
-   `tickets.qr_data`. That column is already in the schema.
-2. A scheduled Supabase Edge Function runs every Saturday after **20:50 KST**, fetches the
-   winning numbers, checks each ticket, and writes `tickets.result`.
-3. The dashboard shows each ticket's result and suggests the week's prize amount.
+1. **On upload**, the browser finds every lotto QR code in the photo (one photo can hold
+   several tickets) and stores the links with the ticket. The other two codes are ignored.
+2. **After 20:50 KST on draw day**, the `check-tickets` Edge Function opens each link and
+   reads the page:
+   - "축하합니다! 총 5,000원 당첨" means **won ₩5,000**
+   - "아쉽게도, 낙첨되었습니다." means **no win**
+   - anything else means results aren't out yet, and it tries again later
+
+   The first member who opens the site after the draw triggers the check. The scheduled
+   workflow `.github/workflows/check-results.yml` also runs it on Saturday night and Sunday
+   morning.
+3. **Results show up everywhere.** Each photo gets a badge, and the Weeks list shows QR totals
+   and warns if the recorded prize doesn't match. Add/Edit Week offers **"Use ₩X"**, and a new
+   week starts with that amount.
+
+**Human correction.** Open a photo in the **Tickets** tab. The panel under it lists every QR
+code with its numbers and result. Any member can:
+- change a result (won / no win / waiting) and its amount
+- remove a wrong detection
+- scan the photo again
+- add a QR link by hand
+
+Corrected codes are marked *corrected by hand* and the automatic check never overwrites them.
+Every change is in the Activity log. A QR that appears in two photos is counted only once.
+
+### One-time setup for the result check
+
+1. **Update the database.** Run the latest [`supabase/schema.sql`](supabase/schema.sql) in the
+   SQL Editor again. This lets members correct QR results.
+2. **Deploy the function.** In Supabase, open **Edge Functions → Deploy a new function → Via
+   Editor**. Name it **`check-tickets`**, paste
+   [`supabase/functions/check-tickets/index.ts`](supabase/functions/check-tickets/index.ts),
+   and click **Deploy**.
+3. **Turn off "Verify JWT".** In the function's **Details / Settings**, switch off **Verify JWT
+   with legacy secret** ("Enforce JWT verification") and save. The function checks who is
+   calling by itself. Anonymous calls can only check tickets whose results are already out.
+4. **Test it.** Open a photo whose draw is over and click **Check results now**. You can also
+   run **Actions → Check ticket results → Run workflow**.
 
 ---
 
@@ -230,11 +267,14 @@ Each Lotto 6/45 ticket has a QR code linking to the official result checker. The
 │   ├── style.css
 │   ├── app.js               ← all app logic (Supabase client, pool maths, UI)
 │   └── config.js            ← Supabase URL + public key  ← edit this
+├── web/vendor/            ← QR code reader (zxing-wasm, MIT)
 ├── supabase/
-│   └── schema.sql           ← tables, security rules, storage, realtime (run once)
+│   ├── schema.sql           ← tables, security rules, storage, realtime (run once)
+│   └── functions/check-tickets/index.ts ← reads ticket result pages (Edge Function)
 └── .github/workflows/
     ├── pages.yml            ← deploy web/ to GitHub Pages on push to main
-    └── keepalive.yml        ← keeps the free Supabase project awake
+    ├── keepalive.yml        ← keeps the free Supabase project awake
+    └── check-results.yml    ← checks ticket results on Saturday night
 ```
 
 ### Running locally

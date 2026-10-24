@@ -115,8 +115,8 @@ create table if not exists public.tickets (
   width        int,
   height       int,
   bytes        int,
-  qr_data      jsonb,   -- reserved for phase 2: QR payloads read from the ticket
-  result       jsonb,   -- reserved for phase 2: automatic result check
+  qr_data      jsonb,   -- QR codes read from the photo, each with its result (see check-tickets function)
+  result       jsonb,   -- reserved
   uploaded_by  uuid references public.profiles (id) on delete set null,
   created_at   timestamptz not null default now()
 );
@@ -386,12 +386,14 @@ create policy "edit weeks"      on public.weeks for update to authenticated
   using (public.is_member()) with check (public.is_member());
 create policy "admin delete weeks" on public.weeks for delete to authenticated using (public.is_admin());
 
--- Tickets are append-only for members: no edit, no delete.
+-- Members can upload ticket photos but never delete or replace them.
 create policy "read tickets"    on public.tickets for select to authenticated using (public.is_member());
 create policy "upload tickets"  on public.tickets for insert to authenticated
   with check (public.is_member() and uploaded_by = auth.uid());
-create policy "admin edit tickets"   on public.tickets for update to authenticated
-  using (public.is_admin()) with check (public.is_admin());
+-- Members may correct the QR results of a photo (only qr_data/result, see grants); the
+-- photo itself, its draw and its upload time stay fixed. Every correction is in the audit log.
+create policy "correct ticket results" on public.tickets for update to authenticated
+  using (public.is_member()) with check (public.is_member());
 create policy "admin delete tickets" on public.tickets for delete to authenticated using (public.is_admin());
 
 create policy "read audit log"  on public.audit_log for select to authenticated using (public.is_member());
@@ -399,7 +401,9 @@ create policy "read audit log"  on public.audit_log for select to authenticated 
 -- ─── Grants ─────────────────────────────────────────────────────────────────
 
 revoke all on all tables in schema public from anon, authenticated;
-grant select, insert, update, delete on public.investors, public.weeks, public.tickets to authenticated;
+grant select, insert, update, delete on public.investors, public.weeks to authenticated;
+grant select, insert, delete         on public.tickets   to authenticated;
+grant update (qr_data, result)       on public.tickets   to authenticated;
 grant select, update                 on public.settings  to authenticated;
 grant select, update, delete         on public.invites   to authenticated;
 grant select                         on public.profiles, public.audit_log to authenticated;
@@ -469,3 +473,6 @@ select public.format_invite(code) as admin_invite_key, expires_at
 from public.invites
 where role = 'admin' and used_at is null and not revoked and expires_at > now()
   and not exists (select 1 from public.profiles where role = 'admin');
+
+-- Make the API pick up new columns/grants right away.
+notify pgrst, 'reload schema';

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="robots" content="noindex, nofollow">
   <meta name="referrer" content="no-referrer">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: blob: https://*.supabase.co; connect-src 'self' https://*.supabase.co wss://*.supabase.co; object-src 'none'; base-uri 'self'; form-action 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: blob: https://*.supabase.co; connect-src 'self' https://*.supabase.co wss://*.supabase.co; object-src 'none'; base-uri 'self'; form-action 'self'">
   <title>645</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='30' fill='%23f59e0b'/%3E%3Ctext x='32' y='42' font-size='26' font-family='Arial' font-weight='700' text-anchor='middle' fill='%2307090f'%3E645%3C/text%3E%3C/svg%3E">
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -193,7 +193,7 @@
         <input type="file" id="up-files" accept="image/*" multiple hidden>
         <span class="dz-ico">🎟️</span>
         <span><strong>Choose photos</strong> or drop them here</span>
-        <span class="fhelp">One photo can show one or several tickets. Keep the QR codes sharp — they will be used for automatic result checks.</span>
+        <span class="fhelp">One photo can show one or several tickets. Keep the QR codes sharp: they are read automatically, and results are checked after 20:50 KST on draw day.</span>
       </label>
       <div class="up-preview" id="up-preview"></div>
       <div class="up-actions">
@@ -373,6 +373,7 @@
             <button type="button" class="qb qb-clear" data-act="q-prize" data-set="0">Clear</button>
           </div>
           <span class="fhelp" id="wm-prize-hint"></span>
+          <div class="fhelp wm-qr" id="wm-qr"></div>
         </div>
       </div>
 
@@ -494,6 +495,7 @@
       </div>
     </div>
     <img id="lb-img" alt="Ticket photo">
+    <div class="qr-panel" id="lb-qr"></div>
   </div>
 </div>
 

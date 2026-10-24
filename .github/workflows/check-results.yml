@@ -1,0 +1,27 @@
+name: Check ticket results
+
+# After each Saturday draw, ask the check-tickets Edge Function to read the result page of every
+# ticket QR code that is still waiting. Members opening the site trigger the same check, so this
+# is only a safety net for weeks when nobody looks.
+on:
+  schedule:
+    - cron: '7 12 * * 6'    # Sat 21:07 KST
+    - cron: '37 13 * * 6'   # Sat 22:37 KST
+    - cron: '17 1 * * 0'    # Sun 10:17 KST
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check pending tickets
+        run: |
+          URL=$(grep -oP "supabaseUrl:\s*'\K[^']+" web/config.js)
+          KEY=$(grep -oP "supabaseKey:\s*'\K[^']+" web/config.js)
+          case "$URL" in *YOUR-PROJECT*) echo "web/config.js not filled in yet — skipping"; exit 0;; esac
+          curl -fsS -X POST "$URL/functions/v1/check-tickets" \
+            -H "apikey: $KEY" -H "x-region: ap-northeast-2" -H "Content-Type: application/json" -d '{}'

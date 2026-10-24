@@ -405,7 +405,12 @@ async function loadAll() {
   S.weeks = (wk || []).map((w) => ({ ...w, pool_used: +w.pool_used, prize_won: +w.prize_won }));
   S.tickets = tk || [];
   S.ledger = replay(S.weeks);
+  if (S.lbTicket) {
+    S.lbTicket = S.tickets.find((t) => t.id === S.lbTicket.id) || S.lbTicket;
+    if ($('lb-overlay').classList.contains('open')) renderLbQr();
+  }
   renderAll();
+  maybeAutoCheck();
 }
 
 let _reloadT = null, _channel = null;
@@ -480,7 +485,8 @@ function renderDrawCard() {
     <div class="draw-meta">
       <div class="t">Saturday ${esc(fmtD(d))}</div>
       <div class="s">${status}</div>
-      <div class="s">${tix.length ? `🎟️ ${tix.length} ticket photo${tix.length > 1 ? 's' : ''} uploaded` : 'No ticket photos uploaded yet for this draw.'}</div>
+      <div class="s">${tix.length ? `🎟️ ${tix.length} ticket photo${tix.length > 1 ? 's' : ''} uploaded` : 'No ticket photos uploaded yet for this draw.'}
+        ${qrSummary(tix).n ? ` · ${qrSummary(tix).n} QR codes ${qrBadge(qrSummary(tix))}` : ''}</div>
     </div>
     <div class="draw-thumbs">${tix.slice(0, 6).map((t) => thumbImg(t)).join('')}</div>
     <button class="btn btn-primary" data-act="tab" data-tab="tickets">📤 Upload tickets</button>`;
@@ -546,43 +552,91 @@ function pctRows(pcts, eff) {
     </div>`).join('');
 }
 
+/** Every Saturday from the first week played to the current draw, plus any off-date entries. */
+function weekTimeline() {
+  const byDate = {};
+  for (const w of S.weeks) (byDate[w.result_date] ||= []).push(w);
+  const first = [START_DEFAULT, ...S.weeks.map((w) => w.result_date)].sort()[0];
+  let d = addDays(first, (6 - weekday(first) + 7) % 7);
+  const dates = new Set(Object.keys(byDate));
+  for (const end = currentDraw(); d <= end; d = addDays(d, 7)) dates.add(d);
+  return [...dates].sort().reverse().map((date) => ({ date, weeks: sortWeeks(byDate[date] || []) }));
+}
+
+const wkCell = (cls, label, value) =>
+  `<div class="wk-c ${cls}"><span class="wk-l">${label}</span><span class="wk-v">${value}</span></div>`;
+
+function prizeCell(w) {
+  const prize = +w.prize_won || 0;
+  if (!prize) return `<span class="muted">—</span>`;
+  if (w.big_win) return `${esc(money(prize))}<small>${prize >= S.settings.big_win_threshold ? '🏆' : '💸'} shared</small>`;
+  return `${esc(money(prize))}<small>→ pool</small>`;
+}
+
+function ticketsCell(tix) {
+  if (!tix.length) return `<span class="muted">—</span>`;
+  return `🎟️ ${tix.length}${qrSummary(tix).n ? ' ' + qrBadge(qrSummary(tix), { short: true }) : ''}`;
+}
+
+function weekRow(w) {
+  const c = S.ledger.perWeek[w.id] || { pcts: {}, eff: {}, total: 0 };
+  const fresh = sum(Object.values(w.investments || {})), tix = ticketsFor(w.result_date), qs = qrSummary(tix);
+  const used = c.used ?? w.pool_used;
+  const warns = [];
+  if (w.pool_used - (c.used || 0) > 0.005) warns.push(`entered ${money(w.pool_used)} from pool, only ${money(c.used || 0)} available (earlier weeks changed)`);
+  const out = outOfPeriod(w);
+  if (out.length) warns.push(`outside their dates: ${out.map((i) => i.nickname).join(', ')}`);
+  if (qs.done && Math.round(qs.total) !== Math.round(+w.prize_won || 0)) warns.push(`ticket QR results say ${money(qs.total)}, but this week records ${money(+w.prize_won || 0)}`);
+  if (qs.problem) warns.push(`${qs.problem} ticket QR result${qs.problem > 1 ? 's need' : ' needs'} checking by hand (Tickets tab)`);
+  const n = drawNo(w.result_date);
+  return `<div class="week-item">
+    <div class="wk-row" data-act="week-toggle" data-id="${esc(w.id)}">
+      <div class="wk-no">${n ? '#' + n : '—'}</div>
+      <div class="wk-date">${esc(fmtD(w.result_date))}</div>
+      ${wkCell('wk-total', 'Total', esc(money(c.total)))}
+      ${wkCell('wk-fresh', 'Fresh', fresh > 0 ? esc(money(fresh)) : '<span class="muted">—</span>')}
+      ${wkCell('wk-pool', 'From pool', used > 0 ? esc(money(used)) : '<span class="muted">—</span>')}
+      ${wkCell('wk-prize ' + (w.big_win ? 'shared' : 'pooled'), 'Prize', prizeCell(w))}
+      ${wkCell('wk-tix', 'Tickets', ticketsCell(tix))}
+      <div class="wk-act">
+        <button class="btn btn-secondary btn-sm" data-act="week-edit" data-id="${esc(w.id)}">Edit</button>
+        <button class="btn btn-danger btn-sm admin-only" data-act="week-del" data-id="${esc(w.id)}">Delete</button>
+      </div>
+    </div>
+    ${warns.length ? `<div class="wk-warn">${warns.map((x) => `<span>⚠️ ${esc(x)}</span>`).join('')}</div>` : ''}
+    <div class="week-body ${S.openWeeks.has(w.id) ? 'open' : ''}" id="wb-${esc(w.id)}">
+      <div class="flbl mb8">Effective percentages &amp; amounts</div>
+      ${pctRows(c.pcts, c.eff) || '<p class="fhelp">No investments recorded.</p>'}
+      ${qs.n ? `<div class="fhelp" style="margin-top:10px">Ticket QR results: ${qs.n} code${qs.n > 1 ? 's' : ''} · ${qs.win} won · ${qs.lose} no win${qs.pending ? ` · ${qs.pending} waiting` : ''} ${qrBadge(qs)}</div>` : ''}
+      ${tix.length ? `<div class="thumb-row">${tix.map((t) => thumbImg(t)).join('')}</div>` : ''}
+      ${w.notes ? `<div class="week-notes">${esc(w.notes)}</div>` : ''}
+      <div class="fhelp" style="margin-top:10px">Last edited by ${esc(userName(w.updated_by))} · ${esc(fmtKST(w.updated_at))}</div>
+    </div>
+  </div>`;
+}
+
+function emptyRow(date) {
+  const tix = ticketsFor(date), n = drawNo(date), upcoming = date >= currentDraw();
+  return `<div class="week-item wk-empty">
+    <div class="wk-row">
+      <div class="wk-no">${n ? '#' + n : '—'}</div>
+      <div class="wk-date">${esc(fmtD(date))}</div>
+      <div class="wk-c wk-none">${upcoming ? '⏳ This week — not entered yet' : 'Not played'}</div>
+      ${wkCell('wk-tix', 'Tickets', ticketsCell(tix))}
+      <div class="wk-act"><button class="btn btn-ghost btn-sm" data-act="week-add-date" data-date="${date}">+ Add</button></div>
+    </div>
+    ${tix.length ? `<div class="wk-warn"><span>⚠️ ${tix.length} ticket photo${tix.length > 1 ? 's' : ''} uploaded, but no week entry yet</span></div>` : ''}
+  </div>`;
+}
+
 function renderWeeks() {
-  const weeks = sortWeeks(S.weeks).reverse();
   const el = $('weeks-list');
-  if (!weeks.length) {
-    el.innerHTML = `<div class="empty"><div class="ico">📅</div><p>No weeks yet. Click "+ Add Week" to start tracking.</p></div>`;
-    return;
-  }
-  el.innerHTML = weeks.map((w) => {
-    const c = S.ledger.perWeek[w.id] || { pcts: {}, eff: {}, total: 0 };
-    const fresh = sum(Object.values(w.investments || {})), tix = ticketsFor(w.result_date);
-    const open = S.openWeeks.has(w.id);
-    return `<div class="week-item">
-      <div class="week-hd" data-act="week-toggle" data-id="${esc(w.id)}">
-        <div class="week-date">${esc(fmtD(w.result_date))} <span class="fhelp">${drawLabel(w.result_date)}</span></div>
-        <div class="week-meta">
-          <span>Total: <strong>${esc(money(c.total))}</strong></span>
-          ${w.pool_used > 0 ? `<span>From pool: <strong class="gold">${esc(money(c.used ?? w.pool_used))}</strong></span>` : ''}
-          ${w.pool_used - (c.used || 0) > 0.005 ? `<span class="red" title="Earlier weeks changed, so the pool no longer had this much">⚠️ entered ${esc(money(w.pool_used))} from pool, only ${esc(money(c.used || 0))} available</span>` : ''}
-          ${fresh > 0 ? `<span>Fresh: <strong class="green">${esc(money(fresh))}</strong></span>` : ''}
-          ${resultBadge(w, true)}
-          ${outOfPeriod(w).length ? `<span class="red">⚠️ outside dates: ${esc(outOfPeriod(w).map((i) => i.nickname).join(', '))}</span>` : ''}
-          ${tix.length ? `<span>🎟️ ${tix.length}</span>` : ''}
-        </div>
-        <div class="week-actions">
-          <button class="btn btn-secondary btn-sm" data-act="week-edit" data-id="${esc(w.id)}">Edit</button>
-          <button class="btn btn-danger btn-sm admin-only" data-act="week-del" data-id="${esc(w.id)}">Delete</button>
-        </div>
-      </div>
-      <div class="week-body ${open ? 'open' : ''}" id="wb-${esc(w.id)}">
-        <div class="flbl mb8">Effective percentages &amp; amounts</div>
-        ${pctRows(c.pcts, c.eff) || '<p class="fhelp">No investments recorded.</p>'}
-        ${tix.length ? `<div class="thumb-row">${tix.map((t) => thumbImg(t)).join('')}</div>` : ''}
-        ${w.notes ? `<div class="week-notes">${esc(w.notes)}</div>` : ''}
-        <div class="fhelp" style="margin-top:10px">Last edited by ${esc(userName(w.updated_by))} · ${esc(fmtKST(w.updated_at))}</div>
-      </div>
-    </div>`;
-  }).join('');
+  const rows = weekTimeline();
+  const played = rows.filter((r) => r.weeks.length).length;
+  el.innerHTML = `<div class="wk-summary fhelp">${played} of ${rows.length} draws played since ${esc(fmtD(rows.at(-1)?.date))}</div>
+    <div class="wk-head"><span>Draw</span><span>Date</span><span class="r">Total</span><span class="r">Fresh</span>
+      <span class="r">From pool</span><span class="r">Prize</span><span>Tickets</span><span></span></div>`
+    + rows.map((r) => (r.weeks.length ? r.weeks.map(weekRow).join('') : emptyRow(r.date))).join('');
   el.querySelectorAll('.week-body.open').forEach((b) => hydrateImages(b));
 }
 
@@ -601,9 +655,9 @@ function dateInfo(d) {
   return (n ? `Draw #${n}` : '⚠️ Not a Saturday') + (dup ? ' · ⚠️ another entry already uses this date' : '');
 }
 
-function openWeekModal(wid) {
+function openWeekModal(wid, dateArg) {
   const existing = wid ? S.weeks.find((w) => w.id === wid) : null;
-  const date = existing?.result_date || currentDraw();
+  const date = existing?.result_date || dateArg || currentDraw();
   $('wm-title').textContent = existing ? 'Edit Week' : 'Add Week';
   $('wm-id').value = wid || '';
   $('wm-date').value = date;
@@ -615,6 +669,9 @@ function openWeekModal(wid) {
   $('wm-pool-used').value = fmtAmt(existing ? existing.pool_used : _wmPool.total);
   _wmVals = Object.fromEntries(Object.entries(existing?.investments || {}).map(([k, v]) => [k, fmtAmt(v)]));
   $('wm-inv-inputs').innerHTML = '';
+  // New week whose ticket results are all in: start from the QR total
+  const qs = qrSummary(ticketsFor(date));
+  if (!existing && qs.done && qs.total > 0) $('wm-prize').value = fmtAmt(qs.total);
   refreshWeekPool();
   $('week-overlay').classList.add('open');
 }
@@ -656,6 +713,10 @@ function refreshWeekPool() {
   $('wm-pool-val').textContent = money(_wmPool.total);
   const n = _wmPool.entries.length;
   $('wm-pool-entries-info').textContent = n ? `from ${n} winning week${n > 1 ? 's' : ''} before this date` : '';
+  const tix = ticketsFor(date), qs = qrSummary(tix);
+  $('wm-qr').innerHTML = !tix.length ? '' : !qs.n ? `🎟️ ${tix.length} ticket photo${tix.length > 1 ? 's' : ''}, no QR results yet.`
+    : `🎟️ Ticket QR results: ${qs.n} code${qs.n > 1 ? 's' : ''}, ${qs.win} won ${qrBadge(qs)}${qs.pending ? ` · ${qs.pending} still waiting` : ''}
+       ${qs.total > 0 ? `<button type="button" class="btn btn-secondary btn-sm" data-act="wm-use-qr" data-v="${qs.total}">Use ${esc(money(qs.total))}</button>` : ''}`;
   previewWeek();
 }
 
@@ -726,6 +787,207 @@ async function deleteWeek(id) {
   await loadAll();
 }
 
+// ─── Ticket QR codes & automatic results ─────────────────────────────────────
+// A ticket carries a Data Matrix, a PDF417 and a QR code; only the QR code (a dhlottery.co.kr
+// link to that ticket's result page) is read. tickets.qr_data holds one item per QR code:
+//   { url, round, games: [{ mode, nums }], status, prize, manual, checked_at, message }
+// status: pending (results not checked / not out yet) · win · lose · error · invalid.
+// The check-tickets Edge Function fills in status/prize; members can correct any item by hand
+// (manual: true), and the automatic check then leaves that item alone.
+const QR_LABEL = { pending: '⏳ Waiting for results', win: '🎉 Won', lose: '낙첨 · no win', error: '❓ Could not check', invalid: '❓ Not a lotto QR' };
+const QR_SEEN_MS = 10 * 60e3;
+
+let _zx = null;
+function loadZXing() {
+  _zx ||= new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = 'vendor/zxing-reader.js';
+    s.onload = () => {
+      window.ZXingWASM.prepareZXingModule({ overrides: { locateFile: (f) => new URL('vendor/' + f, location.href).href } });
+      resolve(window.ZXingWASM);
+    };
+    s.onerror = () => { _zx = null; reject(new Error('Could not load the QR reader.')); };
+    document.head.appendChild(s);
+  });
+  return _zx;
+}
+
+function parseLottoQR(text) {
+  let u;
+  try { u = new URL(String(text).trim()); } catch { return null; }
+  if (!/(^|\.)dhlottery\.co\.kr$/i.test(u.hostname)) return null;
+  const v = u.searchParams.get('v') || '';
+  const m = v.match(/^(\d{3,4})/);
+  const games = [...v.slice(m ? m[1].length : 0).matchAll(/([a-z])(\d{12})/gi)]
+    .map(([, mode, d]) => ({ mode: mode.toLowerCase(), nums: d.match(/\d\d/g).map(Number) }));
+  return { url: u.href, round: m ? +m[1] : null, games, status: 'pending', prize: null, manual: false, checked_at: null, message: null };
+}
+
+/** All lotto QR codes in a photo (several tickets per photo are fine). */
+async function readTicketQRs(source) {
+  const ZX = await loadZXing();
+  const bmp = await createImageBitmap(source);
+  const scale = Math.min(1, 4000 / Math.max(bmp.width, bmp.height));
+  const c = document.createElement('canvas');
+  c.width = Math.round(bmp.width * scale);
+  c.height = Math.round(bmp.height * scale);
+  const g = c.getContext('2d', { willReadFrequently: true });
+  g.drawImage(bmp, 0, 0, c.width, c.height);
+  bmp.close?.();
+  const found = await ZX.readBarcodes(g.getImageData(0, 0, c.width, c.height), { formats: ['QRCode'], tryHarder: true, maxNumberOfSymbols: 40 });
+  const items = [];
+  for (const r of found) {
+    const it = r.isValid && parseLottoQR(r.text);
+    if (it && !items.some((x) => x.url === it.url)) items.push(it);
+  }
+  return items;
+}
+
+const qrItems = (t) => (Array.isArray(t.qr_data) ? t.qr_data : []);
+const qrNeedsCheck = (i) => !i.manual && (i.status === 'pending' || i.status === 'error');
+const qrProblem = (i) => i.status === 'error' || i.status === 'invalid' || (i.status === 'win' && !(+i.prize > 0));
+
+/** QR results for some photos; a QR that appears in two photos is counted once. */
+function qrSummary(tickets) {
+  const byUrl = new Map();
+  for (const t of tickets) for (const it of qrItems(t)) if (!byUrl.has(it.url)) byUrl.set(it.url, it);
+  const items = [...byUrl.values()];
+  const won = items.filter((i) => i.status === 'win');
+  const pending = items.filter((i) => i.status === 'pending').length;
+  return {
+    items, n: items.length, win: won.length, lose: items.filter((i) => i.status === 'lose').length,
+    pending, problem: items.filter(qrProblem).length, total: sum(won.map((i) => +i.prize || 0)),
+    done: items.length > 0 && pending === 0 && !items.some(qrProblem),
+  };
+}
+
+function qrBadge(s, { short = false } = {}) {
+  if (!s.n) return '';
+  if (s.win) return `<span class="badge qr-win">🎉 ${esc(money(s.total))}${s.pending ? ` · ${s.pending} ⏳` : ''}</span>`;
+  if (s.pending) return `<span class="badge bg-gray">⏳ ${short ? s.pending : `${s.pending} waiting`}</span>`;
+  if (s.problem) return `<span class="badge bg-red">❓ check</span>`;
+  return `<span class="badge bg-gray">낙첨</span>`;
+}
+
+const resultsOut = (d) => Date.now() >= kstAt(d, RESULTS_TIME).getTime();
+
+async function checkResults(ticketId) {
+  const { data, error } = await S.sb.functions.invoke('check-tickets', {
+    body: ticketId ? { ticket_id: ticketId } : {}, region: 'ap-northeast-2',
+  });
+  if (error) throw new Error('Result check failed — is the "check-tickets" Edge Function deployed? ' + (error.message || ''));
+  return data;
+}
+
+/** After 20:50 KST on draw day, the first member who opens the app triggers the check. */
+let _lastAutoCheck = 0;
+function maybeAutoCheck() {
+  if (Date.now() - _lastAutoCheck < QR_SEEN_MS) return;
+  const due = S.tickets.some((t) => resultsOut(t.draw_date) && qrItems(t).some((i) =>
+    qrNeedsCheck(i) && !(i.checked_at && Date.now() - new Date(i.checked_at).getTime() < QR_SEEN_MS)));
+  if (!due) return;
+  _lastAutoCheck = Date.now();
+  checkResults().catch((e) => console.warn(e.message));
+}
+
+// Lightbox panel: the QR codes of one photo, with manual correction.
+function renderLbQr() {
+  const t = S.lbTicket, el = $('lb-qr');
+  if (!t) return;
+  const items = qrItems(t), drawN = drawNo(t.draw_date);
+  const elsewhere = (url) => S.tickets.some((x) => x.id !== t.id && qrItems(x).some((i) => i.url === url));
+  const head = `<div class="qr-head">
+      <strong>🔍 QR codes on this photo${t.qr_data ? ` (${items.length})` : ''}</strong>
+      <div class="btn-row">
+        <button class="btn btn-secondary btn-sm" data-act="qr-scan">${t.qr_data ? 'Scan again' : 'Scan photo'}</button>
+        ${items.some((i) => !i.manual) ? `<button class="btn btn-secondary btn-sm" data-act="qr-check">Check results now</button>` : ''}
+        <button class="btn btn-ghost btn-sm" data-act="qr-add">＋ Add QR link</button>
+      </div>
+    </div>`;
+  const body = !t.qr_data
+    ? `<p class="fhelp">This photo has not been scanned yet.</p>`
+    : !items.length
+      ? `<p class="fhelp">No lotto QR code was found. Try "Scan again", upload a sharper photo, or add the link by hand
+         (scan the ticket with your phone camera and copy the link).</p>`
+      : items.map((it, i) => `<div class="qr-item ${it.status}">
+        <div class="qr-main">
+          <div><strong>${it.round ? `#${it.round}` : 'QR'}</strong>
+            ${it.round && drawN && it.round !== drawN ? `<span class="red fhelp"> ⚠️ this photo is filed under draw #${drawN}</span>` : ''}
+            ${elsewhere(it.url) ? `<span class="fhelp"> · also in another photo (counted once)</span>` : ''}
+            ${it.manual ? `<span class="badge bg-gray">corrected by hand</span>` : ''}</div>
+          ${it.games?.length ? `<div class="qr-games">${it.games.map((g) => `<span>${g.nums.map((n) => String(n).padStart(2, '0')).join(' ')}</span>`).join('')}</div>` : ''}
+          <div class="fhelp">${it.checked_at ? `Checked ${esc(fmtKST(it.checked_at))}` : resultsOut(t.draw_date) ? 'Not checked yet' : `Results after ${RESULTS_TIME} KST on draw day`}${it.message ? ` · ${esc(it.message)}` : ''}</div>
+        </div>
+        <div class="qr-edit">
+          <select class="fsel" data-on-input="qr-status" data-i="${i}">
+            ${Object.entries(QR_LABEL).filter(([k]) => ['pending', 'win', 'lose'].includes(k) || k === it.status)
+              .map(([k, label]) => `<option value="${k}" ${k === it.status ? 'selected' : ''}>${label}</option>`).join('')}
+          </select>
+          <input class="finp" data-amount inputmode="numeric" placeholder="Prize" value="${esc(fmtAmt(it.prize))}"
+                 data-on-input="qr-prize" data-i="${i}" ${it.status === 'win' ? '' : 'hidden'}>
+          <button class="btn btn-ghost btn-sm" data-act="qr-remove" data-i="${i}" title="Not a real ticket / wrong detection">✕</button>
+        </div>
+        <a class="fhelp" href="${esc(it.url)}" target="_blank" rel="noopener noreferrer">Open result page ↗</a>
+      </div>`).join('');
+  const s = qrSummary([t]);
+  el.innerHTML = head + body + (s.n ? `<div class="qr-total">This photo: ${qrBadge(s)}</div>` : '');
+}
+
+async function saveQr(items, msg = 'Saved.') {
+  const t = S.lbTicket;
+  const { error } = await S.sb.from('tickets').update({ qr_data: items }).eq('id', t.id);
+  if (error) return fail(error);
+  t.qr_data = items;
+  renderLbQr();
+  toast(msg, 'ok');
+  scheduleReload();
+}
+
+async function scanLbPhoto() {
+  const t = S.lbTicket;
+  $('lb-qr').querySelector('[data-act=qr-scan]').textContent = 'Scanning…';
+  try {
+    const url = (await signedUrls([t.storage_path]))[t.storage_path];
+    const found = await readTicketQRs(await (await fetch(url)).blob());
+    const items = [...qrItems(t)];
+    for (const f of found) if (!items.some((i) => i.url === f.url)) items.push(f);
+    await saveQr(items, `${found.length} QR code${found.length === 1 ? '' : 's'} found.`);
+    if (resultsOut(t.draw_date) && items.some(qrNeedsCheck)) await checkLb();
+  } catch (e) { fail(e, 'Could not scan the photo.'); renderLbQr(); }
+}
+
+async function checkLb() {
+  const t = S.lbTicket;
+  if (!resultsOut(t.draw_date)) return toast(`Results come out at ${RESULTS_TIME} KST on ${fmtD(t.draw_date)}.`, 'err');
+  toast('Checking results…', 'ok');
+  try {
+    await checkResults(t.id);
+    const { data, error } = await S.sb.from('tickets').select('*').eq('id', t.id).maybeSingle();
+    if (error) throw error;
+    Object.assign(t, data);
+    renderLbQr();
+    toast('Results checked.', 'ok');
+    scheduleReload();
+  } catch (e) { fail(e); }
+}
+
+function editLbItem(i, patch) {
+  const items = qrItems(S.lbTicket).map((x) => ({ ...x }));
+  Object.assign(items[i], patch, { manual: true, checked_at: new Date().toISOString(), message: `Corrected by ${S.me.display_name}` });
+  if (items[i].status !== 'win') items[i].prize = items[i].status === 'lose' ? 0 : null;
+  saveQr(items, 'Correction saved.');
+}
+
+function addLbLink() {
+  const text = prompt('Paste the link from the ticket\'s QR code (scan it with your phone camera):');
+  if (!text) return;
+  const it = parseLottoQR(text);
+  if (!it) return toast('That is not a dhlottery.co.kr QR link.', 'err');
+  const items = [...qrItems(S.lbTicket)];
+  if (items.some((x) => x.url === it.url)) return toast('This QR code is already on the list.', 'err');
+  saveQr([...items, it], 'QR link added.');
+}
+
 // ─── Tickets ──────────────────────────────────────────────────────────────────
 function renderTickets() {
   if (!$('up-date').value) { $('up-date').value = currentDraw(); }
@@ -744,7 +1006,8 @@ function renderTickets() {
     return `<div class="draw-group" id="tg-${d}">
       <div class="draw-group-hd">
         <span class="t">Draw ${drawLabel(d)} · ${esc(fmtD(d))}</span>
-        <span class="fhelp">${ts.length} photo${ts.length > 1 ? 's' : ''}${games ? ` · ${games} games` : ''}</span>
+        <span class="fhelp">${ts.length} photo${ts.length > 1 ? 's' : ''}${games ? ` · ${games} games` : ''}${qrSummary(ts).n ? ` · ${qrSummary(ts).n} QR codes` : ''}</span>
+        ${qrBadge(qrSummary(ts))}
       </div>
       <div class="ticket-grid">${ts.map((t) => `
         <div class="ticket" data-act="ticket-open" data-id="${esc(t.id)}">
@@ -753,6 +1016,7 @@ function renderTickets() {
             <strong>${esc(userName(t.uploaded_by))}</strong>
             <span>${esc(fmtKST(t.created_at))}</span>
             <span>${uploadBadge(t)}${t.game_count ? ` <span class="badge bg-gray">${t.game_count} games</span>` : ''}</span>
+            <span>${t.qr_data ? (qrItems(t).length ? qrBadge(qrSummary([t])) : '<span class="badge bg-red">no QR found</span>') : '<span class="badge bg-gray">QR not scanned</span>'}</span>
             ${t.note ? `<span>${esc(t.note)}</span>` : ''}
           </div>
         </div>`).join('')}
@@ -811,11 +1075,15 @@ async function uploadTickets() {
   const note = $('up-note').value.trim();
   const btn = $('up-btn'), status = $('up-status');
   btn.disabled = true;
-  let done = 0;
+  let done = 0, qrFound = 0;
   const total = S.uploads.length;
   try {
     while (S.uploads.length) {
       const u = S.uploads[0];
+      status.textContent = `Reading QR codes ${done + 1} of ${total}…`;
+      let qr_data = null;   // null = not scanned (reader failed), [] = scanned, nothing found
+      try { qr_data = await readTicketQRs(u.file); qrFound += qr_data.length; }
+      catch (e) { console.warn('QR scan failed', e); }
       status.textContent = `Uploading ${done + 1} of ${total}…`;
       const img = await prepareImage(u.file);
       const id = uuid();
@@ -832,7 +1100,7 @@ async function uploadTickets() {
       const { error: e3 } = await S.sb.from('tickets').insert({
         id, draw_date, storage_path: path, thumb_path, note,
         game_count: Number.isFinite(games) && done === 0 ? games : null,
-        width: img.w || null, height: img.h || null, bytes: img.main.size,
+        width: img.w || null, height: img.h || null, bytes: img.main.size, qr_data,
       });
       if (e3) throw e3;
       URL.revokeObjectURL(u.url);
@@ -841,7 +1109,8 @@ async function uploadTickets() {
     }
     status.textContent = '';
     $('up-games').value = $('up-note').value = '';
-    toast(`Uploaded ${done} photo${done > 1 ? 's' : ''}. Good luck! 🍀`, 'ok');
+    toast(`Uploaded ${done} photo${done > 1 ? 's' : ''} · ${qrFound} QR code${qrFound === 1 ? '' : 's'} read. Good luck! 🍀`, 'ok');
+    _lastAutoCheck = 0;
     await loadAll();
   } catch (e) {
     status.textContent = done ? `${done} uploaded, then an error occurred.` : '';
@@ -859,6 +1128,7 @@ async function openTicket(id) {
   $('lb-info').innerHTML = `<strong>Draw ${drawLabel(t.draw_date)} · ${esc(fmtD(t.draw_date))}</strong><br>
     Uploaded by ${esc(userName(t.uploaded_by))} · ${esc(fmtKST(t.created_at))} ${uploadBadge(t)}
     ${t.game_count ? ` · ${t.game_count} games` : ''}${t.note ? ` · ${esc(t.note)}` : ''}`;
+  renderLbQr();
   $('lb-overlay').classList.add('open');
   try {
     const map = await signedUrls([t.storage_path]);
@@ -1518,6 +1788,16 @@ const ACTIONS = {
   'up-remove': (el, e) => { e.preventDefault(); const [u] = S.uploads.splice(+el.dataset.id, 1); if (u) URL.revokeObjectURL(u.url); renderUploadPreview(); },
   'ticket-open': (el, e) => { e.stopPropagation(); openTicket(el.dataset.id); },
   'ticket-del': () => deleteTicket(),
+  'qr-scan': () => scanLbPhoto(),
+  'qr-check': () => checkLb(),
+  'qr-add': () => addLbLink(),
+  'qr-remove': (el) => {
+    if (!confirm('Remove this QR code from the photo? (e.g. a wrong detection)')) return;
+    const items = qrItems(S.lbTicket).filter((_, i) => i !== +el.dataset.i);
+    saveQr(items, 'Removed.');
+  },
+  'week-add-date': (el, e) => { e.stopPropagation(); openWeekModal(null, el.dataset.date); },
+  'wm-use-qr': (el) => quickSet($('wm-prize'), +el.dataset.v),
   'save-name': () => saveName(),
   'save-pw': () => savePassword(),
   'save-cfg': () => saveSettings(),
@@ -1541,6 +1821,8 @@ const INPUTS = {
   'up-date': () => { const n = drawNo($('up-date').value); $('up-date-info').textContent = n ? `Draw #${n}` : '⚠️ Not a Saturday'; },
   'money-hint': (el) => moneyHint(el.id, el.dataset.hint),
   'cur-select': (el) => { _curDraft.currency = el.value; renderCurrencyPicker(); moneyHint('cfg-threshold', 'cfg-threshold-hint'); },
+  'qr-status': (el, e) => { if (e.type === 'change') editLbItem(+el.dataset.i, { status: el.value }); },
+  'qr-prize': (el, e) => { if (e.type === 'change') editLbItem(+el.dataset.i, { status: 'win', prize: amt(el.value) }); },
   'cur-display': (el) => { _curDraft.display = el.value; renderCurrencyPicker(); },
 };
 
