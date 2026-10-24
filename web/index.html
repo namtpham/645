@@ -226,12 +226,29 @@
   <!-- ═══ CHARTS ═══════════════════════════════════════════════════════════ -->
   <div class="tab-pane" id="tab-charts">
     <h2 class="sec-title">Statistics &amp; Charts</h2>
+    <div class="stat-grid kpi-grid" id="kpi-grid"></div>
+    <div class="empty" id="charts-empty" hidden><div class="ico">📈</div><p>Charts appear once the first week is recorded.</p></div>
     <div class="charts-grid">
-      <div class="chart-card"><div class="chart-title">💰 Prize History by Week</div><canvas id="ch-prize" height="200"></canvas></div>
-      <div class="chart-card"><div class="chart-title">📊 Net P/L per Investor</div><canvas id="ch-netpl" height="200"></canvas></div>
-      <div class="chart-card"><div class="chart-title">🏦 Prize Pool Balance Over Time</div><canvas id="ch-pool" height="200"></canvas></div>
-      <div class="chart-card"><div class="chart-title">🥧 Cumulative Investment Share</div><canvas id="ch-share" height="200"></canvas></div>
-      <div class="chart-card wide"><div class="chart-title">📅 Weekly Fresh Investment by Investor (Stacked)</div><canvas id="ch-wkly" height="150"></canvas></div>
+      <div class="chart-card wide"><div class="chart-title">💰 Invested vs. prizes won — running total</div>
+        <p class="chart-sub">All prizes, whether shared or added to the pool. The gap between the lines is the group's overall result.</p><canvas id="ch-cum"></canvas></div>
+      <div class="chart-card"><div class="chart-title">🏆 Prize per draw</div>
+        <p class="chart-sub">Stacked by what happened to the money.</p><canvas id="ch-prize"></canvas></div>
+      <div class="chart-card"><div class="chart-title">🎯 How often we win</div>
+        <p class="chart-sub">Number of draws by prize size.</p><canvas id="ch-outcome"></canvas></div>
+      <div class="chart-card"><div class="chart-title">🏦 Prize pool balance</div>
+        <p class="chart-sub">After each draw.</p><canvas id="ch-pool"></canvas></div>
+      <div class="chart-card"><div class="chart-title">📅 Month by month</div>
+        <p class="chart-sub">Fresh money invested and prizes won per month.</p><canvas id="ch-monthly"></canvas></div>
+      <div class="chart-card"><div class="chart-title">📊 Net P/L per investor</div>
+        <p class="chart-sub">Prizes shared to them minus fresh money invested.</p><canvas id="ch-netpl"></canvas></div>
+      <div class="chart-card"><div class="chart-title">⚖️ Invested vs. received per investor</div>
+        <p class="chart-sub">Their share of pooled prizes is reinvested, so it is not counted as received.</p><canvas id="ch-invwon"></canvas></div>
+      <div class="chart-card wide"><div class="chart-title">📈 Net P/L per investor over time</div>
+        <p class="chart-sub">Running total for each investor after every draw.</p><canvas id="ch-cumpl"></canvas></div>
+      <div class="chart-card"><div class="chart-title">🧩 Share of all money invested</div>
+        <p class="chart-sub">Fresh money only, all draws.</p><canvas id="ch-share"></canvas></div>
+      <div class="chart-card"><div class="chart-title">🗓️ Fresh investment per draw</div>
+        <p class="chart-sub">Stacked by investor.</p><canvas id="ch-wkly"></canvas></div>
     </div>
   </div>
 
@@ -275,7 +292,7 @@
           </div>
           <div class="fgrp">
             <label class="flbl" for="cfg-threshold">Big win threshold</label>
-            <input type="number" class="finp admin-only-input" id="cfg-threshold" min="0" step="1" inputmode="numeric" data-on-input="money-hint" data-hint="cfg-threshold-hint">
+            <input type="text" class="finp admin-only-input" id="cfg-threshold" data-amount inputmode="numeric" autocomplete="off" data-on-input="money-hint" data-hint="cfg-threshold-hint">
             <span class="fhelp"><span id="cfg-threshold-hint"></span> Default for new prizes: at or above this they are shared to investors, below it they go to the prize pool. You can change it for each week.</span>
           </div>
           <button class="btn btn-primary admin-only" data-act="save-cfg">Save settings</button>
@@ -348,7 +365,13 @@
         </div>
         <div class="fgrp">
           <label class="flbl" for="wm-prize">Prize won</label>
-          <input type="number" class="finp" id="wm-prize" min="0" step="1" inputmode="numeric" placeholder="0" data-on-input="wm-preview">
+          <input type="text" class="finp" id="wm-prize" data-amount inputmode="numeric" autocomplete="off" placeholder="0" data-on-input="wm-preview">
+          <div class="quick-row">
+            <button type="button" class="qb qb-p5" data-act="q-prize" data-add="5000">+5K</button>
+            <button type="button" class="qb qb-p10" data-act="q-prize" data-add="10000">+10K</button>
+            <button type="button" class="qb qb-p50" data-act="q-prize" data-add="50000">+50K</button>
+            <button type="button" class="qb qb-clear" data-act="q-prize" data-set="0">Clear</button>
+          </div>
           <span class="fhelp" id="wm-prize-hint"></span>
         </div>
       </div>
@@ -370,11 +393,11 @@
         </div>
         <div class="fgrp pool-use">
           <label class="flbl" for="wm-pool-used">Use from pool</label>
-          <input type="number" class="finp" id="wm-pool-used" min="0" step="1" inputmode="numeric" placeholder="0" data-on-input="wm-preview">
+          <input type="text" class="finp" id="wm-pool-used" data-amount inputmode="numeric" autocomplete="off" placeholder="0" data-on-input="wm-preview">
         </div>
       </div>
 
-      <div class="flbl mb8">Fresh investments this week</div>
+      <div class="flbl mb8">Fresh investments this week <span class="fhelp">· 5K / 10K set the amount, ±1K adjust it</span></div>
       <div class="inv-inputs" id="wm-inv-inputs"></div>
 
       <hr class="sep">

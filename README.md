@@ -38,7 +38,15 @@ with an invitation key from the admin.
   lists investors whose dates cover that week. Click an investor to see **every week** they
   took part in. Weeks where they have money outside their dates are highlighted, so mistakes
   are easy to find.
-- **Charts**: prize history, P/L, pool balance, investment share, weekly stacked contributions.
+- **Weeks form shortcuts**: amounts show thousands separators as you type (`1,234,000`).
+  Prize buttons **+5K / +10K / +50K** add to the prize (two 5th-prize tickets = +5K twice).
+  Each investor has **5K / 10K**, which set the amount, and **−1K / +1K**, which adjust it.
+- **Statistics**: headline numbers (return rate, win rate, biggest prize, average per draw,
+  draws since the last win, longest dry spell) plus 10 charts:
+  - invested vs. prizes won (running total), prize per draw, how often we win by prize size
+  - prize pool balance, month by month
+  - net P/L per investor, invested vs. received per investor, each investor's P/L over time
+  - share of money invested, fresh investment per draw
 - **Activity log**: every add/edit/delete by every member, with old → new values. It can't be edited.
 - **Currency**: KRW by default. Pick from popular currencies (₩ $ ₫ ¥ ฿ € …) or any ISO
   currency, and choose how it is displayed (₩12,000 / KRW 12,000 / 12,000 South Korean won).

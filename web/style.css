@@ -304,9 +304,38 @@ code { font-family: var(--mono); font-size: 12px; background: rgba(255,255,255,.
 .btn-lg { padding: 13px; font-size: 15px; font-weight: 700; margin-top: 18px; }
 .file-btn { align-self: flex-start; }
 .chart-card.wide { grid-column: 1 / -1; }
+.chart-title { margin-bottom: 4px; }
+.chart-sub { font-size: 11px; color: var(--muted); margin-bottom: 12px; }
+.kpi-grid { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
+.kpi-grid .stat-value { font-size: 26px; }
+.chart-card { min-width: 0; }
+.chart-card canvas { max-width: 100%; }
 .fgrid2, .fgrid3 { margin-bottom: 16px; }
 .pool-banner { margin-bottom: 16px; }
 .prize-mode { margin: -4px 0 16px; }
+
+/* ─── Amount inputs & quick buttons ─────────────────────────────────── */
+input[type=number]::-webkit-inner-spin-button, input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+input[type=number] { -moz-appearance: textfield; appearance: textfield; }
+input[data-amount] { font-family: var(--mono); text-align: right; }
+.quick-row { display: flex; gap: 6px; flex-wrap: wrap; }
+.fgrp .quick-row { margin-top: 2px; }
+.qb {
+  min-width: 46px; height: 32px; padding: 0 10px; border-radius: 8px; cursor: pointer;
+  font: 600 12px var(--mono); border: 1px solid var(--border2);
+  background: rgba(255,255,255,.04); color: var(--dim); transition: background .12s, transform .08s;
+}
+.qb:hover { background: rgba(255,255,255,.09); }
+.qb:active { transform: scale(.95); }
+.qb-plus  { color: #6ee7b7; border-color: rgba(16,185,129,.35); }
+.qb-minus { color: #fca5a5; border-color: rgba(239,68,68,.35); }
+.qb-p5    { color: #6ee7b7; border-color: rgba(25,158,112,.5);  background: rgba(25,158,112,.12); }
+.qb-p10   { color: #93c5fd; border-color: rgba(57,135,229,.5);  background: rgba(57,135,229,.12); }
+.qb-p50   { color: #fcd34d; border-color: rgba(245,158,11,.55); background: rgba(245,158,11,.14); }
+.qb-clear { color: var(--muted); }
+.inv-input-row { flex-wrap: wrap; row-gap: 6px; padding: 6px 0; border-bottom: 1px solid rgba(30,45,74,.5); }
+.inv-input-row:last-of-type { border-bottom: none; }
+.inv-input-row .qb { min-width: 42px; height: 30px; padding: 0 8px; }
 .prize-mode .seg { margin-bottom: 6px; }
 .pool-use { min-width: 180px; }
 .wm-totals { margin-top: 10px; display: flex; gap: 18px; font-size: 12px; align-items: center; flex-wrap: wrap; }
@@ -468,6 +497,8 @@ body.is-admin .admin-hide { display: none !important; }
   .auth-card { padding: 32px 20px 24px; }
   .act-row { flex-direction: column; gap: 2px; }
   .stat-grid { grid-template-columns: 1fr 1fr; gap: 10px; }
+  .inv-input-row .nm { flex-basis: 100%; }
+  .inv-input-row .amt { flex: 1; width: auto; min-width: 90px; }
   .stat-card { padding: 14px; }
   .stat-value { font-size: 24px; }
   .draw-no { font-size: 32px; }

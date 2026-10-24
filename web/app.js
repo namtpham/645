@@ -19,7 +19,7 @@ const THUMB_SIDE = 480;
 const START_DEFAULT = '2025-05-17';  // first Saturday the group played
 const NO_END = '9999-12-31';
 const POPULAR_CURRENCIES = ['KRW', 'USD', 'VND', 'JPY', 'CNY', 'THB', 'EUR', 'PHP', 'SGD'];
-const COLORS = ['#f59e0b', '#10b981', '#3b82f6', '#8b5cf6', '#ef4444', '#f97316', '#06b6d4', '#ec4899', '#84cc16', '#a855f7'];
+const COLORS = ['#3987e5', '#d95926', '#199e70', '#c98500', '#d55181', '#008300', '#9085e9', '#e66767'];
 
 const S = {
   sb: null, user: null, me: null,
@@ -42,6 +42,16 @@ const show = (id, on = true) => { $(id).hidden = !on; };
 const isAdmin = () => S.me?.role === 'admin';
 const username2email = (u) => `${u.trim().toLowerCase()}@${CFG.authEmailDomain || 'namtpham.github.io'}`;
 const fmtInvite = (c) => c ? `${c.slice(0, 4)}-${c.slice(4, 8)}-${c.slice(8, 12)}` : '';
+// Whole amounts typed with thousands separators: "1,234,000" ⇄ 1234000
+const amt = (v) => +String(v ?? '').replace(/[^\d]/g, '') || 0;
+const fmtAmt = (n) => (+n > 0 ? Math.round(+n).toLocaleString('en-US') : '');
+function formatAmountInput(el) {
+  const caretDigits = el.value.slice(0, el.selectionStart ?? el.value.length).replace(/\D/g, '').length;
+  el.value = fmtAmt(amt(el.value));
+  let pos = 0;
+  for (let seen = 0; pos < el.value.length && seen < caretDigits; pos++) if (/\d/.test(el.value[pos])) seen++;
+  if (document.activeElement === el) el.setSelectionRange(pos, pos);
+}
 const normInvite = (c) => String(c || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 const uuid = () => crypto.randomUUID?.() ||
   '10000000-1000-4000-8000-100000000000'.replace(/[018]/g, (c) => (c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> c / 4).toString(16));
@@ -94,7 +104,9 @@ const _nf = {};
 function moneyFormatter(currency = S.settings.currency, display = S.settings.currency_display) {
   const key = currency + '|' + display;
   if (!_nf[key]) {
-    try { _nf[key] = new Intl.NumberFormat('en-US', { style: 'currency', currency, currencyDisplay: display }); }
+    // Amounts are whole numbers: no decimals, thousands separated by commas
+    const opts = { style: 'currency', currency, currencyDisplay: display, minimumFractionDigits: 0, maximumFractionDigits: 0 };
+    try { _nf[key] = new Intl.NumberFormat('en-US', opts); }
     catch { _nf[key] = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'KRW' }); }
   }
   return _nf[key];
@@ -595,13 +607,13 @@ function openWeekModal(wid) {
   $('wm-title').textContent = existing ? 'Edit Week' : 'Add Week';
   $('wm-id').value = wid || '';
   $('wm-date').value = date;
-  $('wm-prize').value = existing ? existing.prize_won || '' : '';
+  $('wm-prize').value = fmtAmt(existing?.prize_won);
   $('wm-notes').value = existing?.notes || '';
   _wmPool = poolBefore(date, wid);
   _wmShareTouched = +existing?.prize_won > 0;   // keep the saved choice when editing
   _wmShare = _wmShareTouched && !!existing.big_win;
-  $('wm-pool-used').value = existing ? existing.pool_used || '' : (_wmPool.total > 0 ? Math.round(_wmPool.total * 100) / 100 : '');
-  _wmVals = { ...(existing?.investments || {}) };
+  $('wm-pool-used').value = fmtAmt(existing ? existing.pool_used : _wmPool.total);
+  _wmVals = Object.fromEntries(Object.entries(existing?.investments || {}).map(([k, v]) => [k, fmtAmt(v)]));
   $('wm-inv-inputs').innerHTML = '';
   refreshWeekPool();
   $('week-overlay').classList.add('open');
@@ -616,14 +628,20 @@ function renderWeekInputs() {
     if (el.value === '') delete _wmVals[el.dataset.inv]; else _wmVals[el.dataset.inv] = el.value;
   });
   const date = $('wm-date').value || currentDraw();
-  const shown = S.investors.filter((i) => inPeriod(i, date) || +_wmVals[i.id] > 0);
+  const shown = S.investors.filter((i) => inPeriod(i, date) || amt(_wmVals[i.id]) > 0);
   const hidden = S.investors.length - shown.length;
   $('wm-inv-inputs').innerHTML = (shown.length ? shown.map((inv) => {
     const problem = periodProblem(inv, date);
     return `<div class="inv-input-row">
       <div class="nm">${esc(inv.nickname)}${problem ? `<div class="red fhelp">⚠️ ${esc(problem)} — clear this amount if it is a mistake</div>` : ''}</div>
-      <input type="number" class="finp amt" id="wi-${esc(inv.id)}" data-inv="${esc(inv.id)}" min="0" step="1" inputmode="numeric"
-             placeholder="0" value="${esc(_wmVals[inv.id] || '')}" data-on-input="wm-preview">
+      <div class="quick-row">
+        <button type="button" class="qb" data-act="q-inv" data-id="${esc(inv.id)}" data-set="5000" title="Set to 5,000">5K</button>
+        <button type="button" class="qb" data-act="q-inv" data-id="${esc(inv.id)}" data-set="10000" title="Set to 10,000">10K</button>
+        <button type="button" class="qb qb-minus" data-act="q-inv" data-id="${esc(inv.id)}" data-add="-1000" title="Minus 1,000">−1K</button>
+        <button type="button" class="qb qb-plus" data-act="q-inv" data-id="${esc(inv.id)}" data-add="1000" title="Plus 1,000">+1K</button>
+      </div>
+      <input type="text" class="finp amt" id="wi-${esc(inv.id)}" data-inv="${esc(inv.id)}" data-amount inputmode="numeric"
+             autocomplete="off" placeholder="0" value="${esc(_wmVals[inv.id] || '')}" data-on-input="wm-preview">
       <span class="pp" id="wp-${esc(inv.id)}">—</span>
     </div>`;
   }).join('') : `<p class="fhelp">${S.investors.length ? 'No investor takes part on this date.' : 'Add investors first (Investors tab).'}</p>`)
@@ -644,14 +662,10 @@ function refreshWeekPool() {
 function weekInputs() {
   const investments = {};
   document.querySelectorAll('#wm-inv-inputs input[data-inv]').forEach((el) => {
-    const v = parseFloat(el.value || 0);
+    const v = amt(el.value);
     if (v > 0) investments[el.dataset.inv] = v;
   });
-  return {
-    investments,
-    pool_used: Math.max(0, parseFloat($('wm-pool-used').value || 0)),
-    prize_won: Math.max(0, parseFloat($('wm-prize').value || 0)),
-  };
+  return { investments, pool_used: amt($('wm-pool-used').value), prize_won: amt($('wm-prize').value) };
 }
 
 function previewWeek() {
@@ -875,7 +889,7 @@ function renderInvestors() {
     ? `<div class="empty" style="grid-column:1/-1"><div class="ico">👥</div><p>No investors yet. Add your first one!</p></div>`
     : all.map((inv) => {
       const s = stats[inv.id] || {}, net = (s.won || 0) - (s.invested || 0);
-      const clr = COLORS[S.investors.indexOf(inv) % COLORS.length];
+      const clr = invColor(inv);
       const state = invState(inv);
       const bad = S.weeks.filter((w) => outOfPeriod(w).includes(inv)).length;
       return `<div class="inv-card clickable" data-act="inv-detail" data-id="${esc(inv.id)}" style="${state === 'active' ? '' : 'opacity:.55'}">
@@ -989,79 +1003,201 @@ function openInvDetail(id) {
 }
 
 // ─── Charts ───────────────────────────────────────────────────────────────────
-const CD = {
-  plugins: {
-    legend: { labels: { color: '#94a3b8', font: { family: "'DM Sans',sans-serif", size: 12 } } },
-    tooltip: { backgroundColor: '#131b2e', borderColor: '#1e2d4a', borderWidth: 1, titleColor: '#e2e8f0', bodyColor: '#94a3b8' },
-  },
-  scales: {
-    x: { ticks: { color: '#4b5675', font: { size: 11 } }, grid: { color: 'rgba(30,45,74,.5)' } },
-    y: { ticks: { color: '#4b5675', font: { size: 11 } }, grid: { color: 'rgba(30,45,74,.5)' } },
+// Investor colours follow the investor (by order added), validated for colour-blind separation
+// on the dark card surface. A 9th+ investor gets neutral gray rather than a re-used hue.
+const SERIES = { invested: '#3987e5', won: '#199e70', pool: '#c98500', up: '#3987e5', down: '#e66767' };
+const INK = { text: '#94a3b8', muted: '#64748b', grid: 'rgba(30,45,74,.55)', surface: '#131b2e' };
+const invColor = (inv) => { const i = S.investors.indexOf(inv); return i >= 0 && i < COLORS.length ? COLORS[i] : '#6b7280'; };
+
+function killChart(id) { if (S.charts[id]) { S.charts[id].destroy(); delete S.charts[id]; } }
+
+/** Shared Chart.js options: hairline grid, money ticks & tooltips, hover by column. */
+function chartOpts({ stacked = false, horizontal = false, legend = true, endLabels = false, pct = false } = {}) {
+  const phone = window.innerWidth < 640;
+  if (phone) endLabels = false;   // the legend names the lines; keep the narrow plot for data
+  const fmt = pct ? (v) => `${(+v).toFixed(0)}%` : (v) => money(v);
+  const valueAxis = {
+    stacked, beginAtZero: true, grid: { color: INK.grid }, border: { display: false },
+    ticks: { color: INK.muted, font: { size: 11 }, callback: fmt, maxTicksLimit: 6 },
+  };
+  const catAxis = { stacked, grid: { display: false }, border: { color: INK.grid }, ticks: { color: INK.muted, font: { size: 11 }, maxRotation: 0, autoSkipPadding: 12, maxTicksLimit: phone && !horizontal ? 4 : undefined } };
+  return {
+    responsive: true,
+    indexAxis: horizontal ? 'y' : 'x',
+    interaction: { mode: 'index', intersect: false, axis: horizontal ? 'y' : 'x' },
+    layout: { padding: { right: endLabels ? 84 : 8 } },
+    scales: horizontal ? { x: valueAxis, y: catAxis } : { x: catAxis, y: valueAxis },
+    plugins: {
+      legend: { display: legend, position: 'top', align: 'start',
+        labels: { color: INK.text, boxWidth: 10, boxHeight: 10, useBorderRadius: true, borderRadius: 2, font: { family: "'DM Sans',sans-serif", size: 12 } } },
+      tooltip: {
+        backgroundColor: '#0d1117', borderColor: '#253656', borderWidth: 1, titleColor: '#e2e8f0', bodyColor: '#cbd5e1', padding: 10,
+        callbacks: { label: (c) => ` ${c.dataset.label}: ${fmt(horizontal ? c.parsed.x : c.parsed.y)}` },
+      },
+      endLabels: { enabled: endLabels },
+    },
+  };
+}
+
+const barStyle = (color, stacked = false) => ({
+  backgroundColor: color, borderColor: INK.surface, borderWidth: stacked ? { top: 2 } : 0,
+  borderRadius: 4, borderSkipped: 'start', maxBarThickness: 28,
+});
+const lineStyle = (color, fill = false) => ({
+  borderColor: color, backgroundColor: fill ? color + '22' : color, fill, borderWidth: 2, tension: .25,
+  pointRadius: 0, pointHoverRadius: 5, pointHoverBorderWidth: 2, pointHoverBorderColor: INK.surface,
+});
+
+// Direct labels at the end of each line (name in text ink, colour in the dot beside it).
+const endLabelsPlugin = {
+  id: 'endLabels',
+  afterDatasetsDraw(chart, _args, opts) {
+    if (!opts?.enabled) return;
+    const { ctx, chartArea } = chart;
+    const items = chart.data.datasets.map((ds, i) => {
+      const meta = chart.getDatasetMeta(i);
+      const pt = meta.data[meta.data.length - 1];
+      return meta.hidden || !pt ? null : { y: pt.y, x: pt.x, label: ds.label, color: ds.borderColor };
+    }).filter(Boolean).sort((a, b) => a.y - b.y);
+    for (let i = 1; i < items.length; i++) items[i].y = Math.max(items[i].y, items[i - 1].y + 14);
+    ctx.save();
+    ctx.font = "500 11px 'DM Sans',sans-serif";
+    ctx.textBaseline = 'middle';
+    for (const it of items) {
+      const y = Math.min(it.y, chartArea.bottom);
+      ctx.fillStyle = it.color;
+      ctx.beginPath(); ctx.arc(chartArea.right + 10, y, 4, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = INK.text;
+      ctx.fillText(it.label.length > 10 ? it.label.slice(0, 9) + '…' : it.label, chartArea.right + 18, y);
+    }
+    ctx.restore();
   },
 };
-const mkOpts = (extra = {}) => JSON.parse(JSON.stringify({ ...CD, ...extra }));
-const noLegend = () => ({ plugins: { ...CD.plugins, legend: { display: false } } });
-function killChart(id) { if (S.charts[id]) { S.charts[id].destroy(); delete S.charts[id]; } }
+
+/** Everything the statistics tab needs, computed once from the weeks + ledger. */
+function chartData() {
+  const weeks = sortWeeks(S.weeks), stats = investorStats();
+  const labels = weeks.map((w) => fmtD(w.result_date));
+  let ci = 0, cw = 0;
+  const cumInvested = [], cumWon = [];
+  for (const w of weeks) { ci += sum(Object.values(w.investments || {})); cw += +w.prize_won || 0; cumInvested.push(ci); cumWon.push(cw); }
+
+  const running = Object.fromEntries(S.investors.map((i) => [i.id, 0]));
+  const cumPL = Object.fromEntries(S.investors.map((i) => [i.id, []]));
+  for (const w of weeks) {
+    const pcts = S.ledger.perWeek[w.id]?.pcts || {};
+    for (const inv of S.investors) {
+      running[inv.id] += (w.big_win ? (+w.prize_won || 0) * (pcts[inv.id] || 0) / 100 : 0) - (+w.investments?.[inv.id] || 0);
+      cumPL[inv.id].push(running[inv.id]);
+    }
+  }
+
+  const months = {};
+  for (const w of weeks) {
+    const m = (months[w.result_date.slice(0, 7)] ||= { invested: 0, won: 0 });
+    m.invested += sum(Object.values(w.investments || {}));
+    m.won += +w.prize_won || 0;
+  }
+
+  const m = (n) => money(n);
+  const buckets = [   // multi-line labels so every bar keeps its label
+    ['No win', (p) => p === 0], [m(5000), (p) => p > 0 && p <= 5000], [[m(5001), `– ${m(49999)}`], (p) => p > 5000 && p < 50000],
+    [[m(50000), `– ${m(99999)}`], (p) => p >= 50000 && p < 100000], [[m(100000), `– ${m(4999999)}`], (p) => p >= 100000 && p < 5e6], [`${m(5e6)}+`, (p) => p >= 5e6],
+  ];
+  const outcomes = buckets.map(([label, test]) => ({ label, n: weeks.filter((w) => test(+w.prize_won || 0)).length }))
+    .filter((b, i) => b.n > 0 || i < 2);
+
+  return { weeks, labels, stats, cumInvested, cumWon, cumPL, months, outcomes };
+}
+
+function renderKpis(d) {
+  const { weeks } = d;
+  const invested = d.cumInvested.at(-1) || 0, won = d.cumWon.at(-1) || 0;
+  const wins = weeks.filter((w) => +w.prize_won > 0);
+  const biggest = wins.reduce((b, w) => (!b || +w.prize_won > +b.prize_won ? w : b), null);
+  let streak = 0, longest = 0, cur = 0;
+  for (const w of weeks) { cur = +w.prize_won > 0 ? 0 : cur + 1; longest = Math.max(longest, cur); }
+  streak = cur;
+  const tile = (label, value, sub, cls = '') => `<div class="stat-card ${cls}"><div class="stat-label">${label}</div>
+    <div class="stat-value">${value}</div><div class="stat-sub">${sub}</div></div>`;
+  $('kpi-grid').innerHTML = weeks.length ? [
+    tile('Return rate', invested ? `${Math.round(won / invested * 100)}%` : '—', `${esc(money(won))} won from ${esc(money(invested))}`, 'em'),
+    tile('Win rate', `${Math.round(wins.length / weeks.length * 100)}%`, `${wins.length} of ${weeks.length} draws won something`, 'bl'),
+    tile('Biggest prize', biggest ? esc(money(biggest.prize_won)) : '—', biggest ? `${esc(fmtD(biggest.result_date))} ${drawLabel(biggest.result_date)}` : 'no wins yet'),
+    tile('Avg. per draw', esc(money(invested / weeks.length)), 'fresh money invested', 'pu'),
+    tile('Since last win', `${streak}`, streak === 1 ? 'draw without a prize' : 'draws without a prize', 'rd'),
+    tile('Longest dry spell', `${longest}`, 'draws in a row without a prize'),
+  ].join('') : '';
+}
 
 function renderCharts() {
   if (!window.Chart) return;
-  const weeks = sortWeeks(S.weeks), investors = S.investors;
-  const labels = weeks.map((w) => fmtD(w.result_date));
-  const color = (i) => COLORS[i % COLORS.length];
-  const yZero = { ...CD.scales, y: { ...CD.scales.y, beginAtZero: true } };
+  if (!Chart.registry.plugins.get('endLabels')) Chart.register(endLabelsPlugin);
+  const d = chartData(), { weeks, labels, stats } = d, investors = S.investors;
+  renderKpis(d);
+  show('charts-empty', !weeks.length);
+  document.querySelector('#tab-charts .charts-grid').hidden = !weeks.length;
+  if (!weeks.length) return;
+  const phone = window.innerWidth < 640;
+  const mk = (id, cfg) => {
+    killChart(id);
+    const canvas = $('ch-' + id), wide = !!canvas.closest('.wide');
+    cfg.options.aspectRatio = phone ? 1.15 : wide ? 3 : 1.6;
+    S.charts[id] = new Chart(canvas, cfg);
+  };
 
-  killChart('prize');
-  S.charts.prize = new Chart($('ch-prize'), {
-    type: 'bar',
-    data: { labels, datasets: [{
-      label: 'Prize Won', data: weeks.map((w) => w.prize_won || 0),
-      backgroundColor: weeks.map((w) => w.big_win ? 'rgba(245,158,11,.65)' : 'rgba(16,185,129,.5)'),
-      borderColor: weeks.map((w) => w.big_win ? '#f59e0b' : '#10b981'), borderWidth: 1, borderRadius: 4,
-    }] },
-    options: mkOpts({ ...noLegend(), scales: yZero }),
-  });
+  mk('cum', { type: 'line', data: { labels, datasets: [
+    { label: 'Invested', data: d.cumInvested, ...lineStyle(SERIES.invested) },
+    { label: 'Prizes won', data: d.cumWon, ...lineStyle(SERIES.won, true) },
+  ] }, options: chartOpts({ endLabels: true }) });
 
-  killChart('netpl');
-  const stats = investorStats();
-  S.charts.netpl = new Chart($('ch-netpl'), {
-    type: 'bar',
-    data: { labels: investors.map((i) => i.nickname), datasets: [{
-      label: 'Net P/L', data: investors.map((i) => (stats[i.id]?.won || 0) - (stats[i.id]?.invested || 0)),
-      backgroundColor: investors.map((i) => (stats[i.id]?.won || 0) >= (stats[i.id]?.invested || 0) ? 'rgba(16,185,129,.55)' : 'rgba(239,68,68,.45)'),
-      borderWidth: 1, borderRadius: 4,
-    }] },
-    options: mkOpts(noLegend()),
-  });
+  mk('prize', { type: 'bar', data: { labels, datasets: [
+    { label: 'Shared to investors', data: weeks.map((w) => w.big_win ? +w.prize_won || 0 : 0), ...barStyle(SERIES.won, true) },
+    { label: 'Added to pool', data: weeks.map((w) => w.big_win ? 0 : +w.prize_won || 0), ...barStyle(SERIES.pool, true) },
+  ] }, options: chartOpts({ stacked: true }) });
 
-  killChart('pool');
-  S.charts.pool = new Chart($('ch-pool'), {
-    type: 'line',
-    data: { labels, datasets: [{
-      label: 'Pool Balance', data: S.ledger.history,
-      borderColor: '#f59e0b', backgroundColor: 'rgba(245,158,11,.07)', fill: true, tension: .3, pointBackgroundColor: '#f59e0b', pointRadius: 4,
-    }] },
-    options: mkOpts({ ...noLegend(), scales: yZero }),
-  });
+  const outOpts = chartOpts({ legend: false });
+  outOpts.scales.y.ticks.callback = (v) => (Number.isInteger(v) ? v : '');
+  outOpts.scales.x.ticks.autoSkip = false;
+  outOpts.plugins.tooltip.callbacks.label = (c) => ` ${c.parsed.y} draw${c.parsed.y === 1 ? '' : 's'} (${Math.round(c.parsed.y / weeks.length * 100)}%)`;
+  mk('outcome', { type: 'bar', data: { labels: d.outcomes.map((o) => o.label),
+    datasets: [{ label: 'Draws', data: d.outcomes.map((o) => o.n), ...barStyle(SERIES.invested), maxBarThickness: 44 }] }, options: outOpts });
 
-  killChart('share');
-  S.charts.share = new Chart($('ch-share'), {
-    type: 'doughnut',
-    data: { labels: investors.map((i) => i.nickname), datasets: [{
-      data: investors.map((i) => stats[i.id]?.invested || 0),
-      backgroundColor: investors.map((_, i) => color(i) + 'bb'), borderColor: investors.map((_, i) => color(i)), borderWidth: 2,
-    }] },
-    options: { plugins: { legend: CD.plugins.legend, tooltip: CD.plugins.tooltip } },
-  });
+  mk('pool', { type: 'line', data: { labels, datasets: [{ label: 'Pool balance', data: S.ledger.history, ...lineStyle(SERIES.pool, true), stepped: true }] },
+    options: chartOpts({ legend: false }) });
 
-  killChart('wkly');
-  S.charts.wkly = new Chart($('ch-wkly'), {
-    type: 'bar',
-    data: { labels, datasets: investors.map((inv, i) => ({
-      label: inv.nickname, data: weeks.map((w) => w.investments?.[inv.id] || 0),
-      backgroundColor: color(i) + '88', borderColor: color(i), borderWidth: 1, borderRadius: 2,
-    })) },
-    options: mkOpts({ scales: { x: { ...CD.scales.x, stacked: true }, y: { ...CD.scales.y, stacked: true, beginAtZero: true } } }),
-  });
+  const monthKeys = Object.keys(d.months).sort();
+  const monthLabel = (k) => new Date(k + '-15T00:00:00Z').toLocaleDateString('en-GB', { month: 'short', year: '2-digit', timeZone: 'UTC' });
+  mk('monthly', { type: 'bar', data: { labels: monthKeys.map(monthLabel), datasets: [
+    { label: 'Invested', data: monthKeys.map((k) => d.months[k].invested), ...barStyle(SERIES.invested) },
+    { label: 'Prizes won', data: monthKeys.map((k) => d.months[k].won), ...barStyle(SERIES.won) },
+  ] }, options: chartOpts() });
+
+  const byNet = [...investors].sort((a, b) => ((stats[b.id].won - stats[b.id].invested) - (stats[a.id].won - stats[a.id].invested)));
+  mk('netpl', { type: 'bar', data: { labels: byNet.map((i) => i.nickname), datasets: [{
+    label: 'Net P/L', data: byNet.map((i) => stats[i.id].won - stats[i.id].invested),
+    ...barStyle(byNet.map((i) => stats[i.id].won - stats[i.id].invested >= 0 ? SERIES.up : SERIES.down)), borderSkipped: false,
+  }] }, options: chartOpts({ horizontal: true, legend: false }) });
+
+  mk('invwon', { type: 'bar', data: { labels: investors.map((i) => i.nickname), datasets: [
+    { label: 'Invested', data: investors.map((i) => stats[i.id].invested), ...barStyle(SERIES.invested) },
+    { label: 'Prizes shared to them', data: investors.map((i) => stats[i.id].won), ...barStyle(SERIES.won) },
+  ] }, options: chartOpts({ horizontal: true }) });
+
+  mk('cumpl', { type: 'line', data: { labels, datasets: investors.map((inv) => ({ label: inv.nickname, data: d.cumPL[inv.id], ...lineStyle(invColor(inv)) })) },
+    options: chartOpts({ endLabels: investors.length <= 8 }) });
+
+  const shareOpts = chartOpts({ horizontal: true, legend: false, pct: true });
+  shareOpts.scales.x.max = 100;
+  const totalInv = sum(investors.map((i) => stats[i.id].invested)) || 1;
+  mk('share', { type: 'bar', data: { labels: investors.map((i) => i.nickname), datasets: [{
+    label: 'Share of all money invested', data: investors.map((i) => stats[i.id].invested / totalInv * 100),
+    ...barStyle(investors.map(invColor)),
+  }] }, options: shareOpts });
+
+  mk('wkly', { type: 'bar', data: { labels, datasets: investors.map((inv) => ({
+    label: inv.nickname, data: weeks.map((w) => +w.investments?.[inv.id] || 0), ...barStyle(invColor(inv), true), maxBarThickness: 22,
+  })) }, options: chartOpts({ stacked: true }) });
 }
 
 // ─── Activity log ─────────────────────────────────────────────────────────────
@@ -1130,7 +1266,7 @@ function renderSettings() {
 
   const st = S.settings, admin = isAdmin();
   if (document.activeElement !== $('cfg-title')) $('cfg-title').value = st.title;
-  if (document.activeElement !== $('cfg-threshold')) $('cfg-threshold').value = st.big_win_threshold;
+  if (document.activeElement !== $('cfg-threshold')) $('cfg-threshold').value = fmtAmt(st.big_win_threshold) || '0';
   document.querySelectorAll('.admin-only-input').forEach((el) => { el.disabled = !admin; });
   if (!_curDraft || !admin) _curDraft = { currency: st.currency, display: st.currency_display };
   renderCurrencyPicker();
@@ -1162,7 +1298,7 @@ function renderCurrencyPicker() {
 }
 
 function moneyHint(inputId, hintId) {
-  const v = parseFloat($(inputId).value);
+  const v = amt($(inputId).value);
   $(hintId).textContent = v > 0 ? `= ${money(v, _curDraft?.currency, _curDraft?.display)}.` : '';
 }
 
@@ -1171,7 +1307,7 @@ async function saveSettings() {
     title: $('cfg-title').value.trim() || '645',
     currency: _curDraft.currency,
     currency_display: _curDraft.display,
-    big_win_threshold: Math.max(0, parseFloat($('cfg-threshold').value) || 0),
+    big_win_threshold: amt($('cfg-threshold').value),
   };
   const { error } = await S.sb.from('settings').update(row).eq('id', 1);
   if (error) return fail(error);
@@ -1347,6 +1483,11 @@ async function importLegacy(file) {
 }
 
 // ─── Modals ───────────────────────────────────────────────────────────────────
+function quickSet(input, value) {
+  input.value = fmtAmt(Math.max(0, value));
+  previewWeek();
+}
+
 function closeModal(id) { $(id).classList.remove('open'); }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -1362,6 +1503,11 @@ const ACTIONS = {
   'week-del': (el, e) => { e.stopPropagation(); deleteWeek(el.dataset.id); },
   'week-toggle': (el) => toggleWeek(el.dataset.id),
   'week-save': () => saveWeek(),
+  'q-prize': (el) => quickSet($('wm-prize'), el.dataset.add ? amt($('wm-prize').value) + +el.dataset.add : 0),
+  'q-inv': (el) => {
+    const input = $('wi-' + el.dataset.id);
+    quickSet(input, el.dataset.set ? +el.dataset.set : amt(input.value) + +el.dataset.add);
+  },
   'wm-mode': (el) => { _wmShare = el.dataset.on === 'share'; _wmShareTouched = true; previewWeek(); },
   'inv-new': () => openInvModal(null),
   'inv-edit': (el, e) => { e.stopPropagation(); openInvModal(el.dataset.id); },
@@ -1405,6 +1551,7 @@ document.addEventListener('click', (e) => {
 });
 for (const type of ['input', 'change']) {
   document.addEventListener(type, (e) => {
+    if (type === 'input' && e.target.matches?.('[data-amount]')) formatAmountInput(e.target);
     const h = e.target.dataset?.onInput;
     if (h && INPUTS[h]) INPUTS[h](e.target, e);
   });
