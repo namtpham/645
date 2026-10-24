@@ -411,11 +411,37 @@
         <label class="flbl" for="im-nick">Nickname / display name</label>
         <input type="text" class="finp" id="im-nick" maxlength="40" placeholder="e.g. Minjun">
       </div>
+      <div class="fgrid2" style="margin:14px 0 0">
+        <div class="fgrp">
+          <label class="flbl" for="im-start">Start date</label>
+          <input type="date" class="finp" id="im-start">
+        </div>
+        <div class="fgrp">
+          <label class="flbl" for="im-end">End date</label>
+          <input type="date" class="finp" id="im-end">
+        </div>
+      </div>
+      <p class="fhelp" style="margin-top:8px">The first and last draw this investor takes part in. Leave the end date
+        empty while they are still in. Add/Edit Week only lists investors whose dates cover that week.</p>
     </div>
     <div class="modal-ft">
       <button class="btn btn-secondary" data-act="close-modal" data-id="inv-overlay">Cancel</button>
       <button class="btn btn-primary" data-act="inv-save">Save investor</button>
     </div>
+  </div>
+</div>
+
+<!-- ═══ INVESTOR DETAIL ═════════════════════════════════════════════════ -->
+<div class="overlay" id="invd-overlay">
+  <div class="modal modal-lg">
+    <div class="modal-hd">
+      <div class="modal-title" id="invd-title"></div>
+      <div class="btn-row">
+        <button class="btn btn-secondary btn-sm" id="invd-edit" data-act="inv-edit">✏️ Edit name &amp; dates</button>
+        <button class="modal-close" data-act="close-modal" data-id="invd-overlay">✕</button>
+      </div>
+    </div>
+    <div class="modal-body" id="invd-body"></div>
   </div>
 </div>
 

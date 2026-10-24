@@ -63,11 +63,31 @@ create table if not exists public.investors (
   id         text primary key default substr(md5(gen_random_uuid()::text), 1, 8)
              check (id ~ '^[A-Za-z0-9_-]{1,40}$'),
   nickname   text not null check (length(trim(nickname)) between 1 and 40),
-  active     boolean not null default true,
-  since      date not null default current_date,
+  active     boolean not null default true,     -- legacy; start/end dates decide who takes part
+  since      date not null default '2025-05-17',  -- start date: first draw this investor joins
+  end_date   date not null default '9999-12-31',  -- last draw this investor takes part in
   created_at timestamptz not null default now(),
-  created_by uuid references public.profiles (id) on delete set null
+  created_by uuid references public.profiles (id) on delete set null,
+  constraint investors_dates_check check (end_date >= since)
 );
+
+-- Upgrade from the first version (no end date). Runs once.
+do $$
+begin
+  if not exists (select 1 from information_schema.columns
+                 where table_schema = 'public' and table_name = 'investors' and column_name = 'end_date') then
+    alter table public.investors add column end_date date not null default '9999-12-31';
+    -- Start dates could not be set before, so they were just the day the investor was added.
+    update public.investors set since = '2025-05-17' where since = (created_at at time zone 'UTC')::date;
+    -- Deactivated investors end at their last week with money in it.
+    update public.investors i
+       set end_date = greatest(i.since, coalesce((select max(w.result_date) from public.weeks w
+                                                  where w.investments ? i.id), i.since))
+     where not i.active;
+    alter table public.investors add constraint investors_dates_check check (end_date >= since);
+  end if;
+end $$;
+alter table public.investors alter column since set default '2025-05-17';
 
 create table if not exists public.weeks (
   id          text primary key default substr(md5(gen_random_uuid()::text), 1, 8)

@@ -33,7 +33,11 @@ with an invitation key from the admin.
 - **Tickets**: upload one or many photos per draw (each photo may show several tickets).
   Photos are resized to keep QR codes sharp and stamped with the upload time by the
   server. Each one shows **"✓ before draw"** if it was uploaded before 20:35 KST on draw day.
-- **Investors**: per-person invested / won / net P/L, plus a leaderboard.
+- **Investors**: per-person invested / won / net P/L, plus a leaderboard. Each investor has a
+  **start date** (default 17 May 2025) and an **end date** (empty = still in). Add/Edit Week only
+  lists investors whose dates cover that week. Click an investor to see **every week** they
+  took part in. Weeks where they have money outside their dates are highlighted, so mistakes
+  are easy to find.
 - **Charts**: prize history, P/L, pool balance, investment share, weekly stacked contributions.
 - **Activity log**: every add/edit/delete by every member, with old → new values. It can't be edited.
 - **Currency**: KRW by default. Pick from popular currencies (₩ $ ₫ ¥ ฿ € …) or any ISO
