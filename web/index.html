@@ -1,0 +1,444 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="robots" content="noindex, nofollow">
+  <meta name="referrer" content="no-referrer">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: blob: https://*.supabase.co; connect-src 'self' https://*.supabase.co wss://*.supabase.co; object-src 'none'; base-uri 'self'; form-action 'self'">
+  <title>645</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='30' fill='%23f59e0b'/%3E%3Ctext x='32' y='42' font-size='26' font-family='Arial' font-weight='700' text-anchor='middle' fill='%2307090f'%3E645%3C/text%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700;900&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;1,400&family=Bebas+Neue&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.2/dist/umd/supabase.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.js"></script>
+  <script src="config.js"></script>
+  <script src="app.js" defer></script>
+</head>
+<body>
+
+<!-- ═══ BOOT / NOTICES ════════════════════════════════════════════════════ -->
+<div class="center-view" id="view-boot">
+  <div class="spinner"></div>
+</div>
+
+<div class="center-view" id="view-setup" hidden>
+  <div class="auth-card">
+    <div class="logo"><div class="logo-ball">645</div><div class="logo-sub">Setup needed</div></div>
+    <p class="notice">This site is not connected to a database yet. Put your Supabase project URL and
+      key into <code>web/config.js</code> — see the README for the 10-minute setup.</p>
+  </div>
+</div>
+
+<div class="center-view" id="view-revoked" hidden>
+  <div class="auth-card">
+    <div class="logo"><div class="logo-ball">645</div><div class="logo-sub">Access removed</div></div>
+    <p class="notice">Your access to this group has been revoked by the admin.
+      If you think this is a mistake, please contact the admin.</p>
+    <button class="btn btn-secondary btn-block" data-act="logout">Sign out</button>
+  </div>
+</div>
+
+<!-- ═══ AUTH ═══════════════════════════════════════════════════════════════ -->
+<div class="center-view" id="view-auth" hidden>
+  <div class="orb orb1"></div>
+  <div class="orb orb2"></div>
+  <div class="auth-card">
+    <div class="logo">
+      <div class="logo-ball">645</div>
+      <div class="logo-sub">Group Lotto Tracker</div>
+    </div>
+
+    <div class="seg">
+      <button class="seg-btn active" data-act="auth-tab" data-tab="login">Sign in</button>
+      <button class="seg-btn" data-act="auth-tab" data-tab="join">Join with invite</button>
+    </div>
+
+    <form id="form-login" autocomplete="on">
+      <label class="flbl" for="li-user">Username</label>
+      <input class="finp" id="li-user" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" required>
+      <label class="flbl" for="li-pw">Password</label>
+      <input class="finp" id="li-pw" type="password" name="password" autocomplete="current-password" required>
+      <div class="form-error" id="li-err" hidden></div>
+      <button class="btn btn-primary btn-block btn-lg" type="submit" id="li-btn">Sign in →</button>
+    </form>
+
+    <form id="form-join" hidden autocomplete="off">
+      <label class="flbl" for="jn-code">Invitation key</label>
+      <input class="finp mono" id="jn-code" placeholder="XXXX-XXXX-XXXX" autocapitalize="characters" spellcheck="false" required>
+      <label class="flbl" for="jn-user">Choose a username</label>
+      <input class="finp" id="jn-user" autocomplete="username" autocapitalize="none" spellcheck="false"
+             pattern="[a-z0-9_]{3,20}" placeholder="3–20 chars: a–z, 0–9, _" required>
+      <label class="flbl" for="jn-name">Display name</label>
+      <input class="finp" id="jn-name" maxlength="40" placeholder="Shown to the group (optional)">
+      <label class="flbl" for="jn-pw">Choose a password</label>
+      <input class="finp" id="jn-pw" type="password" autocomplete="new-password" minlength="8" placeholder="At least 8 characters" required>
+      <label class="flbl" for="jn-pw2">Repeat password</label>
+      <input class="finp" id="jn-pw2" type="password" autocomplete="new-password" minlength="8" required>
+      <div class="form-error" id="jn-err" hidden></div>
+      <button class="btn btn-primary btn-block btn-lg" type="submit" id="jn-btn">Create my account →</button>
+      <p class="hint">The key works once. Ask the admin for a new one if it has expired.</p>
+    </form>
+  </div>
+</div>
+
+<!-- ═══ APP ════════════════════════════════════════════════════════════════ -->
+<div id="view-app" hidden>
+<nav class="navbar">
+  <div class="nav-logo" id="nav-title">645</div>
+  <div class="nav-tabs" id="nav-tabs">
+    <div class="nav-tab active" data-act="tab" data-tab="dashboard">📊 Dashboard</div>
+    <div class="nav-tab" data-act="tab" data-tab="weeks">📅 Weeks</div>
+    <div class="nav-tab" data-act="tab" data-tab="tickets">🎟️ Tickets</div>
+    <div class="nav-tab" data-act="tab" data-tab="investors">👥 Investors</div>
+    <div class="nav-tab" data-act="tab" data-tab="charts">📈 Charts</div>
+    <div class="nav-tab" data-act="tab" data-tab="activity">📝 Activity</div>
+    <div class="nav-tab" data-act="tab" data-tab="settings">⚙️ Settings</div>
+  </div>
+  <div class="nav-right">
+    <div class="sync-dot off" id="syncDot" title="Live sync"></div>
+    <span class="nav-user" id="nav-user"></span>
+    <button class="btn-logout" data-act="logout">Sign out</button>
+  </div>
+</nav>
+
+<main>
+
+  <!-- ═══ DASHBOARD ═══════════════════════════════════════════════════════ -->
+  <div class="tab-pane active" id="tab-dashboard">
+    <div class="draw-card" id="draw-card"></div>
+
+    <div class="stat-grid">
+      <div class="stat-card">
+        <div class="stat-label">Prize Pool</div>
+        <div class="stat-value" id="s-pool">—</div>
+        <div class="stat-sub">small wins kept for re-investing</div>
+      </div>
+      <div class="stat-card em">
+        <div class="stat-label">Total Won (paid out)</div>
+        <div class="stat-value" id="s-won">—</div>
+        <div class="stat-sub">big wins distributed</div>
+      </div>
+      <div class="stat-card bl">
+        <div class="stat-label">Total Invested</div>
+        <div class="stat-value" id="s-inv">—</div>
+        <div class="stat-sub">fresh money</div>
+      </div>
+      <div class="stat-card pu">
+        <div class="stat-label">Weeks Played</div>
+        <div class="stat-value" id="s-wks">—</div>
+        <div class="stat-sub" id="s-tix">lottery sessions</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-hd">
+        <div class="card-title">🏦 Current Prize Pool Breakdown</div>
+        <span class="badge bg-gold" id="pool-ttl-badge">—</span>
+      </div>
+      <div id="pool-breakdown"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-hd">
+        <div class="card-title">🕐 Recent Activity</div>
+        <button class="btn btn-ghost btn-sm" data-act="tab" data-tab="weeks">All weeks →</button>
+      </div>
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>Draw</th><th>Pool</th><th>Fresh Invested</th><th>Prize Won</th><th>Result</th><th>Tickets</th></tr></thead>
+          <tbody id="recent-body"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ WEEKS ════════════════════════════════════════════════════════════ -->
+  <div class="tab-pane" id="tab-weeks">
+    <div class="row-hd">
+      <h2 class="sec-title">Weekly Entries</h2>
+      <button class="btn btn-primary" data-act="week-new">+ Add Week</button>
+    </div>
+    <div id="weeks-list"></div>
+  </div>
+
+  <!-- ═══ TICKETS ══════════════════════════════════════════════════════════ -->
+  <div class="tab-pane" id="tab-tickets">
+    <div class="row-hd">
+      <h2 class="sec-title">Ticket Photos</h2>
+    </div>
+
+    <div class="card" id="upload-card">
+      <div class="card-hd">
+        <div class="card-title">📤 Upload tickets</div>
+        <span class="badge bg-gray">Photos can't be deleted by members</span>
+      </div>
+      <div class="fgrid3">
+        <div class="fgrp">
+          <label class="flbl" for="up-date">Draw date (Saturday)</label>
+          <input type="date" class="finp" id="up-date" data-on-input="up-date">
+          <span class="fhelp" id="up-date-info"></span>
+        </div>
+        <div class="fgrp">
+          <label class="flbl" for="up-games">Games on these tickets (optional)</label>
+          <input type="number" class="finp" id="up-games" min="0" max="1000" step="1" inputmode="numeric" placeholder="e.g. 10">
+        </div>
+        <div class="fgrp">
+          <label class="flbl" for="up-note">Note (optional)</label>
+          <input type="text" class="finp" id="up-note" maxlength="500" placeholder="e.g. bought at GS25">
+        </div>
+      </div>
+      <label class="dropzone" id="dropzone">
+        <input type="file" id="up-files" accept="image/*" multiple hidden>
+        <span class="dz-ico">🎟️</span>
+        <span><strong>Choose photos</strong> or drop them here</span>
+        <span class="fhelp">One photo can show one or several tickets. Keep the QR codes sharp — they will be used for automatic result checks.</span>
+      </label>
+      <div class="up-preview" id="up-preview"></div>
+      <div class="up-actions">
+        <span class="fhelp" id="up-status"></span>
+        <button class="btn btn-primary" id="up-btn" data-act="upload" disabled>Upload</button>
+      </div>
+    </div>
+
+    <div id="tickets-list"></div>
+  </div>
+
+  <!-- ═══ INVESTORS ════════════════════════════════════════════════════════ -->
+  <div class="tab-pane" id="tab-investors">
+    <div class="row-hd">
+      <h2 class="sec-title">Investors</h2>
+      <button class="btn btn-primary" data-act="inv-new">+ Add Investor</button>
+    </div>
+    <div id="inv-grid" class="inv-grid"></div>
+
+    <hr class="sep">
+    <h3 class="sub-title">🏆 Leaderboard</h3>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>#</th><th>Investor</th><th>Invested</th><th>Won</th><th>Net P/L</th><th>ROI</th><th>Weeks</th></tr></thead>
+        <tbody id="leaderboard-body"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ═══ CHARTS ═══════════════════════════════════════════════════════════ -->
+  <div class="tab-pane" id="tab-charts">
+    <h2 class="sec-title">Statistics &amp; Charts</h2>
+    <div class="charts-grid">
+      <div class="chart-card"><div class="chart-title">💰 Prize History by Week</div><canvas id="ch-prize" height="200"></canvas></div>
+      <div class="chart-card"><div class="chart-title">📊 Net P/L per Investor</div><canvas id="ch-netpl" height="200"></canvas></div>
+      <div class="chart-card"><div class="chart-title">🏦 Prize Pool Balance Over Time</div><canvas id="ch-pool" height="200"></canvas></div>
+      <div class="chart-card"><div class="chart-title">🥧 Cumulative Investment Share</div><canvas id="ch-share" height="200"></canvas></div>
+      <div class="chart-card wide"><div class="chart-title">📅 Weekly Fresh Investment by Investor (Stacked)</div><canvas id="ch-wkly" height="150"></canvas></div>
+    </div>
+  </div>
+
+  <!-- ═══ ACTIVITY ═════════════════════════════════════════════════════════ -->
+  <div class="tab-pane" id="tab-activity">
+    <div class="row-hd">
+      <h2 class="sec-title">Activity Log</h2>
+      <span class="fhelp">Every change by every member is recorded here and can't be edited.</span>
+    </div>
+    <div class="card"><div id="activity-list"></div></div>
+  </div>
+
+  <!-- ═══ SETTINGS ═════════════════════════════════════════════════════════ -->
+  <div class="tab-pane" id="tab-settings">
+    <h2 class="sec-title">Settings</h2>
+    <div class="sett-grid">
+      <div class="card">
+        <div class="card-hd"><div class="card-title">👤 My Account</div></div>
+        <div class="stack">
+          <div class="fgrp"><label class="flbl">Username</label><input class="finp" id="me-username" disabled></div>
+          <div class="fgrp"><label class="flbl" for="me-name">Display name</label><input class="finp" id="me-name" maxlength="40"></div>
+          <button class="btn btn-secondary" data-act="save-name">Save name</button>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-hd"><div class="card-title">🔒 Change Password</div></div>
+        <div class="stack">
+          <div class="fgrp"><label class="flbl" for="pw-cur">Current password</label><input type="password" class="finp" id="pw-cur" autocomplete="current-password"></div>
+          <div class="fgrp"><label class="flbl" for="pw-new">New password</label><input type="password" class="finp" id="pw-new" autocomplete="new-password" placeholder="At least 8 characters"></div>
+          <div class="fgrp"><label class="flbl" for="pw-new2">Repeat new password</label><input type="password" class="finp" id="pw-new2" autocomplete="new-password"></div>
+          <button class="btn btn-primary" data-act="save-pw">Update password</button>
+        </div>
+      </div>
+      <div class="card" id="card-general">
+        <div class="card-hd"><div class="card-title">⚙️ General</div><span class="badge bg-gray admin-hide">set by admin</span></div>
+        <div class="stack">
+          <div class="fgrp"><label class="flbl" for="cfg-title">App title</label><input type="text" class="finp admin-only-input" id="cfg-title" maxlength="40"></div>
+          <div class="fgrp">
+            <label class="flbl">Currency</label>
+            <div class="cur-picker" id="cur-picker"></div>
+          </div>
+          <div class="fgrp">
+            <label class="flbl" for="cfg-threshold">Big win threshold</label>
+            <input type="number" class="finp admin-only-input" id="cfg-threshold" min="0" step="1" inputmode="numeric" data-on-input="money-hint" data-hint="cfg-threshold-hint">
+            <span class="fhelp"><span id="cfg-threshold-hint"></span> Prizes at or above this are paid out to investors; smaller prizes go to the prize pool.</span>
+          </div>
+          <button class="btn btn-primary admin-only" data-act="save-cfg">Save settings</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="admin-only">
+      <hr class="sep">
+      <h3 class="sub-title">🛡️ Admin</h3>
+      <div class="card">
+        <div class="card-hd"><div class="card-title">✉️ Invitations</div></div>
+        <div class="invite-form">
+          <div class="fgrp"><label class="flbl" for="inv-note">Who is it for?</label><input class="finp" id="inv-note" maxlength="80" placeholder="e.g. Minjun"></div>
+          <div class="fgrp">
+            <label class="flbl" for="inv-days">Valid for</label>
+            <select class="fsel" id="inv-days">
+              <option value="1">1 day</option><option value="3">3 days</option>
+              <option value="7" selected>7 days</option><option value="14">14 days</option><option value="30">30 days</option>
+            </select>
+          </div>
+          <button class="btn btn-primary" data-act="invite-create">Create invitation</button>
+        </div>
+        <div id="invite-new" hidden></div>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>Key</th><th>For</th><th>Status</th><th>Expires</th><th></th></tr></thead>
+          <tbody id="invites-body"></tbody>
+        </table></div>
+      </div>
+
+      <div class="card">
+        <div class="card-hd"><div class="card-title">👥 Members &amp; access</div></div>
+        <div class="tbl-wrap"><table>
+          <thead><tr><th>Member</th><th>Role</th><th>Status</th><th>Joined</th><th></th></tr></thead>
+          <tbody id="members-body"></tbody>
+        </table></div>
+      </div>
+
+      <div class="card">
+        <div class="card-hd"><div class="card-title">💾 Data</div></div>
+        <div class="stack">
+          <p class="fhelp">Download everything (investors, weeks, ticket list, settings) as a JSON backup.
+            Ticket photos stay in Supabase Storage.</p>
+          <button class="btn btn-secondary" data-act="export">Download backup</button>
+          <hr class="sep">
+          <p class="fhelp">Import <code>pool_data.json</code> from the old Lucky Pool server. Existing rows with the same ID are overwritten.</p>
+          <label class="btn btn-secondary file-btn">Import old pool_data.json<input type="file" id="import-file" accept="application/json,.json" hidden></label>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</main>
+</div>
+
+<!-- ═══ WEEK MODAL ════════════════════════════════════════════════════════ -->
+<div class="overlay" id="week-overlay">
+  <div class="modal modal-lg">
+    <div class="modal-hd">
+      <div class="modal-title" id="wm-title">Add Week</div>
+      <button class="modal-close" data-act="close-modal" data-id="week-overlay">✕</button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="wm-id">
+      <div class="fgrid2">
+        <div class="fgrp">
+          <label class="flbl" for="wm-date">Result date (Saturday)</label>
+          <input type="date" class="finp" id="wm-date" data-on-input="wm-date">
+          <span class="fhelp" id="wm-date-info"></span>
+        </div>
+        <div class="fgrp">
+          <label class="flbl" for="wm-prize">Prize won</label>
+          <input type="number" class="finp" id="wm-prize" min="0" step="1" inputmode="numeric" placeholder="0" data-on-input="wm-preview">
+          <span class="fhelp" id="wm-prize-hint"></span>
+        </div>
+      </div>
+
+      <div class="pool-banner">
+        <div>
+          <div class="lbl">Available prize pool</div>
+          <div class="val" id="wm-pool-val">0</div>
+          <div class="fhelp" id="wm-pool-entries-info"></div>
+        </div>
+        <div class="fgrp pool-use">
+          <label class="flbl" for="wm-pool-used">Use from pool</label>
+          <input type="number" class="finp" id="wm-pool-used" min="0" step="1" inputmode="numeric" placeholder="0" data-on-input="wm-preview">
+        </div>
+      </div>
+
+      <div class="flbl mb8">Fresh investments this week</div>
+      <div class="inv-inputs" id="wm-inv-inputs"></div>
+
+      <hr class="sep">
+      <div class="flbl mb8">Effective percentages preview</div>
+      <div id="wm-preview"></div>
+      <div class="wm-totals">
+        <span>Total: <strong id="wm-total" class="gold mono">—</strong></span>
+        <span id="wm-win-label"></span>
+      </div>
+
+      <hr class="sep">
+      <div class="fgrp">
+        <label class="flbl" for="wm-notes">Notes (optional)</label>
+        <textarea class="ftxt" id="wm-notes" maxlength="2000" placeholder="Any notes for this week…"></textarea>
+      </div>
+    </div>
+    <div class="modal-ft">
+      <button class="btn btn-secondary" data-act="close-modal" data-id="week-overlay">Cancel</button>
+      <button class="btn btn-primary" id="wm-save-btn" data-act="week-save">Save week</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ INVESTOR MODAL ════════════════════════════════════════════════════ -->
+<div class="overlay" id="inv-overlay">
+  <div class="modal modal-sm">
+    <div class="modal-hd">
+      <div class="modal-title" id="im-title">Add Investor</div>
+      <button class="modal-close" data-act="close-modal" data-id="inv-overlay">✕</button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="im-id">
+      <div class="fgrp">
+        <label class="flbl" for="im-nick">Nickname / display name</label>
+        <input type="text" class="finp" id="im-nick" maxlength="40" placeholder="e.g. Minjun">
+      </div>
+    </div>
+    <div class="modal-ft">
+      <button class="btn btn-secondary" data-act="close-modal" data-id="inv-overlay">Cancel</button>
+      <button class="btn btn-primary" data-act="inv-save">Save investor</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ GENERIC DIALOG ════════════════════════════════════════════════════ -->
+<div class="overlay" id="dlg-overlay">
+  <div class="modal modal-sm">
+    <div class="modal-hd">
+      <div class="modal-title" id="dlg-title"></div>
+      <button class="modal-close" data-act="close-modal" data-id="dlg-overlay">✕</button>
+    </div>
+    <div class="modal-body" id="dlg-body"></div>
+    <div class="modal-ft">
+      <button class="btn btn-primary" data-act="close-modal" data-id="dlg-overlay">Done</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ LIGHTBOX ══════════════════════════════════════════════════════════ -->
+<div class="overlay lightbox" id="lb-overlay">
+  <div class="lb-inner">
+    <div class="lb-bar">
+      <div id="lb-info"></div>
+      <div class="lb-actions">
+        <a class="btn btn-secondary btn-sm" id="lb-open" target="_blank" rel="noopener">Open original</a>
+        <button class="btn btn-danger btn-sm admin-only" id="lb-del" data-act="ticket-del">Delete</button>
+        <button class="modal-close" data-act="close-modal" data-id="lb-overlay">✕</button>
+      </div>
+    </div>
+    <img id="lb-img" alt="Ticket photo">
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+</body>
+</html>
