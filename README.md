@@ -53,13 +53,18 @@ with an invitation key from the admin.
   - prize pool balance, month by month
   - net P/L per investor, invested vs. received per investor, each investor's P/L over time
   - share of money invested, fresh investment per draw
-- **Picks**: ranked suggestions of 6 numbers for the coming draw. They're not random:
-  numbers are weighted by all-time and last-year frequency and by how overdue they are, and sets
-  are kept only when they look like real winning draws (sum, odd/even, low/high, spread, repeats
-  from last week). Sets many people would pick are avoided, so a win is shared less. The page
-  says plainly that every set has the same 1 in 8,145,060 chance. It also shows a 1–45 frequency
-  grid, hot / cold / overdue numbers, and a backtest over the last 100 draws against random sets.
-  The full history of winning numbers is downloaded once by the `check-tickets` function.
+- **Picks**: ranked suggestions of 6 numbers for the coming draw. They're not random. The main
+  lever is avoiding numbers that many people pick, so a 1등–3등 win is shared with fewer people
+  (see [How good are the picks?](#how-good-are-the-picks)). Sets also keep the shape of real
+  winning draws (sum, odd/even, low/high, spread, repeats from last week), with a small weight
+  for all-time and last-year frequency. The page says plainly that every set has the same
+  1 in 8,145,060 chance. It also shows a 1–45 frequency grid, hot / cold / overdue numbers, and a
+  backtest over the last 100 draws against random sets. The full history of winning numbers is
+  downloaded once by the `check-tickets` function.
+  - **Only some numbers:** choose **Numbers to suggest** = 1–5 to get just that many, ranked;
+    dashed **?** circles are the ones you pick yourself. Under **Your own numbers** you can enter
+    up to 5 numbers you already like; suggestions are then built around them (gold rings), and
+    **All N left** fills the rest. The choice is remembered on that device.
 - **Simulate a past week** (Picks tab): choose a draw by number or by any date. A Sunday counts
   toward the coming Saturday; Monday–Saturday count toward that week's Saturday. The
   suggestions are made only from the draws before it, exactly as they would have been that week.
@@ -297,6 +302,25 @@ wins, and a disagreement with the numbers is flagged. If the page can't be read,
 decide: no match means no win, and 4등/5등 means ₩50,000/₩5,000. For 1등–3등 the amount
 varies, so it asks you to enter it from the result page.
 
+### How good are the picks?
+
+`tools/analyze-picks.mjs` tests the engine against the real history (1,247 draws when last run).
+Run it any time from **Actions → Analyze picks → Run workflow**; the report appears on the run's
+summary page. What it found:
+
+- **The draw is fair.** Every number came up about equally often (chi-square p = 0.96).
+- **Hot, cold and overdue numbers predict nothing.** Replaying every draw with only the draws
+  before it, none of those rules matched more numbers than chance.
+- **Winning sets look like random sets.** Sum, odd/even, low/high and spread follow the same
+  spread as random sets, so shape only avoids odd-looking sets; it can't raise the odds.
+- **What does work: avoiding popular numbers.** The number of 5등 winners each week shows which
+  numbers people over-pick (11, 9, 12, 24, 34 …; least picked: 43, 36, 29, 37, 44 …). The habit
+  is stable over time, and in the newer half of history the most popular fifth of winning sets
+  had about **16 % more 1등 winners** than expected, so each got a smaller share. The suggested
+  sets sit around the 15th–30th popularity percentile of random sets.
+- **Money:** any ₩1,000 game pays back about ₩500 on average. Avoiding popular numbers raises
+  that a little for the big prizes, but no system makes the lottery profitable.
+
 ---
 
 ## Project structure
@@ -307,15 +331,19 @@ varies, so it asks you to enter it from the result page.
 │   ├── index.html           ← page layout
 │   ├── style.css
 │   ├── app.js               ← all app logic (Supabase client, pool maths, UI)
+│   ├── picks.js             ← number suggestion engine (Picks tab, simulation, backtest)
 │   └── config.js            ← Supabase URL + public key  ← edit this
 ├── web/vendor/            ← QR code reader (zxing-wasm, MIT)
 ├── supabase/
 │   ├── schema.sql           ← tables, security rules, storage, realtime (run once)
 │   └── functions/check-tickets/index.ts ← reads ticket result pages (Edge Function)
+├── tools/analyze-picks.mjs  ← tests the pick engine on the real draw history
 └── .github/workflows/
     ├── pages.yml            ← deploy web/ to GitHub Pages on push to main
     ├── keepalive.yml        ← keeps the free Supabase project awake
-    └── check-results.yml    ← checks ticket results on Saturday night
+    ├── check-results.yml    ← checks ticket results on Saturday night
+    ├── deploy-function.yml  ← deploys the check-tickets function
+    └── analyze-picks.yml    ← runs tools/analyze-picks.mjs (manual)
 ```
 
 ### Staying signed in

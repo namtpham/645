@@ -1388,10 +1388,57 @@ async function deleteTicket() {
 
 // ─── Number suggestions ───────────────────────────────────────────────────────
 // The engine lives in picks.js (also used by tools/analyze-picks.mjs).
-const { RECENT_DRAWS, suggestSets, backtest } = window.PicksEngine;
+const { RECENT_DRAWS, suggestSets, suggestPartial, backtest } = window.PicksEngine;
 
 // ── page
 let _picks = null, _picksKey = '', _picksCount = 10, _historyAsked = false;
+// How many numbers to suggest (1–6) and the member's own numbers; remembered on this device only.
+const PICK_PREF = (() => { try { return JSON.parse(localStorage.getItem('645-picks')) || {}; } catch { return {}; } })();
+let _pickK = [1, 2, 3, 4, 5, 6].includes(PICK_PREF.k) ? PICK_PREF.k : 6;
+let _pickOwn = Array.isArray(PICK_PREF.own) ? PICK_PREF.own.filter((n) => Number.isInteger(n) && n >= 1 && n <= 45).slice(0, 5) : [];
+function savePickPref() { try { localStorage.setItem('645-picks', JSON.stringify({ k: _pickK, own: _pickOwn })); } catch { /* private mode */ } }
+
+/** "7, 15 22" → [7, 15, 22]; ignores repeats and anything outside 1–45, keeps at most 5. */
+function parseOwnNumbers(text) {
+  const all = (String(text).match(/\d+/g) || []).map(Number), out = [], bad = [];
+  for (const n of all) {
+    if (n < 1 || n > 45) bad.push(n);
+    else if (!out.includes(n)) out.push(n);
+  }
+  return { nums: out.slice(0, 5), bad, extra: Math.max(0, out.length - 5) };
+}
+function setPickOwn(text) {
+  const { nums, bad, extra } = parseOwnNumbers(text);
+  _pickOwn = nums;
+  const help = [];
+  if (bad.length) help.push(`Ignored ${bad.join(', ')}: numbers go from 1 to 45.`);
+  if (extra) help.push(`Only the first 5 are used.`);
+  $('pick-own-help').textContent = help.join(' ') || (nums.length
+    ? `Using ${nums.join(', ')}. ${6 - nums.length} more to fill.`
+    : 'Up to 5. Suggestions are built around them.');
+  $('pick-own-help').classList.toggle('warn', !!help.length);
+  savePickPref();
+  renderPicks();
+}
+// _pickK is the member's choice; 6 means "fill every open slot". With own numbers it is capped at 6 − own.
+const pickK = () => Math.min(_pickK, 6 - _pickOwn.length);
+function setPickK(k) {
+  _pickK = k;
+  savePickPref();
+  renderPicks();
+}
+function renderPickControls() {
+  const max = 6 - _pickOwn.length, k = pickK();
+  document.querySelectorAll('#pick-k .seg-btn').forEach((b) => {
+    const bk = +b.dataset.k, fill = bk === 6;
+    if (fill) b.textContent = _pickOwn.length ? `All ${max} left` : 'All 6';
+    // with own numbers, the first button already means "fill the rest", so k ≥ max is not offered twice
+    b.hidden = !fill && bk >= max && _pickOwn.length > 0;
+    b.classList.toggle('active', fill ? k === max : bk === k && k < max);
+  });
+  const inp = $('pick-own');
+  if (document.activeElement !== inp && parseOwnNumbers(inp.value).nums.join() !== _pickOwn.join()) inp.value = _pickOwn.join(' ');
+}
 const pickHistory = () => Object.values(S.draws).filter((d) => d.numbers?.length === 6).sort((a, b) => a.round - b.round);
 
 function renderPicks() {
@@ -1410,22 +1457,46 @@ function renderPicks() {
     }
     return;
   }
-  const key = `${target}-${hist.length}-${_picksCount}`;
-  if (key !== _picksKey) { _picks = suggestSets(hist, { seed: target * 7919, count: _picksCount }); _picksKey = key; }
-  const { st, picks } = _picks;
+  renderPickControls();
+  const own = _pickOwn, k = pickK(), partial = k < 6;
+  const key = `${target}-${hist.length}-${_picksCount}-${k}-${own.join(',')}`;
+  if (key !== _picksKey) {
+    if (partial && _picksKey !== `working:${key}`) {
+      // building partial suggestions takes up to a second; show that something is happening
+      _picksKey = `working:${key}`;
+      $('picks-list').innerHTML = '<div class="empty"><div class="spinner" style="margin:0 auto 12px"></div><p>Working out suggestions…</p></div>';
+      setTimeout(() => S.tab === 'picks' && _picksKey === `working:${key}` && renderPicks(), 20);
+      return;
+    }
+    _picks = partial
+      ? suggestPartial(hist, { fixed: own, k, seed: target * 7919 + k, count: _picksCount })
+      : suggestSets(hist, { seed: target * 7919, count: _picksCount });
+    _picksKey = key;
+  }
+  const { st, picks } = _picks, open = partial ? _picks.open : 0;
   const stars = (f) => '★★★★★'.slice(0, Math.max(1, Math.round(f / 20))).padEnd(5, '☆');
-  $('picks-list').innerHTML = picks.map((p, i) => `<div class="pick">
+  const balls = (p) => {
+    const mine = partial ? own : [];
+    return p.nums.map((n) => ball(n, mine.includes(n) ? 'own' : 'hit')).join('') + '<span class="ball open">?</span>'.repeat(open);
+  };
+  const what = !partial ? 'sets' : open ? `groups of ${k}` : 'sets';
+  const key6 = !partial ? '' : `<div class="pick-key">
+      <span>${ball(7, 'hit')}suggested</span>
+      ${own.length ? `<span>${ball(own[0], 'own')}yours</span>` : ''}
+      ${open ? `<span><span class="ball open">?</span>you choose${open > 1 ? ` (${open})` : ''}</span>` : ''}
+    </div>`;
+  $('picks-list').innerHTML = key6 + (picks.length ? picks.map((p, i) => `<div class="pick">
       <div class="pick-rank">${i + 1}</div>
       <div class="pick-main">
-        <div class="pick-balls">${p.nums.map((n) => ball(n, 'hit')).join('')}</div>
+        <div class="pick-balls">${balls(p)}</div>
         <div class="pick-why">${p.reasons.map((r) => `<span>${esc(r)}</span>`).join('')}</div>
       </div>
-      <div class="pick-score" title="Fits past winning patterns better than ${p.percentile.toFixed(1)}% of random sets">
+      <div class="pick-score" title="Fits past winning patterns better than ${p.percentile.toFixed(1)}% of random ${what}">
         <div class="stars">${stars(p.fit)}</div>
         <div class="fhelp">score ${p.fit.toFixed(0)}</div>
       </div>
       <button class="btn btn-ghost btn-sm" data-act="copy" data-text="${p.nums.map((n) => String(n).padStart(2, '0')).join(' ')}" title="Copy numbers">Copy</button>
-    </div>`).join('');
+    </div>`).join('') : '<div class="empty"><p>No suggestions for this choice.</p></div>');
 
   const maxR = Math.max(...st.recent.slice(1));
   $('picks-grid').innerHTML = `<div class="num-grid">${[...Array(45)].map((_, i) => {
@@ -2339,6 +2410,7 @@ const ACTIONS = {
   'invd-week': (el) => { closeModal('invd-overlay'); openWeekModal(el.dataset.id); },
   'picks-backtest': () => runBacktest(),
   'picks-more': () => { _picksCount += 10; renderPicks(); },
+  'pick-k': (el) => setPickK(+el.dataset.k),
   'sim-x': (el) => simSetX(el.dataset.add ? (SIM.x || 0) + +el.dataset.add : +el.dataset.set),
   'sim-qty': (el) => { const i = +el.dataset.i; SIM.qty[i] = Math.max(0, (SIM.qty[i] || 0) + +el.dataset.d); renderSim(); },
   'sim-reveal': () => { SIM.revealed = true; renderSim(); },
@@ -2391,6 +2463,7 @@ const INPUTS = {
   'sim-round': (el, e) => { if (e.type === 'change') simSetRound(parseInt(el.value, 10) || 0); },
   'sim-date': (el, e) => { if (e.type === 'change' && el.value) simSetRound(drawNo(saturdayOf(el.value))); },
   'sim-x': (el, e) => { if (e.type === 'change') simSetX(parseInt(el.value, 10) || 1); },
+  'pick-own': (el, e) => { if (e.type === 'change') setPickOwn(el.value); },
   'up-round': () => { const n = parseInt($('up-round').value, 10); if (n >= 1) $('up-date').value = drawDate(n); upDateInfo(); },
   'money-hint': (el) => moneyHint(el.id, el.dataset.hint),
   'cur-select': (el) => { _curDraft.currency = el.value; renderCurrencyPicker(); moneyHint('cfg-threshold', 'cfg-threshold-hint'); },

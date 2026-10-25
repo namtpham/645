@@ -16,6 +16,18 @@
   const TOTAL_COMBOS = 8145060;
   const RECENT_DRAWS = 52;
 
+  // How much more (+) or less (−) often other players pick each number, on a log scale
+  // (+0.03 ≈ 3 % more people share a prize won with it). Measured from 5등 winner counts vs
+  // tickets sold in draws #1–#1247 by tools/analyze-picks.mjs; re-run the "Analyze picks"
+  // workflow to refresh. Fitted on the first half of history it predicted the second half
+  // (correlation 0.43), and the most popular fifth of winning sets had ~15 % more 1등 winners.
+  const POPULARITY = [0, 0.013, -0.014, 0.006, 0.016, 0.017, 0.004, 0.011, 0.006, 0.031, 0.009, 0.044, 0.028, 0.009,
+    -0.005, -0.022, -0.009, 0.007, 0.005, 0.011, 0.015, -0.005, 0.009, -0.016, 0.026, -0.011, -0.014, 0.013, 0.015, -0.025,
+    -0.02, 0.009, -0.01, 0.013, 0.017, -0.011, -0.031, -0.025, -0.002, -0.016, -0.015, -0.006, -0.021, -0.032, -0.024, 0.001];
+  // Tested out of sample (tools/analyze-picks.mjs): 25 puts the top picks around the 32nd popularity
+  // percentile of random sets while keeping their shape close to typical winning draws.
+  const POP_WEIGHT = 25;
+
   function mulberry32(a) {
     return () => {
       a = (a + 0x6D2B79F5) | 0;
@@ -67,15 +79,25 @@
     return Math.log(((counts[v] || 0) + 1) / (st.N + keys));
   }
 
+  const popularityOf = (nums, pop = POPULARITY) => nums.reduce((a, n) => a + pop[n], 0);
+  let _popRef = null;
+  /** Share of random sets that are less popular than this one (0–100). */
+  function popPercentile(nums) {
+    if (!_popRef) { const r = mulberry32(31); _popRef = Array.from({ length: 20000 }, () => popularityOf(randomSet(r))).sort((a, b) => a - b); }
+    const x = popularityOf(nums);
+    let lo = 0, hi = _popRef.length;
+    while (lo < hi) { const m = (lo + hi) >> 1; if (_popRef[m] < x) lo = m + 1; else hi = m; }
+    return lo / _popRef.length * 100;
+  }
+
   /** Higher = closer to the shape of past winning sets, better-weighted numbers, less popular. */
-  function scoreCombo(nums, st) {
+  function scoreCombo(nums, st, { pop = POPULARITY, wPop = POP_WEIGHT } = {}) {
     const f = comboFeatures(nums, st.last?.numbers);
     let s = 0;
     for (const k of FEATURE_KEYS) s += featLogP(st, k, f[k]);
     for (const n of nums) s += 0.6 * Math.log(45 * st.p[n]);
-    // fewer people pick these → a win is shared less
-    const high = nums.filter((n) => n >= 32).length;
-    s += high === 0 ? -0.8 : high === 1 ? -0.25 : 0;
+    // numbers other players pick less → a win is shared with fewer people (measured, see POPULARITY)
+    s -= wPop * popularityOf(nums, pop);
     const d = [...nums].sort((a, b) => a - b), diffs = d.slice(1).map((x, i) => x - d[i]);
     if (diffs.every((x) => x === diffs[0])) s -= 2.5;              // 1-2-3-4-5-6, 5-10-15-…
     if (diffs.some((x, i) => x === 1 && diffs[i + 1] === 1)) s -= 0.5;
@@ -100,13 +122,13 @@
   }
 
   /** Ranked suggestions: varied sets (at most 2 numbers in common) with their score and reasons. */
-  function suggestSets(history, { seed = 1, count = 10, candidates = 12000, reference = 3000 } = {}) {
-    const st = drawStats(history), rng = mulberry32(seed);
-    const ref = Array.from({ length: reference }, () => scoreCombo(randomSet(rng), st)).sort((a, b) => a - b);
+  function suggestSets(history, { seed = 1, count = 10, candidates = 12000, reference = 3000, pop = POPULARITY, wPop = POP_WEIGHT } = {}) {
+    const st = drawStats(history), rng = mulberry32(seed), so = { pop, wPop };
+    const ref = Array.from({ length: reference }, () => scoreCombo(randomSet(rng), st, so)).sort((a, b) => a - b);
     const pct = (s) => { let lo = 0, hi = ref.length; while (lo < hi) { const m = (lo + hi) >> 1; if (ref[m] < s) lo = m + 1; else hi = m; } return lo / ref.length * 100; };
     const cand = new Map();
     for (let i = 0; i < candidates; i++) { const c = weightedSet(rng, st.p); cand.set(c.join(','), c); }
-    const ranked = [...cand.values()].map((nums) => ({ nums, score: scoreCombo(nums, st) })).sort((a, b) => b.score - a.score);
+    const ranked = [...cand.values()].map((nums) => ({ nums, score: scoreCombo(nums, st, so) })).sort((a, b) => b.score - a.score);
     // varied sets: at most 2 numbers in common, and no number in more than 3 of every 10 sets
     const picks = [], used = Array(46).fill(0);
     for (const c of ranked) {
@@ -133,8 +155,79 @@
     if (hot.length) out.push(`🔥 hot: ${hot.join(', ')}`);
     if (od.length) out.push(`⏳ overdue: ${od.slice(0, 3).map((n) => `${n} (${st.gap[n]} draws)`).join(', ')}`);
     out.push(f.repeat ? `${f.repeat} from last draw` : 'none from last draw');
-    const high = nums.filter((n) => n >= 32).length;
-    if (high >= 2) out.push(`${high} numbers above 31 — fewer people pick these`);
+    const pp = popPercentile(nums);
+    if (pp <= 40) out.push(`👥 less picked than ${Math.round(100 - pp)}% of sets — a win is shared less`);
+    else if (pp >= 70) out.push(`👥 popular numbers — a win may be shared more`);
+    return out;
+  }
+
+  /**
+   * Suggest only `k` numbers (1–6) for players who choose the rest themselves.
+   * `fixed`: numbers the player already chose (0–5). If fixed + k = 6 the set is complete and is
+   * scored like any set; otherwise each suggestion is scored as the average over many random
+   * ways of filling the remaining slots, i.e. how good these numbers are whatever the player adds.
+   */
+  function suggestPartial(history, { fixed = [], k = 3, seed = 1, count = 10, candidates = 5000, samples = 20, pop = POPULARITY, wPop = POP_WEIGHT } = {}) {
+    const st = drawStats(history), rng = mulberry32(seed), so = { pop, wPop };
+    fixed = [...new Set(fixed)].filter((n) => n >= 1 && n <= 45).slice(0, 5);
+    k = Math.max(1, Math.min(6 - fixed.length, k));
+    const open = 6 - fixed.length - k;
+    // the same random fillings for every candidate, so scores are comparable
+    const fills = Array.from({ length: open ? samples : 1 }, () => Array.from({ length: 45 }, () => rng()));
+    const evaluate = (part) => {
+      const base = [...fixed, ...part];
+      if (!open) return scoreCombo(base, st, so);
+      let total = 0;
+      for (const f of fills) {
+        const rest = [...Array(45)].map((_, i) => i + 1).filter((n) => !base.includes(n)).sort((x, y) => f[x - 1] - f[y - 1]).slice(0, open);
+        total += scoreCombo([...base, ...rest], st, so);
+      }
+      return total / fills.length;
+    };
+    const pool = st.p.map((w, n) => (fixed.includes(n) ? 0 : w));
+    const cand = new Map();
+    for (let i = 0; i < candidates && cand.size < candidates; i++) {
+      const c = weightedSet(rng, pool).slice(0, 6).filter((n) => !fixed.includes(n));
+      const part = c.sort(() => rng() - 0.5).slice(0, k).sort((x, y) => x - y);
+      if (part.length === k) cand.set(part.join(','), part);
+    }
+    const scored = [...cand.values()].slice(0, open ? 1500 : candidates).map((part) => ({ part, score: evaluate(part) }))
+      .sort((x, y) => y.score - x.score);
+    const ref = Array.from({ length: 300 }, () => {
+      const r = [...Array(45)].map((_, i) => i + 1).filter((n) => !fixed.includes(n)).sort(() => rng() - 0.5).slice(0, k);
+      return evaluate(r);
+    }).sort((x, y) => x - y);
+    // varied: k ≤ 2 → never the same suggestion twice; k ≥ 3 → at most 2 in common; each number in ≤ 3 of 10
+    const maxCommon = k <= 2 ? k - 1 : 2, picks = [], used = Array(46).fill(0);
+    for (const c of scored) {
+      const cap = k === 1 ? 1 : 3 * Math.ceil((picks.length + 1) / 10);
+      if (c.part.some((n) => used[n] >= cap)) continue;
+      if (picks.some((p) => p.part.filter((n) => c.part.includes(n)).length > maxCommon)) continue;
+      picks.push(c);
+      c.part.forEach((n) => used[n]++);
+      if (picks.length >= count) break;
+    }
+    const median = ref[ref.length >> 1], best = picks[0]?.score ?? 1;
+    const below = (x) => ref.filter((r) => r < x).length / ref.length * 100;
+    return {
+      st, fixed, k, open,
+      picks: picks.map((c) => ({
+        part: c.part, nums: [...fixed, ...c.part].sort((x, y) => x - y), score: c.score, percentile: below(c.score),
+        fit: Math.max(0, Math.min(100, 100 * (c.score - median) / (best - median || 1))),
+        reasons: open ? partReasons(c.part, st) : pickReasons([...fixed, ...c.part], st),
+      })),
+    };
+  }
+
+  function partReasons(part, st) {
+    const out = [];
+    const hot = part.filter((n) => st.hot.includes(n)), od = part.filter((n) => st.overdue.includes(n));
+    if (hot.length) out.push(`🔥 hot: ${hot.join(', ')}`);
+    if (od.length) out.push(`⏳ overdue: ${od.map((n) => `${n} (${st.gap[n]} draws)`).join(', ')}`);
+    const low = part.filter((n) => POPULARITY[n] < -0.01), popular = part.filter((n) => POPULARITY[n] > 0.015);
+    if (low.length) out.push(`👥 less picked: ${low.join(', ')}`);
+    if (popular.length) out.push(`👥 popular: ${popular.join(', ')}`);
+    out.push(`drawn ${part.map((n) => `${n}: ${st.recent[n]}×`).join(', ')} in the last ${RECENT_DRAWS} draws`);
     return out;
   }
 
@@ -152,7 +245,7 @@
     return res;
   }
 
-  const api = { TOTAL_COMBOS, RECENT_DRAWS, mulberry32, comboFeatures, drawStats, scoreCombo, randomSet, weightedSet, suggestSets, pickReasons, backtest };
+  const api = { POPULARITY, POP_WEIGHT, popularityOf, popPercentile, TOTAL_COMBOS, RECENT_DRAWS, mulberry32, comboFeatures, drawStats, scoreCombo, randomSet, weightedSet, suggestSets, suggestPartial, pickReasons, backtest };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.PicksEngine = api;
 })(typeof window !== 'undefined' ? window : globalThis);

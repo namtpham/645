@@ -158,11 +158,18 @@ if (usable.length < 200) {
   const feat = (nums) => [nums.filter((n) => n <= 31).length, nums.filter((n) => n <= 12).length, nums.filter((n) => n % 7 === 0).length, E.comboFeatures(nums).consec];
   const fb = ridge(rows.map((r) => [1, ...feat(r.d.numbers)]), rows.map((r) => r.y), 1);
   say(`- Per extra number ≤ 31 (birthdays): ${fmt((Math.exp(fb[1]) - 1) * 100, 1)}% more co-winners; per number ≤ 12 (months): ${fmt((Math.exp(fb[2]) - 1) * 100, 1)}%; per multiple of 7: ${fmt((Math.exp(fb[3]) - 1) * 100, 1)}%; per consecutive pair: ${fmt((Math.exp(fb[4]) - 1) * 100, 1)}%.`);
+  // Does it matter for the jackpot? Popularity fitted on the older half vs 1등 winners in the newer half.
+  const older = rows.slice(0, half), newer = rows.slice(half), bOld = fit(older);
+  const P1 = 1 / 8145060;
+  const scored = newer.map((r) => ({ pred: sum(r.d.numbers.map((n) => bOld[n])), w1: (r.d.winners[0] + 0.5) / (r.d.sales / 1000 * P1) })).sort((a, b) => a.pred - b.pred);
+  const q = (k) => scored.slice(Math.floor(k * scored.length / 5), Math.floor((k + 1) * scored.length / 5));
+  say(`- 1등 winners ÷ expected in the newer half, by popularity predicted from the older half (least → most popular fifth): ${[0, 1, 2, 3, 4].map((k) => fmt(mean(q(k).map((x) => x.w1)), 2)).join(' · ')}`);
   // how popular are the engine's picks compared with random sets?
   const popOf = (nums) => sum(nums.map((n) => beta[n]));
-  const recentPicks = E.suggestSets(draws, { seed: 1, count: 20 }).picks.map((p) => popOf(p.nums));
-  const randPop = Array.from({ length: 5000 }, () => popOf(E.randomSet(rr)));
-  say(`- Popularity of the engine's current top 20 sets: ${fmt(mean(recentPicks), 3)} (log scale; random sets average ${fmt(mean(randPop), 3)}, lower = shared less).`);
+  const randPop = Array.from({ length: 20000 }, () => popOf(E.randomSet(rr))).sort((a, b) => a - b);
+  const pctl = (x) => randPop.filter((r) => r < x).length / randPop.length * 100;
+  const top = E.suggestSets(draws, { seed: 1, count: 20 }).picks.map((p) => pctl(popOf(p.nums)));
+  say(`- The engine's current top 20 sets sit at the ${fmt(mean(top), 0)}th popularity percentile of random sets (50 = average; lower = shared less).`);
   console.log('\nPOPULARITY_BETA=' + JSON.stringify(beta.map((b) => Math.round(b * 1000) / 1000)));
 }
 say();

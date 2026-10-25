@@ -220,17 +220,35 @@
     </div>
     <div class="card picks-note">
       <strong>How to read this.</strong> Every set of 6 numbers has exactly the same chance: 1 in 8,145,060, every week.
-      Past results can't change that. These suggestions are <em>not</em> random, though. Numbers are weighted by how often
-      they came up (all time and the last year) and how overdue they are. Sets are kept only when their shape looks
-      like real winning draws: sum, odd/even, low/high, spread, repeats from last week. They also avoid sets many people pick,
-      so if one wins, the prize is shared with fewer people. <strong>Score</strong> = how well the set fits those patterns:
-      100 = this week's best set, 0 = a typical random set. Hover a score for its percentile. The suggestions stay the same
-      all week and are the same for everyone.
+      We tested more than 1,200 real draws: the machine is fair, and hot, cold or overdue numbers predict nothing.
+      What past results <em>do</em> show is which numbers people over-pick. When those numbers come up, more people win
+      and the 1등–3등 prizes are split more ways. So the suggestions lean toward less-picked numbers, keep the usual shape of
+      real winning draws (sum, odd/even, low/high, spread), and still give a small weight to how often each number came up.
+      <strong>Score</strong> = how well the set fits all of that: 100 = this week's best set, 0 = a typical random set.
+      Hover a score for its percentile. The suggestions stay the same all week and are the same for everyone.
     </div>
     <div class="card">
       <div class="card-hd">
         <div class="card-title">🎯 Ranked suggestions</div>
         <button class="btn btn-ghost btn-sm" data-act="picks-more">Show 10 more</button>
+      </div>
+      <div class="pick-controls">
+        <div class="fgrp">
+          <span class="flbl">Numbers to suggest</span>
+          <div class="seg" id="pick-k">
+            <button type="button" class="seg-btn" data-act="pick-k" data-k="6">All 6</button>
+            <button type="button" class="seg-btn" data-act="pick-k" data-k="5">5</button>
+            <button type="button" class="seg-btn" data-act="pick-k" data-k="4">4</button>
+            <button type="button" class="seg-btn" data-act="pick-k" data-k="3">3</button>
+            <button type="button" class="seg-btn" data-act="pick-k" data-k="2">2</button>
+            <button type="button" class="seg-btn" data-act="pick-k" data-k="1">1</button>
+          </div>
+        </div>
+        <div class="fgrp">
+          <label class="flbl" for="pick-own">Your own numbers (optional)</label>
+          <input type="text" class="finp mono" id="pick-own" inputmode="numeric" autocomplete="off" placeholder="e.g. 7 15 22" data-on-input="pick-own">
+          <span class="fhelp" id="pick-own-help">Up to 5. Suggestions are built around them.</span>
+        </div>
       </div>
       <div id="picks-list"></div>
     </div>
