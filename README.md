@@ -60,6 +60,14 @@ with an invitation key from the admin.
   says plainly that every set has the same 1 in 8,145,060 chance. It also shows a 1–45 frequency
   grid, hot / cold / overdue numbers, and a backtest over the last 100 draws against random sets.
   The full history of winning numbers is downloaded once by the `check-tickets` function.
+- **Simulate a past week** (Picks tab): choose a draw by number or by any date. A Sunday counts
+  toward the coming Saturday; Monday–Saturday count toward that week's Saturday. The
+  suggestions are made only from the draws before it, exactly as they would have been that week.
+  - **Groups:** the number of ₩1,000 sets defaults to 5 × the members active that week. Quick
+    buttons set 5–30 or ±1, and **− / +** on each row takes a set any number of times.
+  - **Reveal results:** shows the winning numbers, each set's 등수 and prize, the total won and
+    the profit. 4등/5등 are fixed amounts. 1등–3등 use that draw's real prize when dhlottery's
+    data has it; otherwise a typical amount marked ≈ is used.
 - **Activity log**: every add/edit/delete by every member, with old → new values. It can't be edited.
 - **Currency**: KRW by default. Pick from popular currencies (₩ $ ₫ ¥ ฿ € …) or any ISO
   currency, and choose how it is displayed (₩12,000 / KRW 12,000 / 12,000 South Korean won).

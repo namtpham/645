@@ -128,8 +128,12 @@ create table if not exists public.draws (
   draw_date  date,
   numbers    int[] not null check (array_length(numbers, 1) = 6),
   bonus      int not null,
+  prizes     jsonb,         -- prize per winning game by rank, e.g. {"1": 2000000000, "4": 50000}
+  raw        jsonb,         -- the record as dhlottery sent it
   fetched_at timestamptz not null default now()
 );
+alter table public.draws add column if not exists prizes jsonb;
+alter table public.draws add column if not exists raw jsonb;
 
 create table if not exists public.audit_log (
   id         bigint generated always as identity primary key,

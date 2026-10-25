@@ -427,9 +427,13 @@ async function loadAll() {
 /** All saved winning numbers (the API returns at most 1000 rows per request). */
 async function loadDraws() {
   const out = [];
+  let cols = 'round, draw_date, numbers, bonus, prizes';
   for (let from = 0; from < 5000; from += 1000) {
-    const { data, error } = await S.sb.from('draws').select('round, draw_date, numbers, bonus')
-      .order('round', { ascending: false }).range(from, from + 999);
+    let { data, error } = await S.sb.from('draws').select(cols).order('round', { ascending: false }).range(from, from + 999);
+    if (error && cols.includes('prizes')) {   // database without the prizes column yet
+      cols = 'round, draw_date, numbers, bonus';
+      ({ data, error } = await S.sb.from('draws').select(cols).order('round', { ascending: false }).range(from, from + 999));
+    }
     if (error || !data) break;
     out.push(...data);
     if (data.length < 1000) break;
@@ -1583,6 +1587,7 @@ function renderPicks() {
       against 5 random sets. This shows honestly what the analysis is worth.</p>
       <button class="btn btn-secondary btn-sm" data-act="picks-backtest">Run backtest</button>`;
   }
+  renderSim();
 }
 
 function runBacktest() {
@@ -1599,6 +1604,108 @@ function runBacktest() {
       <p class="fhelp" style="margin-top:8px">${r.draws} draws · ${r.games} suggested games. Differences this small are luck:
       every set has the same chance. The real benefit is a smaller chance of sharing a big prize.</p>`;
   }, 30);
+}
+
+// ── Past-week simulation: suggestions made only from draws before that week, then the real result
+const TICKET_PRICE = 1000;
+const FIXED_RANK_PRIZE = { 4: 50000, 5: 5000 };
+const TYPICAL_RANK_PRIZE = { 1: 2000000000, 2: 55000000, 3: 1450000 };   // used only when the draw's own amounts are unknown
+const SIM = { round: null, x: null, qty: [], sets: null, key: '', revealed: false, prizesAsked: false };
+
+/** Any date → the draw it belongs to: Sunday → the coming Saturday, Monday–Saturday → that week's Saturday. */
+const saturdayOf = (d) => addDays(d, (6 - weekday(d) + 7) % 7);
+
+function simActiveMembers(date) {
+  return S.investors.filter((i) => inPeriod(i, date)).length || S.investors.filter((i) => invState(i) === 'active').length;
+}
+
+function simSetRound(n) {
+  const latestOut = drawNo(addDays(currentDraw(), -7));
+  n = Math.max(200, Math.min(latestOut, n | 0));
+  if (n !== SIM.round) { SIM.round = n; SIM.x = null; SIM.revealed = false; }
+  renderSim();
+}
+
+function simSetX(x) {
+  SIM.x = Math.max(1, Math.min(200, x));
+  SIM.qty = [];
+  renderSim();
+}
+
+function simPrize(rank, draw) {
+  if (!rank) return { amount: 0, estimated: false };
+  const own = +draw?.prizes?.[rank];
+  if (own > 0) return { amount: own, estimated: false };
+  if (FIXED_RANK_PRIZE[rank]) return { amount: FIXED_RANK_PRIZE[rank], estimated: false };
+  return { amount: TYPICAL_RANK_PRIZE[rank], estimated: true };
+}
+
+function renderSim() {
+  const el = $('sim-body');
+  if (!el) return;
+  const all = pickHistory(), latestOut = drawNo(addDays(currentDraw(), -7));
+  if (all.length < latestOut - 5) { el.innerHTML = '<p class="fhelp">Waiting for the history of winning numbers (see above).</p>'; return; }
+  if (!SIM.round) SIM.round = latestOut;
+  const date = drawDate(SIM.round), draw = S.draws[SIM.round];
+  const members = simActiveMembers(date);
+  if (SIM.x == null) { SIM.x = Math.max(5, 5 * members); SIM.qty = []; }
+  const count = Math.max(30, SIM.x);
+  const key = `${SIM.round}-${count}-${all.length}`;
+  if (key !== SIM.key) {
+    // only draws BEFORE the chosen week — its own result is never used for the suggestions
+    SIM.sets = suggestSets(all.filter((d) => d.round < SIM.round), { seed: SIM.round * 7919, count }).picks;
+    SIM.key = key;
+  }
+  if (!SIM.qty.length) SIM.qty = SIM.sets.map((_, i) => (i < SIM.x ? 1 : 0));
+  const groups = sum(SIM.qty), cost = groups * TICKET_PRICE;
+  $('sim-round').value = SIM.round;
+  $('sim-date').value = date;
+  $('sim-x').value = SIM.x;
+  $('sim-info').textContent = `제${SIM.round}회 · Saturday ${fmtD(date)} · ${members} active member${members === 1 ? '' : 's'} → default ${Math.max(5, 5 * members)} groups`;
+
+  let won = 0, estimated = false;
+  const rankCount = {};
+  const rows = SIM.sets.map((p, i) => {
+    const r = draw ? gameResult({ nums: p.nums }, draw) : null;
+    const prize = simPrize(r?.rank, draw), q = SIM.qty[i] || 0;
+    if (SIM.revealed && q) { won += q * prize.amount; estimated ||= prize.estimated && r.rank > 0; if (r.rank) rankCount[r.rank] = (rankCount[r.rank] || 0) + q; }
+    const hit = (n) => (!SIM.revealed ? 'hit' : r.match.includes(n) ? 'hit' : r.bonus && n === draw.bonus ? 'hit-bonus' : '');
+    return `<div class="sim-row ${q ? '' : 'off'}">
+      <span class="sim-rank">${i + 1}</span>
+      <span class="sim-balls">${p.nums.map((n) => ball(n, hit(n))).join('')}</span>
+      <span class="fhelp" title="score">${p.fit.toFixed(0)}</span>
+      <span class="sim-qty">
+        <button class="qb qb-minus" data-act="sim-qty" data-i="${i}" data-d="-1" ${q ? '' : 'disabled'}>−</button>
+        <strong>${q}</strong>
+        <button class="qb qb-plus" data-act="sim-qty" data-i="${i}" data-d="1">+</button>
+      </span>
+      <span class="sim-res">${!SIM.revealed ? '' : r.rank ? `<span class="rs-rank r${r.rank}">${r.rank}등</span> ${esc(money(prize.amount))}${prize.estimated ? '≈' : ''}${q > 1 ? ` ×${q}` : ''}` : '<span class="rs-rank r0">낙첨</span>'}</span>
+    </div>`;
+  }).join('');
+
+  const profit = won - cost;
+  el.innerHTML = `
+    <div class="sim-summary">
+      <span><strong>${groups}</strong> group${groups === 1 ? '' : 's'} · cost <strong>${esc(money(cost))}</strong></span>
+      ${SIM.revealed
+        ? `<span>Won <strong class="${won ? 'green' : ''}">${esc(money(won))}${estimated ? ' ≈' : ''}</strong></span>
+           <span class="sim-profit ${profit >= 0 ? 'green' : 'red'}">Profit ${profit >= 0 ? '+' : ''}${esc(money(profit))}</span>
+           <span class="fhelp">${Object.keys(rankCount).length ? Object.entries(rankCount).map(([k, v]) => `${v}× ${k}등`).join(' · ') : 'no winning games'}</span>`
+        : `<button class="btn btn-primary btn-sm" data-act="sim-reveal" ${groups && draw ? '' : 'disabled'}>Reveal results</button>`}
+    </div>
+    ${SIM.revealed && draw ? `<div class="sim-draw">Winning numbers 제${SIM.round}회: <span class="rs-win">${drawBalls(draw)}</span></div>` : ''}
+    ${!draw ? '<p class="form-error">The winning numbers of this draw are not loaded.</p>' : ''}
+    <div class="sim-list">${rows}</div>
+    <p class="fhelp" style="margin-top:8px">Suggestions use only the ${SIM.round - 1} draws before 제${SIM.round}회, the same way this
+      week's picks are made. Prizes: 4등 ₩50,000 and 5등 ₩5,000 are fixed. 1등–3등 use that draw's real amount when known,
+      otherwise a typical amount marked ≈. On average a ₩1,000 game pays back about ₩500.</p>`;
+
+  // the draw's own 1–3등 amounts: ask the result checker once if they are missing
+  if (SIM.revealed && estimated && !SIM.prizesAsked) {
+    SIM.prizesAsked = true;
+    S.sb.functions.invoke('check-tickets', { body: { prizes: true }, region: 'ap-northeast-2' })
+      .then(() => loadAll()).then(() => S.tab === 'picks' && renderSim()).catch(() => {});
+  }
 }
 
 // ─── Investors ────────────────────────────────────────────────────────────────
@@ -2375,6 +2482,10 @@ const ACTIONS = {
   'invd-week': (el) => { closeModal('invd-overlay'); openWeekModal(el.dataset.id); },
   'picks-backtest': () => runBacktest(),
   'picks-more': () => { _picksCount += 10; renderPicks(); },
+  'sim-x': (el) => simSetX(el.dataset.add ? (SIM.x || 0) + +el.dataset.add : +el.dataset.set),
+  'sim-qty': (el) => { const i = +el.dataset.i; SIM.qty[i] = Math.max(0, (SIM.qty[i] || 0) + +el.dataset.d); renderSim(); },
+  'sim-reveal': () => { SIM.revealed = true; renderSim(); },
+  'sim-hide': () => { SIM.revealed = false; renderSim(); },
   'lb-sort': (el) => {
     const k = el.dataset.id, col = LB_COLS.find((c) => c.key === k);
     S.lbSort = S.lbSort?.key === k ? { key: k, dir: -S.lbSort.dir } : { key: k, dir: col.text ? 1 : -1 };
@@ -2420,6 +2531,9 @@ const INPUTS = {
   'wm-preview': () => previewWeek(),
   'wm-date': () => refreshWeekPool(),
   'up-date': () => { $('up-round').value = drawNo($('up-date').value) || ''; upDateInfo(); },
+  'sim-round': (el, e) => { if (e.type === 'change') simSetRound(parseInt(el.value, 10) || 0); },
+  'sim-date': (el, e) => { if (e.type === 'change' && el.value) simSetRound(drawNo(saturdayOf(el.value))); },
+  'sim-x': (el, e) => { if (e.type === 'change') simSetX(parseInt(el.value, 10) || 1); },
   'up-round': () => { const n = parseInt($('up-round').value, 10); if (n >= 1) $('up-date').value = drawDate(n); upDateInfo(); },
   'money-hint': (el) => moneyHint(el.id, el.dataset.hint),
   'cur-select': (el) => { _curDraft.currency = el.value; renderCurrencyPicker(); moneyHint('cfg-threshold', 'cfg-threshold-hint'); },

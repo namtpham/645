@@ -233,6 +233,40 @@
       </div>
       <div id="picks-list"></div>
     </div>
+    <div class="card" id="sim-card">
+      <div class="card-hd">
+        <div class="card-title">🕰️ Simulate a past week</div>
+        <span class="fhelp">Picks made without knowing that week's result, then checked against it</span>
+      </div>
+      <div class="sim-controls">
+        <div class="fgrp">
+          <label class="flbl" for="sim-round">Draw (회차) or any date in that week</label>
+          <div class="round-date">
+            <input type="number" class="finp mono" id="sim-round" min="200" step="1" inputmode="numeric" data-on-input="sim-round">
+            <input type="date" class="finp" id="sim-date" data-on-input="sim-date" title="A Sunday counts toward the coming Saturday">
+          </div>
+          <span class="fhelp" id="sim-info"></span>
+        </div>
+        <div class="fgrp">
+          <label class="flbl" for="sim-x">Groups of 6 numbers (₩1,000 each)</label>
+          <div class="sim-x-row">
+            <input type="number" class="finp mono" id="sim-x" min="1" max="200" step="1" inputmode="numeric" data-on-input="sim-x">
+            <div class="quick-row">
+              <button type="button" class="qb" data-act="sim-x" data-set="5">5</button>
+              <button type="button" class="qb" data-act="sim-x" data-set="10">10</button>
+              <button type="button" class="qb" data-act="sim-x" data-set="15">15</button>
+              <button type="button" class="qb" data-act="sim-x" data-set="20">20</button>
+              <button type="button" class="qb" data-act="sim-x" data-set="25">25</button>
+              <button type="button" class="qb" data-act="sim-x" data-set="30">30</button>
+              <button type="button" class="qb qb-minus" data-act="sim-x" data-add="-1">−1</button>
+              <button type="button" class="qb qb-plus" data-act="sim-x" data-add="1">+1</button>
+            </div>
+          </div>
+          <span class="fhelp">Sets the top picks; use − / + on a row to take a set fewer or more times.</span>
+        </div>
+      </div>
+      <div id="sim-body"></div>
+    </div>
     <div class="dash-cols">
       <div class="card">
         <div class="card-hd"><div class="card-title">📊 Number statistics</div></div>

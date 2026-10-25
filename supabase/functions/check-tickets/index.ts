@@ -48,7 +48,11 @@ type QrItem = {
   url: string; round?: number | null; games?: Game[]; status?: string; prize?: number | null;
   manual?: boolean; checked_at?: string | null; message?: string | null; source?: string;
 };
-type Draw = { round: number; draw_date: string | null; numbers: number[]; bonus: number };
+type Draw = {
+  round: number; draw_date: string | null; numbers: number[]; bonus: number;
+  prizes?: Record<string, number> | null;   // prize per winning game by rank, e.g. { "1": 2_000_000_000, … }
+  raw?: unknown;                              // the draw record as dhlottery sent it
+};
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { ...CORS, 'Content-Type': 'application/json' } });
@@ -88,15 +92,51 @@ function parseDrawList(body: unknown, round: number): Draw | null {
   const numbers = [1, 2, 3, 4, 5, 6].map((i) => Number(d[`tm${i}WnNo`]));
   if (numbers.some((n) => !(n >= 1 && n <= 45)) || !(Number(d.bnsWnNo) >= 1)) return null;
   const ymd = String(d.ltRflYmd ?? '');
-  return { round, numbers, bonus: Number(d.bnsWnNo), draw_date: /^\d{8}$/.test(ymd) ? `${ymd.slice(0, 4)}-${ymd.slice(4, 6)}-${ymd.slice(6, 8)}` : null };
+  return { round, numbers, bonus: Number(d.bnsWnNo), prizes: extractPrizes(d), raw: d,
+    draw_date: /^\d{8}$/.test(ymd) ? `${ymd.slice(0, 4)}-${ymd.slice(4, 6)}-${ymd.slice(6, 8)}` : null };
 }
 
-/** Load the whole history of winning numbers once (used by the number suggestions on the site). */
-async function backfillHistory(): Promise<number> {
+/** Prize per winning game for ranks 1–5 (fields like rnk1WnAmt), if the record has them. */
+// deno-lint-ignore no-explicit-any
+function extractPrizes(d: any): Record<string, number> | null {
+  const out: Record<string, number> = {};
+  const keys = Object.keys(d ?? {});
+  for (let r = 1; r <= 5; r++) {
+    const exact = keys.find((k) => new RegExp(`^rnk${r}WnAmt$`, 'i').test(k));
+    const loose = keys.find((k) => new RegExp(`rnk${r}`, 'i').test(k) && /amt/i.test(k) && !/sum|tot|whol/i.test(k));
+    const v = Number(String(d[exact ?? loose ?? ''] ?? '').replace(/[^\d]/g, ''));
+    if (v > 0) out[r] = v;
+  }
+  return Object.keys(out).length ? out : null;
+}
+
+/** Save draws; works with an older database that has no prizes/raw columns yet. */
+async function saveDraws(rows: Draw[]): Promise<void> {
+  const stamp = new Date().toISOString();
+  for (let i = 0; i < rows.length; i += 500) {
+    const chunk = rows.slice(i, i + 500).map((d) => ({ ...d, fetched_at: stamp }));
+    let { error } = await db.from('draws').upsert(chunk);
+    if (error && /prizes|raw/i.test(error.message)) {
+      ({ error } = await db.from('draws').upsert(chunk.map(({ prizes: _p, raw: _r, ...rest }) => rest)));
+    }
+    if (error) throw new Error(`Saving draws: ${error.message}`);
+  }
+}
+
+/**
+ * Load the whole history of winning numbers once (used by the number suggestions on the site),
+ * and again when asked for prize amounts that are still missing (past-week simulation).
+ */
+async function backfillHistory(wantPrizes = false): Promise<number> {
   // latest draw whose results are out: Korea time minus 20:50, counted in whole weeks since draw #1
   const latest = Math.floor((Date.now() + 9 * 3600e3 - (20 * 60 + 50) * 60e3 - FIRST_DRAW) / (7 * 864e5)) + 1;
   const { count } = await db.from('draws').select('round', { count: 'exact', head: true });
-  if ((count ?? 0) >= latest - 1) return 0;
+  let missingPrizes = 0;
+  if (wantPrizes) {
+    const r = await db.from('draws').select('round', { count: 'exact', head: true }).is('prizes', null);
+    missingPrizes = r.error ? 0 : r.count ?? 0;
+  }
+  if ((count ?? 0) >= latest - 1 && missingPrizes <= 5) return 0;
   const res = await fetch('https://www.dhlottery.co.kr/lt645/selectPstLt645Info.do?srchLtEpsd=all', {
     signal: AbortSignal.timeout(30000), headers: { 'User-Agent': UA, Accept: 'application/json' },
   });
@@ -104,12 +144,8 @@ async function backfillHistory(): Promise<number> {
   const body = await res.json();
   // deno-lint-ignore no-explicit-any
   const list: any[] = body?.data?.list ?? body?.list ?? [];
-  const rows = list.map((d) => parseDrawList({ list: [d] }, Number(d.ltEpsd))).filter(Boolean)
-    .map((d) => ({ ...d!, fetched_at: new Date().toISOString() }));
-  for (let i = 0; i < rows.length; i += 500) {
-    const { error } = await db.from('draws').upsert(rows.slice(i, i + 500));
-    if (error) throw new Error(`Saving draw history: ${error.message}`);
-  }
+  const rows = list.map((d) => parseDrawList({ list: [d] }, Number(d.ltEpsd))).filter(Boolean) as Draw[];
+  await saveDraws(rows);
   return rows.length;
 }
 
@@ -128,7 +164,7 @@ async function getDraw(round: number, cache: Map<number, Draw | null>): Promise<
       if (draw) break;
     } catch { /* try the next form, else stay unknown */ }
   }
-  if (draw) await db.from('draws').upsert({ ...draw, fetched_at: new Date().toISOString() });
+  if (draw) await saveDraws([draw]).catch(() => {});
   cache.set(round, draw);
   return draw;
 }
@@ -265,6 +301,6 @@ async function handle(req: Request): Promise<Response> {
     }
   }
   let history = 0, historyError: string | undefined;
-  try { history = await backfillHistory(); } catch (e) { historyError = (e as Error).message; }
+  try { history = await backfillHistory(body.prizes === true); } catch (e) { historyError = (e as Error).message; }
   return json({ ok: true, checked, draws: [...cache.values()].filter(Boolean).map((d) => d!.round), history, historyError, updated });
 }
