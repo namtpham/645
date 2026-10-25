@@ -376,6 +376,7 @@ async function enterApp() {
   }
   if (!S.me || S.me.status !== 'active') { stopRealtime(); showView('revoked'); return; }
   showView('app');
+  navigator.storage?.persist?.().catch(() => {});   // keep the login even when storage is tight
   startRealtime();
   goTab(S.tab);
 }
@@ -1214,10 +1215,19 @@ async function uploadTickets() {
   }
 }
 
+function navTicket(delta) {
+  const i = S.tickets.findIndex((x) => x.id === S.lbTicket?.id) + delta;
+  if (i >= 0 && i < S.tickets.length) openTicket(S.tickets[i].id);
+}
+
 async function openTicket(id) {
   const t = S.tickets.find((x) => x.id === id);
   if (!t) return;
   S.lbTicket = t;
+  const idx = S.tickets.indexOf(t);
+  $('lb-pos').textContent = `${idx + 1} / ${S.tickets.length}`;
+  $('lb-prev').disabled = idx <= 0;
+  $('lb-next').disabled = idx >= S.tickets.length - 1;
   $('lb-img').removeAttribute('src');
   $('lb-info').innerHTML = `<strong>Draw ${drawLabel(t.draw_date)} · ${esc(fmtD(t.draw_date))}</strong><br>
     Uploaded by ${esc(userName(t.uploaded_by))} · ${esc(fmtKST(t.created_at))} ${uploadBadge(t)}
@@ -1269,6 +1279,7 @@ function renderInvestors() {
           <div class="inv-stat"><span class="k">Won (paid out)</span><span class="v">${esc(money(s.won || 0))}</span></div>
           <div class="inv-stat"><span class="k">Net P/L</span><span class="v ${net >= 0 ? 'green' : 'red'}">${net >= 0 ? '+' : ''}${esc(money(net))}</span></div>
           <div class="inv-stat"><span class="k">Weeks</span><span class="v">${s.weeks || 0}</span></div>
+          <div class="inv-stat"><span class="k">Per day</span><span class="v" title="Fresh money ÷ ${activeDays(inv)} days of their active period">${esc(money(perDay(inv, s.invested || 0)))}</span></div>
         </div>
         <div class="fhelp" style="margin-top:8px">View all weeks →</div>
       </div>`;
@@ -1276,7 +1287,7 @@ function renderInvestors() {
 
   const rows = S.investors.map((inv) => {
     const s = stats[inv.id] || {}, net = (s.won || 0) - (s.invested || 0);
-    return { ...inv, ...s, net, roi: s.invested > 0 ? net / s.invested * 100 : 0 };
+    return { ...inv, ...s, net, roi: s.invested > 0 ? net / s.invested * 100 : 0, days: activeDays(inv), daily: perDay(inv, s.invested || 0) };
   }).sort((a, b) => b.net - a.net);
   $('leaderboard-body').innerHTML = rows.map((r, i) => `<tr>
     <td class="fhelp">${i + 1}</td>
@@ -1286,6 +1297,7 @@ function renderInvestors() {
     <td class="mono ${r.net >= 0 ? 'green' : 'red'}">${r.net >= 0 ? '+' : ''}${esc(money(r.net))}</td>
     <td class="mono ${r.roi >= 0 ? 'green' : 'red'}">${r.roi.toFixed(1)}%</td>
     <td>${r.weeks || 0}</td>
+    <td class="mono" title="${r.days} days">${esc(money(r.daily))} <span class="fhelp">/ ${r.days} d</span></td>
   </tr>`).join('');
 }
 
@@ -1318,51 +1330,102 @@ async function saveInvestor() {
   if ($('invd-overlay').classList.contains('open') && id) openInvDetail(id);
 }
 
-/** Every week this investor has money in (fresh or via the pool), newest first. */
+/** Days in the investor's active period so far: start date … today (or end date), both counted. */
+function activeDays(inv) {
+  const today = kstToday(), start = invStart(inv), end = invEnd(inv) < today ? invEnd(inv) : today;
+  if (end < start) return 0;
+  return Math.round((Date.parse(end + 'T00:00:00Z') - Date.parse(start + 'T00:00:00Z')) / 864e5) + 1;
+}
+const perDay = (inv, invested) => { const d = activeDays(inv); return d > 0 ? invested / d : 0; };
+
+/** One row per draw in the investor's period (like the Weeks list), plus any week they paid into outside it. */
+function investorTimeline(inv) {
+  const id = inv.id, byDate = {};
+  for (const w of S.weeks) (byDate[w.result_date] ||= []).push(w);
+  const dates = new Set();
+  const last = invEnd(inv) < currentDraw() ? invEnd(inv) : currentDraw();
+  for (let d = addDays(invStart(inv), (6 - weekday(invStart(inv)) + 7) % 7); d <= last; d = addDays(d, 7)) dates.add(d);
+  for (const w of S.weeks) if (+w.investments?.[id] > 0 || (S.ledger.perWeek[w.id]?.eff[id] || 0) > 0.005) dates.add(w.result_date);
+  return [...dates].sort().reverse().flatMap((date) => {
+    const ws = sortWeeks(byDate[date] || []);
+    if (!ws.length) return [{ date, kind: 'none' }];
+    return ws.map((w) => {
+      const c = S.ledger.perWeek[w.id] || { pcts: {}, eff: {} };
+      const fresh = +w.investments?.[id] || 0, eff = c.eff[id] || 0, pct = c.pcts[id] || 0;
+      const r = { date, w, fresh, fromPool: Math.max(0, eff - fresh), eff, pct, share: (+w.prize_won || 0) * pct / 100 };
+      r.kind = eff > 0.005 ? 'played' : 'skipped';
+      r.problem = fresh > 0 ? periodProblem(inv, date) : '';
+      return r;
+    });
+  });
+}
+
+function invRow(r) {
+  const n = drawNo(r.date), head = `<div class="wk-no">${n ? '#' + n : '—'}</div><div class="wk-date">${esc(fmtD(r.date))}</div>`;
+  if (r.kind === 'none') {
+    return `<div class="week-item wk-empty"><div class="wk-row">${head}
+      <div class="wk-c wk-none">${r.date >= currentDraw() ? '⏳ This week — not entered yet' : 'Group did not play'}</div>
+      <div class="wk-c wk-tix"></div>
+      <div class="wk-act"><button class="btn btn-ghost btn-sm" data-act="invd-add" data-date="${r.date}">+ Add</button></div></div></div>`;
+  }
+  if (r.kind === 'skipped') {
+    return `<div class="week-item wk-empty"><div class="wk-row">${head}
+      <div class="wk-c wk-none">Did not take part this week</div>
+      <div class="wk-c wk-tix"></div>
+      <div class="wk-act"><button class="btn btn-ghost btn-sm" data-act="invd-week" data-id="${esc(r.w.id)}">Edit</button></div></div></div>`;
+  }
+  const prize = r.share > 0
+    ? `${esc(money(r.share))}<small>${r.w.big_win ? '💸 paid' : '🏦 pool'}</small>`
+    : '<span class="muted">—</span>';
+  return `<div class="week-item">
+    <div class="wk-row">${head}
+      ${wkCell('wk-total', 'Total', esc(money(r.eff)))}
+      ${wkCell('wk-fresh', 'Fresh', r.fresh > 0 ? esc(money(r.fresh)) : '<span class="muted">—</span>')}
+      ${wkCell('wk-pool', 'From pool', r.fromPool > 0.005 ? esc(money(r.fromPool)) : '<span class="muted">—</span>')}
+      ${wkCell('wk-prize ' + (r.w.big_win ? 'shared' : 'pooled'), 'Prize share', prize)}
+      ${wkCell('wk-tix', 'Share', fmtP(r.pct))}
+      <div class="wk-act"><button class="btn btn-secondary btn-sm" data-act="invd-week" data-id="${esc(r.w.id)}">Edit</button></div>
+    </div>
+    ${r.problem ? `<div class="wk-warn"><span>⚠️ ${esc(r.problem)} — clear this amount if it is a mistake</span></div>` : ''}
+  </div>`;
+}
+
+/** Every draw in this investor's period: what they put in, their share and prize — or why not. */
 function openInvDetail(id) {
   const inv = S.investors.find((i) => i.id === id);
   if (!inv) return;
-  const rows = sortWeeks(S.weeks).reverse().map((w) => {
-    const c = S.ledger.perWeek[w.id] || { pcts: {}, eff: {} };
-    const fresh = +w.investments?.[id] || 0, eff = c.eff[id] || 0, pct = c.pcts[id] || 0;
-    const share = (+w.prize_won || 0) * pct / 100;
-    return { w, fresh, fromPool: Math.max(0, eff - fresh), pct, share, problem: fresh > 0 ? periodProblem(inv, w.result_date) : '' };
-  }).filter((r) => r.fresh > 0 || r.fromPool > 0.005);
-
+  const rows = investorTimeline(inv), played = rows.filter((r) => r.kind === 'played');
+  const skipped = rows.filter((r) => r.kind === 'skipped').length, none = rows.filter((r) => r.kind === 'none' && r.date < currentDraw()).length;
   const tot = {
-    fresh: sum(rows.map((r) => r.fresh)),
-    fromPool: sum(rows.map((r) => r.fromPool)),
-    paid: sum(rows.filter((r) => r.w.big_win).map((r) => r.share)),
-    pooled: sum(rows.filter((r) => !r.w.big_win).map((r) => r.share)),
+    fresh: sum(played.map((r) => r.fresh)),
+    fromPool: sum(played.map((r) => r.fromPool)),
+    paid: sum(played.filter((r) => r.w.big_win).map((r) => r.share)),
+    pooled: sum(played.filter((r) => !r.w.big_win).map((r) => r.share)),
   };
-  const bad = rows.filter((r) => r.problem);
+  const days = activeDays(inv), bad = rows.filter((r) => r.problem);
   $('invd-title').textContent = inv.nickname;
   $('invd-edit').dataset.id = id;
   $('invd-body').innerHTML = `
-    <div class="fhelp mb8">Takes part: <strong>${esc(fmtPeriod(inv))}</strong></div>
+    <div class="fhelp mb8">Takes part: <strong>${esc(fmtPeriod(inv))}</strong> · ${days} day${days === 1 ? '' : 's'} so far</div>
     <div class="mini-stats">
       <div><span>Fresh invested</span><strong>${esc(money(tot.fresh))}</strong></div>
+      <div><span>Per day (active period)</span><strong>${esc(money(perDay(inv, tot.fresh)))}</strong></div>
       <div><span>Used from pool</span><strong>${esc(money(tot.fromPool))}</strong></div>
       <div><span>Prizes shared to them</span><strong class="green">${esc(money(tot.paid))}</strong></div>
       <div><span>Prizes added to pool</span><strong>${esc(money(tot.pooled))}</strong></div>
       <div><span>Net P/L</span><strong class="${tot.paid - tot.fresh >= 0 ? 'green' : 'red'}">${esc(money(tot.paid - tot.fresh))}</strong></div>
-      <div><span>Weeks</span><strong>${rows.length}</strong></div>
     </div>
+    <div class="fhelp" style="margin:12px 0 6px">Played <strong>${played.length}</strong> draw${played.length === 1 ? '' : 's'}
+      · did not take part in ${skipped} · group did not play ${none}</div>
     ${bad.length ? `<div class="form-error">⚠️ ${bad.length} week${bad.length > 1 ? 's have' : ' has'} money from ${esc(inv.nickname)} outside their dates
       (${esc(fmtPeriod(inv))}). They are highlighted below — click Edit to fix.</div>` : ''}
-    <div class="tbl-wrap" style="margin-top:14px"><table>
-      <thead><tr><th>Draw</th><th>Fresh</th><th>From pool</th><th>Share</th><th>Prize</th><th></th></tr></thead>
-      <tbody>${rows.length ? rows.map((r) => `<tr class="${r.problem ? 'row-warn' : ''}">
-        <td><strong>${esc(fmtD(r.w.result_date))}</strong> <span class="fhelp">${drawLabel(r.w.result_date)}</span>
-          ${r.problem ? `<div class="red fhelp">⚠️ ${esc(r.problem)}</div>` : ''}</td>
-        <td class="mono">${r.fresh ? esc(money(r.fresh)) : '—'}</td>
-        <td class="mono gold">${r.fromPool > 0.005 ? esc(money(r.fromPool)) : '—'}</td>
-        <td class="mono">${fmtP(r.pct)}</td>
-        <td class="mono">${r.share > 0 ? (r.w.big_win ? `<span class="green">💸 ${esc(money(r.share))}</span>` : `🏦 ${esc(money(r.share))}`) : '—'}</td>
-        <td><button class="btn btn-secondary btn-sm" data-act="invd-week" data-id="${esc(r.w.id)}">Edit</button></td>
-      </tr>`).join('') : `<tr><td colspan="6" class="fhelp">No investments recorded yet.</td></tr>`}</tbody>
-    </table></div>
-    <p class="fhelp" style="margin-top:10px">💸 = share paid out to them · 🏦 = their share of a prize that went into the pool.</p>`;
+    <div class="invd-list">
+      <div class="wk-head"><span>Draw</span><span>Date</span><span class="r">Total</span><span class="r">Fresh</span>
+        <span class="r">From pool</span><span class="r">Prize share</span><span>Share</span><span></span></div>
+      ${rows.map(invRow).join('') || '<p class="fhelp">No draws in this period yet.</p>'}
+    </div>
+    <p class="fhelp" style="margin-top:10px">Total = their fresh money + their part of pool money used that week.
+      💸 = share paid out to them · 🏦 = their share of a prize that went into the pool.</p>`;
   $('invd-overlay').classList.add('open');
 }
 
@@ -1549,6 +1612,13 @@ function renderCharts() {
     { label: 'Invested', data: investors.map((i) => stats[i.id].invested), ...barStyle(SERIES.invested) },
     { label: 'Prizes shared to them', data: investors.map((i) => stats[i.id].won), ...barStyle(SERIES.won) },
   ] }, options: chartOpts({ horizontal: true }) });
+
+  const byDaily = [...investors].filter((i) => activeDays(i) > 0).sort((a, b) => perDay(b, stats[b.id].invested) - perDay(a, stats[a.id].invested));
+  const dailyOpts = chartOpts({ horizontal: true, legend: false });
+  dailyOpts.plugins.tooltip.callbacks.label = (c) => ` ${money(c.parsed.x)} per day (${money(stats[byDaily[c.dataIndex].id].invested)} over ${activeDays(byDaily[c.dataIndex])} days)`;
+  mk('perday', { type: 'bar', data: { labels: byDaily.map((i) => i.nickname), datasets: [{
+    label: 'Per day', data: byDaily.map((i) => perDay(i, stats[i.id].invested)), ...barStyle(byDaily.map(invColor)),
+  }] }, options: dailyOpts });
 
   mk('cumpl', { type: 'line', data: { labels, datasets: investors.map((inv) => ({ label: inv.nickname, data: d.cumPL[inv.id], ...lineStyle(invColor(inv)) })) },
     options: chartOpts({ endLabels: investors.length <= 8 }) });
@@ -1881,6 +1951,9 @@ const ACTIONS = {
   'inv-edit': (el, e) => { e.stopPropagation(); openInvModal(el.dataset.id); },
   'inv-detail': (el) => openInvDetail(el.dataset.id),
   'invd-week': (el) => { closeModal('invd-overlay'); openWeekModal(el.dataset.id); },
+  'invd-add': (el) => { closeModal('invd-overlay'); openWeekModal(null, el.dataset.date); },
+  'lb-prev': (el, e) => { e.stopPropagation(); navTicket(-1); },
+  'lb-next': (el, e) => { e.stopPropagation(); navTicket(1); },
   'inv-save': () => saveInvestor(),
   upload: () => uploadTickets(),
   'up-remove': (el, e) => { e.preventDefault(); const [u] = S.uploads.splice(+el.dataset.id, 1); if (u) URL.revokeObjectURL(u.url); renderUploadPreview(); },
@@ -1937,6 +2010,11 @@ for (const type of ['input', 'change']) {
   });
 }
 document.addEventListener('keydown', (e) => {
+  if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && $('lb-overlay').classList.contains('open')
+      && !/^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement?.tagName || '')) {
+    navTicket(e.key === 'ArrowLeft' ? -1 : 1);
+    return;
+  }
   if (e.key === 'Escape') document.querySelectorAll('.overlay.open').forEach((o) => o.classList.remove('open'));
 });
 
@@ -1944,6 +2022,15 @@ $('form-login').addEventListener('submit', doLogin);
 $('form-join').addEventListener('submit', doJoin);
 $('up-files').addEventListener('change', (e) => { addUploadFiles(e.target.files); e.target.value = ''; });
 $('import-file').addEventListener('change', (e) => { if (e.target.files[0]) importLegacy(e.target.files[0]); e.target.value = ''; });
+// Swipe left/right on the photo to move between tickets
+let _swipeX = null;
+$('lb-stage').addEventListener('touchstart', (e) => { _swipeX = e.touches[0].clientX; }, { passive: true });
+$('lb-stage').addEventListener('touchend', (e) => {
+  if (_swipeX == null) return;
+  const dx = e.changedTouches[0].clientX - _swipeX;
+  _swipeX = null;
+  if (Math.abs(dx) > 50) navTicket(dx < 0 ? 1 : -1);
+});
 const dz = $('dropzone');
 dz.addEventListener('dragover', (e) => { e.preventDefault(); dz.classList.add('drag'); });
 dz.addEventListener('dragleave', () => dz.classList.remove('drag'));

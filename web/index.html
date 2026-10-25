@@ -7,6 +7,13 @@
   <meta name="referrer" content="no-referrer">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: blob: https://*.supabase.co; connect-src 'self' https://*.supabase.co wss://*.supabase.co; object-src 'none'; base-uri 'self'; form-action 'self'">
   <title>645</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <meta name="theme-color" content="#07090f">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="645">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='30' fill='%23f59e0b'/%3E%3Ctext x='32' y='42' font-size='26' font-family='Arial' font-weight='700' text-anchor='middle' fill='%2307090f'%3E645%3C/text%3E%3C/svg%3E">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700;900&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;1,400&family=Bebas+Neue&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -218,7 +225,7 @@
     <h3 class="sub-title">🏆 Leaderboard</h3>
     <div class="tbl-wrap">
       <table>
-        <thead><tr><th>#</th><th>Investor</th><th>Invested</th><th>Won</th><th>Net P/L</th><th>ROI</th><th>Weeks</th></tr></thead>
+        <thead><tr><th>#</th><th>Investor</th><th>Invested</th><th>Won</th><th>Net P/L</th><th>ROI</th><th>Weeks</th><th title="Fresh money ÷ days of their active period">Per day</th></tr></thead>
         <tbody id="leaderboard-body"></tbody>
       </table>
     </div>
@@ -248,6 +255,8 @@
         <p class="chart-sub">Running total for each investor after every draw.</p><canvas id="ch-cumpl"></canvas></div>
       <div class="chart-card"><div class="chart-title">🧩 Share of all money invested</div>
         <p class="chart-sub">Fresh money only, all draws.</p><canvas id="ch-share"></canvas></div>
+      <div class="chart-card"><div class="chart-title">📆 Average invested per day</div>
+        <p class="chart-sub">Fresh money ÷ days from their start date to today (or their end date), start day included. Changes every day.</p><canvas id="ch-perday"></canvas></div>
       <div class="chart-card"><div class="chart-title">🗓️ Fresh investment per draw</div>
         <p class="chart-sub">Stacked by investor.</p><canvas id="ch-wkly"></canvas></div>
     </div>
@@ -276,6 +285,9 @@
       </div>
       <div class="card">
         <div class="card-hd"><div class="card-title">🔒 Change Password</div></div>
+        <p class="fhelp" style="margin:-6px 0 12px">📱 <strong>Stay signed in:</strong> you stay logged in on this device until you press
+          Sign out. On iPhone, Safari may forget websites not opened for 7 days — use Share → <em>Add to Home Screen</em> and open 645
+          from that icon (sign in there once) to keep the login.</p>
         <div class="stack">
           <div class="fgrp"><label class="flbl" for="pw-cur">Current password</label><input type="password" class="finp" id="pw-cur" autocomplete="current-password"></div>
           <div class="fgrp"><label class="flbl" for="pw-new">New password</label><input type="password" class="finp" id="pw-new" autocomplete="new-password" placeholder="At least 8 characters"></div>
@@ -307,7 +319,7 @@
       <div class="card">
         <div class="card-hd"><div class="card-title">✉️ Invitations</div></div>
         <div class="invite-form">
-          <div class="fgrp"><label class="flbl" for="inv-note">Who is it for?</label><input class="finp" id="inv-note" maxlength="80" placeholder="e.g. Minjun"></div>
+          <div class="fgrp"><label class="flbl" for="inv-note">Who is it for?</label><input class="finp" id="inv-note" maxlength="80" placeholder="e.g. your friend’s name"></div>
           <div class="fgrp">
             <label class="flbl" for="inv-days">Valid for</label>
             <select class="fsel" id="inv-days">
@@ -434,7 +446,7 @@
       <input type="hidden" id="im-id">
       <div class="fgrp">
         <label class="flbl" for="im-nick">Nickname / display name</label>
-        <input type="text" class="finp" id="im-nick" maxlength="40" placeholder="e.g. Minjun">
+        <input type="text" class="finp" id="im-nick" maxlength="40" placeholder="Name shown in the group">
       </div>
       <div class="fgrid2" style="margin:14px 0 0">
         <div class="fgrp">
@@ -488,14 +500,18 @@
 <div class="overlay lightbox" id="lb-overlay">
   <div class="lb-inner">
     <div class="lb-bar">
-      <div id="lb-info"></div>
+      <div><span class="lb-pos" id="lb-pos"></span><div id="lb-info"></div></div>
       <div class="lb-actions">
         <a class="btn btn-secondary btn-sm" id="lb-open" target="_blank" rel="noopener">Open original</a>
         <button class="btn btn-danger btn-sm admin-only" id="lb-del" data-act="ticket-del">Delete</button>
         <button class="modal-close" data-act="close-modal" data-id="lb-overlay">✕</button>
       </div>
     </div>
-    <img id="lb-img" alt="Ticket photo">
+    <div class="lb-stage" id="lb-stage">
+      <button class="lb-nav prev" id="lb-prev" data-act="lb-prev" title="Previous ticket (←)">‹</button>
+      <img id="lb-img" alt="Ticket photo">
+      <button class="lb-nav next" id="lb-next" data-act="lb-next" title="Next ticket (→)">›</button>
+    </div>
     <div class="qr-panel" id="lb-qr"></div>
   </div>
 </div>

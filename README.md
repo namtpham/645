@@ -38,9 +38,12 @@ with an invitation key from the admin.
   server. Each one shows **"✓ before draw"** if it was uploaded before 20:35 KST on draw day.
 - **Investors**: per-person invested / won / net P/L, plus a leaderboard. Each investor has a
   **start date** (default 17 May 2025) and an **end date** (empty = still in). Add/Edit Week only
-  lists investors whose dates cover that week. Click an investor to see **every week** they
-  took part in. Weeks where they have money outside their dates are highlighted, so mistakes
-  are easy to find.
+  lists investors whose dates cover that week. Click an investor to see **every draw** in their
+  period, laid out like the Weeks list. Draws they skipped or the group didn't play are marked,
+  and weeks where they have money outside their dates are highlighted, so mistakes are easy to
+  find. **Per day** is fresh money ÷ days from their start date to today (or their end date),
+  start day included, so it changes every day. It appears on the card, in the leaderboard and
+  as a chart.
 - **Weeks form shortcuts**: amounts show thousands separators as you type (`1,234,000`).
   Prize buttons **+5K / +10K / +50K** add to the prize (two 5th-prize tickets = +5K twice).
   Each investor has **5K / 10K**, which set the amount, and **−1K / +1K**, which adjust it.
@@ -295,6 +298,13 @@ varies, so it asks you to enter it from the result page.
     ├── keepalive.yml        ← keeps the free Supabase project awake
     └── check-results.yml    ← checks ticket results on Saturday night
 ```
+
+### Staying signed in
+
+A login stays on the device until **Sign out**, and Supabase sessions don't expire by
+default. On iPhone, Safari may clear data for sites not opened in 7 days. Avoid this with
+Share → **Add to Home Screen** (the site ships an app icon and manifest), then sign in once
+inside the home-screen app.
 
 ### Running locally
 
