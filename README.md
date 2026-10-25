@@ -53,6 +53,13 @@ with an invitation key from the admin.
   - prize pool balance, month by month
   - net P/L per investor, invested vs. received per investor, each investor's P/L over time
   - share of money invested, fresh investment per draw
+- **Picks**: ranked suggestions of 6 numbers for the coming draw. They're not random:
+  numbers are weighted by all-time and last-year frequency and by how overdue they are, and sets
+  are kept only when they look like real winning draws (sum, odd/even, low/high, spread, repeats
+  from last week). Sets many people would pick are avoided, so a win is shared less. The page
+  says plainly that every set has the same 1 in 8,145,060 chance. It also shows a 1–45 frequency
+  grid, hot / cold / overdue numbers, and a backtest over the last 100 draws against random sets.
+  The full history of winning numbers is downloaded once by the `check-tickets` function.
 - **Activity log**: every add/edit/delete by every member, with old → new values. It can't be edited.
 - **Currency**: KRW by default. Pick from popular currencies (₩ $ ₫ ¥ ฿ € …) or any ISO
   currency, and choose how it is displayed (₩12,000 / KRW 12,000 / 12,000 South Korean won).

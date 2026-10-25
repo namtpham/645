@@ -403,11 +403,11 @@ async function loadAll() {
   const err = res.find((r) => r.error)?.error;
   if (err) throw err;
   const [st, pr, iv, wk, tk] = res.map((r) => r.data);
-  const [dr, lc] = await Promise.all([
-    sb.from('draws').select('*').order('round', { ascending: false }).limit(400),
+  const [drawRows, lc] = await Promise.all([
+    loadDraws(),
     sb.from('audit_log').select('*').order('at', { ascending: false }).limit(1),
   ]);
-  S.draws = Object.fromEntries((dr.data || []).map((d) => [d.round, d]));   // missing table → {}
+  S.draws = Object.fromEntries(drawRows.map((d) => [d.round, d]));   // missing table → {}
   S.lastChange = lc.data?.[0] || null;
   S.loadedAt = new Date();
   if (st) S.settings = { ...S.settings, ...st, big_win_threshold: +st.big_win_threshold };
@@ -422,6 +422,19 @@ async function loadAll() {
   }
   renderAll();
   maybeAutoCheck();
+}
+
+/** All saved winning numbers (the API returns at most 1000 rows per request). */
+async function loadDraws() {
+  const out = [];
+  for (let from = 0; from < 5000; from += 1000) {
+    const { data, error } = await S.sb.from('draws').select('round, draw_date, numbers, bonus')
+      .order('round', { ascending: false }).range(from, from + 999);
+    if (error || !data) break;
+    out.push(...data);
+    if (data.length < 1000) break;
+  }
+  return out;
 }
 
 let _reloadT = null, _channel = null;
@@ -493,6 +506,7 @@ function goTab(name) {
   document.querySelectorAll('.nav-tab').forEach((el) => el.classList.toggle('active', el.dataset.tab === name));
   if (name === 'charts') setTimeout(renderCharts, 60);
   if (name === 'dashboard') setTimeout(renderDashChart, 60);
+  if (name === 'picks') setTimeout(renderPicks, 30);
   if (name === 'tickets') hydrateImages($('tickets-list'));
   if (name === 'activity') loadActivity();
   if (name === 'settings' && isAdmin()) loadInvites();
@@ -1368,6 +1382,225 @@ async function deleteTicket() {
   await loadAll();
 }
 
+// ─── Number suggestions ───────────────────────────────────────────────────────
+// Lotto 6/45 draws are independent: every set of 6 numbers has the same 1-in-8,145,060 chance,
+// and no history can change that. What the analysis below does (and says so on the page):
+//   • picks numbers using their past frequency, recent "hot" streaks and how overdue they are;
+//   • keeps sets whose overall shape matches real winning draws (sum, odd/even, low/high,
+//     consecutive numbers, spread over decades, repeats from last week);
+//   • prefers sets other people are less likely to pick, so a win is shared with fewer people.
+// The score is how well a set matches those patterns, as a percentile of random sets.
+const TOTAL_COMBOS = 8145060;
+const RECENT_DRAWS = 52;
+
+function mulberry32(a) {
+  return () => {
+    a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function comboFeatures(nums, prev) {
+  const s = [...nums].sort((a, b) => a - b), total = sum(s);
+  return {
+    sum: Math.min(26, Math.floor(total / 10)),
+    odd: s.filter((n) => n % 2).length,
+    low: s.filter((n) => n <= 22).length,
+    consec: s.filter((n, i) => i && n - s[i - 1] === 1).length,
+    decades: new Set(s.map((n) => Math.floor((n - 1) / 10))).size,
+    repeat: prev ? s.filter((n) => prev.includes(n)).length : 0,
+    total,
+  };
+}
+const FEATURE_KEYS = ['sum', 'odd', 'low', 'consec', 'decades', 'repeat'];
+
+/** What past draws (oldest first) say about numbers and about the shape of winning sets. */
+function drawStats(history) {
+  const N = history.length, freq = Array(46).fill(0), recent = Array(46).fill(0), lastSeen = Array(46).fill(-1);
+  const feat = Object.fromEntries(FEATURE_KEYS.map((k) => [k, {}]));
+  const seen = new Set();
+  history.forEach((d, i) => {
+    for (const n of d.numbers) { freq[n]++; if (i >= N - RECENT_DRAWS) recent[n]++; lastSeen[n] = i; }
+    const f = comboFeatures(d.numbers, history[i - 1]?.numbers);
+    for (const k of FEATURE_KEYS) feat[k][f[k]] = (feat[k][f[k]] || 0) + 1;
+    seen.add([...d.numbers].sort((a, b) => a - b).join(','));
+  });
+  const gap = lastSeen.map((v) => (v < 0 ? N : N - 1 - v));
+  const avg = (a) => sum(a.slice(1)) / 45 || 1;
+  const mf = avg(freq), mr = avg(recent), mg = avg(gap);
+  // number weight: overall frequency + recent streak + how overdue it is
+  const w = Array(46).fill(0);
+  for (let n = 1; n <= 45; n++) w[n] = 0.45 * (freq[n] / mf) + 0.35 * (recent[n] / mr) + 0.2 * Math.min(3, gap[n] / mg);
+  const wSum = sum(w), p = w.map((x) => x / wSum);
+  const byRecent = [...Array(45)].map((_, i) => i + 1).sort((a, b) => recent[b] - recent[a] || freq[b] - freq[a]);
+  const byGap = [...Array(45)].map((_, i) => i + 1).sort((a, b) => gap[b] - gap[a]);
+  return { N, freq, recent, gap, feat, p, seen, last: history[N - 1], hot: byRecent.slice(0, 10), cold: byRecent.slice(-8).reverse(), overdue: byGap.slice(0, 8) };
+}
+
+function featLogP(st, k, v) {
+  const counts = st.feat[k], keys = Object.keys(counts).length + 1;
+  return Math.log(((counts[v] || 0) + 1) / (st.N + keys));
+}
+
+/** Higher = closer to the shape of past winning sets, better-weighted numbers, less popular. */
+function scoreCombo(nums, st) {
+  const f = comboFeatures(nums, st.last?.numbers);
+  let s = 0;
+  for (const k of FEATURE_KEYS) s += featLogP(st, k, f[k]);
+  for (const n of nums) s += 0.6 * Math.log(45 * st.p[n]);
+  // fewer people pick these → a win is shared less
+  const high = nums.filter((n) => n >= 32).length;
+  s += high === 0 ? -0.8 : high === 1 ? -0.25 : 0;
+  const d = [...nums].sort((a, b) => a - b), diffs = d.slice(1).map((x, i) => x - d[i]);
+  if (diffs.every((x) => x === diffs[0])) s -= 2.5;              // 1-2-3-4-5-6, 5-10-15-…
+  if (diffs.some((x, i) => x === 1 && diffs[i + 1] === 1)) s -= 0.5;
+  if (st.seen.has(d.join(','))) s -= 3;                           // a past winning set people copy
+  return s;
+}
+
+function weightedSet(rng, p) {
+  const out = [];
+  while (out.length < 6) {
+    let r = rng() * sum(p.filter((_, n) => n && !out.includes(n))), n = 0;
+    for (n = 1; n <= 45; n++) { if (out.includes(n)) continue; r -= p[n]; if (r <= 0) break; }
+    out.push(Math.min(n, 45));
+  }
+  return out.sort((a, b) => a - b);
+}
+
+function randomSet(rng) {
+  const out = new Set();
+  while (out.size < 6) out.add(1 + Math.floor(rng() * 45));
+  return [...out].sort((a, b) => a - b);
+}
+
+/** Ranked suggestions: varied sets (at most 2 numbers in common) with their score and reasons. */
+function suggestSets(history, { seed = 1, count = 10, candidates = 12000, reference = 3000 } = {}) {
+  const st = drawStats(history), rng = mulberry32(seed);
+  const ref = Array.from({ length: reference }, () => scoreCombo(randomSet(rng), st)).sort((a, b) => a - b);
+  const pct = (s) => { let lo = 0, hi = ref.length; while (lo < hi) { const m = (lo + hi) >> 1; if (ref[m] < s) lo = m + 1; else hi = m; } return lo / ref.length * 100; };
+  const cand = new Map();
+  for (let i = 0; i < candidates; i++) { const c = weightedSet(rng, st.p); cand.set(c.join(','), c); }
+  const ranked = [...cand.values()].map((nums) => ({ nums, score: scoreCombo(nums, st) })).sort((a, b) => b.score - a.score);
+  // varied sets: at most 2 numbers in common, and no number in more than 3 of every 10 sets
+  const picks = [], used = Array(46).fill(0);
+  for (const c of ranked) {
+    const cap = 3 * Math.ceil((picks.length + 1) / 10);
+    if (c.nums.some((n) => used[n] >= cap)) continue;
+    if (picks.some((p) => p.nums.filter((n) => c.nums.includes(n)).length > 2)) continue;
+    picks.push(c);
+    c.nums.forEach((n) => used[n]++);
+    if (picks.length >= count) break;
+  }
+  // "fit": 0 = a typical random set, 100 = the best set found this week
+  const median = ref[ref.length >> 1] ?? 0, best = picks[0]?.score ?? 1;
+  return { st, picks: picks.map((c) => ({ ...c, percentile: pct(c.score),
+    fit: Math.max(0, Math.min(100, 100 * (c.score - median) / (best - median || 1))), reasons: pickReasons(c.nums, st) })) };
+}
+
+function pickReasons(nums, st) {
+  const f = comboFeatures(nums, st.last?.numbers), out = [];
+  const sumP = (st.feat.sum[f.sum] || 0) / st.N;
+  out.push(`Sum ${f.total}${sumP >= 0.08 ? ' · typical' : sumP < 0.03 ? ' · unusual' : ''}`);
+  out.push(`${f.odd} odd · ${6 - f.odd} even`);
+  out.push(`${f.low} low · ${6 - f.low} high`);
+  const hot = nums.filter((n) => st.hot.includes(n)), od = nums.filter((n) => st.overdue.includes(n));
+  if (hot.length) out.push(`🔥 hot: ${hot.join(', ')}`);
+  if (od.length) out.push(`⏳ overdue: ${od.slice(0, 3).map((n) => `${n} (${st.gap[n]} draws)`).join(', ')}`);
+  out.push(f.repeat ? `${f.repeat} from last draw` : 'none from last draw');
+  const high = nums.filter((n) => n >= 32).length;
+  if (high >= 2) out.push(`${high} numbers above 31 — fewer people pick these`);
+  return out;
+}
+
+/** Replay the last `n` draws: suggestions made only from earlier draws vs random sets. */
+function backtest(history, n = 100, perDraw = 5) {
+  const res = { draws: 0, games: 0, matches: 0, hit3: 0, rGames: 0, rMatches: 0, rHit3: 0 };
+  const rng = mulberry32(12345);
+  for (let i = Math.max(150, history.length - n); i < history.length; i++) {
+    const past = history.slice(0, i), actual = history[i].numbers;
+    const { picks } = suggestSets(past, { seed: history[i].round, count: perDraw, candidates: 800, reference: 1 });
+    for (const p of picks) { const m = p.nums.filter((x) => actual.includes(x)).length; res.games++; res.matches += m; res.hit3 += m >= 3; }
+    for (let k = 0; k < perDraw; k++) { const m = randomSet(rng).filter((x) => actual.includes(x)).length; res.rGames++; res.rMatches += m; res.rHit3 += m >= 3; }
+    res.draws++;
+  }
+  return res;
+}
+
+// ── page
+let _picks = null, _picksKey = '', _picksCount = 10, _historyAsked = false;
+const pickHistory = () => Object.values(S.draws).filter((d) => d.numbers?.length === 6).sort((a, b) => a.round - b.round);
+
+function renderPicks() {
+  const target = drawNo(currentDraw()), latestOut = drawNo(addDays(currentDraw(), -7));
+  const hist = pickHistory().filter((d) => d.round < target);
+  $('picks-for').textContent = `for draw #${target} · ${fmtD(currentDraw())}`;
+  if (hist.length < latestOut - 5) {
+    $('picks-list').innerHTML = `<div class="empty"><div class="spinner" style="margin:0 auto 12px"></div>
+      <p>Loading past winning numbers (${hist.length} of ${latestOut} draws)…</p>
+      <p class="fhelp">The result checker downloads the full history once. This needs the check-tickets function.</p></div>`;
+    $('picks-grid').innerHTML = $('picks-backtest').innerHTML = '';
+    if (!_historyAsked) {
+      _historyAsked = true;
+      checkResults().then(() => loadAll()).then(() => S.tab === 'picks' && renderPicks())
+        .catch((e) => { $('picks-list').innerHTML = `<div class="form-error">${checkFailHelp(e)}</div>`; });
+    }
+    return;
+  }
+  const key = `${target}-${hist.length}-${_picksCount}`;
+  if (key !== _picksKey) { _picks = suggestSets(hist, { seed: target * 7919, count: _picksCount }); _picksKey = key; }
+  const { st, picks } = _picks;
+  const stars = (f) => '★★★★★'.slice(0, Math.max(1, Math.round(f / 20))).padEnd(5, '☆');
+  $('picks-list').innerHTML = picks.map((p, i) => `<div class="pick">
+      <div class="pick-rank">${i + 1}</div>
+      <div class="pick-main">
+        <div class="pick-balls">${p.nums.map((n) => ball(n, 'hit')).join('')}</div>
+        <div class="pick-why">${p.reasons.map((r) => `<span>${esc(r)}</span>`).join('')}</div>
+      </div>
+      <div class="pick-score" title="Fits past winning patterns better than ${p.percentile.toFixed(1)}% of random sets">
+        <div class="stars">${stars(p.fit)}</div>
+        <div class="fhelp">score ${p.fit.toFixed(0)}</div>
+      </div>
+      <button class="btn btn-ghost btn-sm" data-act="copy" data-text="${p.nums.map((n) => String(n).padStart(2, '0')).join(' ')}" title="Copy numbers">Copy</button>
+    </div>`).join('');
+
+  const maxR = Math.max(...st.recent.slice(1));
+  $('picks-grid').innerHTML = `<div class="num-grid">${[...Array(45)].map((_, i) => {
+      const n = i + 1, a = 0.08 + 0.6 * st.recent[n] / (maxR || 1);
+      return `<div class="num-cell" style="background:rgba(57,135,229,${a.toFixed(2)})" title="#${n}: ${st.recent[n]}× in the last ${RECENT_DRAWS} draws · ${st.freq[n]}× in all ${st.N} draws · last seen ${st.gap[n]} draw${st.gap[n] === 1 ? '' : 's'} ago">
+        ${ball(n, 'hit')}<small>${st.recent[n]}×</small></div>`;
+    }).join('')}</div>
+    <p class="fhelp" style="margin:8px 0 12px">Shading and count: times drawn in the last ${RECENT_DRAWS} draws (≈ 1 year). Hover for all-time numbers.</p>
+    <div class="num-lists">
+      <div><span class="flbl">🔥 Hot</span>${st.hot.slice(0, 8).map((n) => ball(n, 'hit')).join('')}</div>
+      <div><span class="flbl">🧊 Cold</span>${st.cold.map((n) => ball(n, 'hit')).join('')}</div>
+      <div><span class="flbl">⏳ Overdue</span>${st.overdue.map((n) => `<span title="${st.gap[n]} draws">${ball(n, 'hit')}</span>`).join('')}</div>
+    </div>`;
+  if (!$('picks-backtest').innerHTML) {
+    $('picks-backtest').innerHTML = `<p class="fhelp">Replays the last 100 draws: 5 suggestions per draw made only from the draws before it,
+      against 5 random sets. This shows honestly what the analysis is worth.</p>
+      <button class="btn btn-secondary btn-sm" data-act="picks-backtest">Run backtest</button>`;
+  }
+}
+
+function runBacktest() {
+  $('picks-backtest').innerHTML = '<p class="fhelp">Running… (a few seconds)</p>';
+  setTimeout(() => {
+    const r = backtest(pickHistory().filter((d) => d.round < drawNo(currentDraw())), 100, 5);
+    const pct = (a, b) => (b ? (a / b * 100).toFixed(1) : '0') + '%';
+    $('picks-backtest').innerHTML = `<table class="bt">
+      <thead><tr><th></th><th>Suggested</th><th>Random</th><th>Theory</th></tr></thead>
+      <tbody>
+        <tr><td>Numbers matched per game</td><td class="mono">${(r.matches / r.games).toFixed(2)}</td><td class="mono">${(r.rMatches / r.rGames).toFixed(2)}</td><td class="mono">0.80</td></tr>
+        <tr><td>Games with 3+ matches (5등 or better)</td><td class="mono">${pct(r.hit3, r.games)}</td><td class="mono">${pct(r.rHit3, r.rGames)}</td><td class="mono">2.4%</td></tr>
+      </tbody></table>
+      <p class="fhelp" style="margin-top:8px">${r.draws} draws · ${r.games} suggested games. Differences this small are luck:
+      every set has the same chance. The real benefit is a smaller chance of sharing a big prize.</p>`;
+  }, 30);
+}
+
 // ─── Investors ────────────────────────────────────────────────────────────────
 function renderInvestors() {
   const stats = investorStats();
@@ -1734,24 +1967,17 @@ function renderCharts() {
     { label: 'Prizes won', data: d.cumWon, ...lineStyle(SERIES.won, true) },
   ] }, options: tl(chartOpts({ endLabels: true, timeline: true })) });
 
-  // Every finished draw: prize bars, plus markers on the baseline for "played, no prize" and "not played"
+  // Every finished draw: prize bars; a flat gray bar for "played, no prize"; nothing for "not played"
   const draws = weekTimeline().filter((r) => r.weeks.length || r.date < currentDraw()).reverse();
   const tot = (r, shared) => sum(r.weeks.filter((w) => !!w.big_win === shared).map((w) => +w.prize_won || 0));
-  const marker = (label, style, color, show) => ({
-    type: 'line', label, marker: true, stack: 'markers', showLine: false, clip: 10,
-    data: draws.map((r) => (show(r) ? 0 : null)), pointStyle: style, pointRadius: 4.5, pointHoverRadius: 6,
-    borderColor: color, backgroundColor: style === 'circle' ? 'transparent' : color, borderWidth: 1.5,
-  });
+  const prizeOpts = tl(chartOpts({ stacked: true, hideZero: true, timeline: true }), draws.map((r) =>
+    `${drawLabel(r.date)} · ${fmtD(r.date)}${r.weeks.length ? '' : ' · not played'}`));
   mk('prize', { type: 'bar', data: { labels: draws.map((r) => fmtShort(r.date)), datasets: [
-    { label: 'Shared to investors', data: draws.map((r) => tot(r, true)), ...barStyle(SERIES.won, true), pointStyle: 'rectRounded' },
-    { label: 'Added to pool', data: draws.map((r) => tot(r, false)), ...barStyle(SERIES.pool, true), pointStyle: 'rectRounded' },
-    marker('Played, no prize', 'circle', '#94a3b8', (r) => r.weeks.length && !sum(r.weeks.map((w) => +w.prize_won || 0))),
-    marker('Not played', 'crossRot', '#64748b', (r) => !r.weeks.length),
-  ] }, options: (() => {
-    const o = tl(chartOpts({ stacked: true, hideZero: true, timeline: true }), draws.map((r) => `${drawLabel(r.date)} · ${fmtD(r.date)}`));
-    o.plugins.legend.labels.usePointStyle = true;   // legend shows ○ and × like the chart
-    return o;
-  })() });
+    { label: 'Shared to investors', data: draws.map((r) => tot(r, true)), ...barStyle(SERIES.won, true) },
+    { label: 'Added to pool', data: draws.map((r) => tot(r, false)), ...barStyle(SERIES.pool, true) },
+    { label: 'Played, no prize', marker: true, data: draws.map((r) => (r.weeks.length && !sum(r.weeks.map((w) => +w.prize_won || 0)) ? 0 : null)),
+      ...barStyle('#64748b', true), minBarLength: 6 },
+  ] }, options: prizeOpts });
 
   const outOpts = chartOpts({ legend: false });
   outOpts.scales.y.ticks.callback = (v) => (Number.isInteger(v) ? v : '');
@@ -2147,6 +2373,8 @@ const ACTIONS = {
   'inv-edit': (el, e) => { e.stopPropagation(); openInvModal(el.dataset.id); },
   'inv-detail': (el) => openInvDetail(el.dataset.id),
   'invd-week': (el) => { closeModal('invd-overlay'); openWeekModal(el.dataset.id); },
+  'picks-backtest': () => runBacktest(),
+  'picks-more': () => { _picksCount += 10; renderPicks(); },
   'lb-sort': (el) => {
     const k = el.dataset.id, col = LB_COLS.find((c) => c.key === k);
     S.lbSort = S.lbSort?.key === k ? { key: k, dir: -S.lbSort.dir } : { key: k, dir: col.text ? 1 : -1 };

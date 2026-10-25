@@ -91,6 +91,28 @@ function parseDrawList(body: unknown, round: number): Draw | null {
   return { round, numbers, bonus: Number(d.bnsWnNo), draw_date: /^\d{8}$/.test(ymd) ? `${ymd.slice(0, 4)}-${ymd.slice(4, 6)}-${ymd.slice(6, 8)}` : null };
 }
 
+/** Load the whole history of winning numbers once (used by the number suggestions on the site). */
+async function backfillHistory(): Promise<number> {
+  // latest draw whose results are out: Korea time minus 20:50, counted in whole weeks since draw #1
+  const latest = Math.floor((Date.now() + 9 * 3600e3 - (20 * 60 + 50) * 60e3 - FIRST_DRAW) / (7 * 864e5)) + 1;
+  const { count } = await db.from('draws').select('round', { count: 'exact', head: true });
+  if ((count ?? 0) >= latest - 1) return 0;
+  const res = await fetch('https://www.dhlottery.co.kr/lt645/selectPstLt645Info.do?srchLtEpsd=all', {
+    signal: AbortSignal.timeout(30000), headers: { 'User-Agent': UA, Accept: 'application/json' },
+  });
+  if (!res.ok) throw new Error(`Draw history: HTTP ${res.status}`);
+  const body = await res.json();
+  // deno-lint-ignore no-explicit-any
+  const list: any[] = body?.data?.list ?? body?.list ?? [];
+  const rows = list.map((d) => parseDrawList({ list: [d] }, Number(d.ltEpsd))).filter(Boolean)
+    .map((d) => ({ ...d!, fetched_at: new Date().toISOString() }));
+  for (let i = 0; i < rows.length; i += 500) {
+    const { error } = await db.from('draws').upsert(rows.slice(i, i + 500));
+    if (error) throw new Error(`Saving draw history: ${error.message}`);
+  }
+  return rows.length;
+}
+
 async function getDraw(round: number, cache: Map<number, Draw | null>): Promise<Draw | null> {
   if (cache.has(round)) return cache.get(round)!;
   const { data: saved } = await db.from('draws').select('round, draw_date, numbers, bonus').eq('round', round).maybeSingle();
@@ -242,5 +264,7 @@ async function handle(req: Request): Promise<Response> {
       if (!cache.has(r as number)) await getDraw(r as number, cache);
     }
   }
-  return json({ ok: true, checked, draws: [...cache.values()].filter(Boolean).map((d) => d!.round), updated });
+  let history = 0, historyError: string | undefined;
+  try { history = await backfillHistory(); } catch (e) { historyError = (e as Error).message; }
+  return json({ ok: true, checked, draws: [...cache.values()].filter(Boolean).map((d) => d!.round), history, historyError, updated });
 }

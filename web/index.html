@@ -98,6 +98,7 @@
     <div class="nav-tab active" data-act="tab" data-tab="dashboard">📊 Dashboard</div>
     <div class="nav-tab" data-act="tab" data-tab="weeks">📅 Weeks</div>
     <div class="nav-tab" data-act="tab" data-tab="tickets">🎟️ Tickets</div>
+    <div class="nav-tab" data-act="tab" data-tab="picks">🔮 Picks</div>
     <div class="nav-tab" data-act="tab" data-tab="investors">👥 Investors</div>
     <div class="nav-tab" data-act="tab" data-tab="charts">📈 Charts</div>
     <div class="nav-tab" data-act="tab" data-tab="activity">📝 Activity</div>
@@ -208,6 +209,40 @@
     </div>
 
     <div id="tickets-list"></div>
+  </div>
+
+  <!-- ═══ PICKS ════════════════════════════════════════════════════════════ -->
+  <div class="tab-pane" id="tab-picks">
+    <div class="row-hd">
+      <h2 class="sec-title">Number suggestions</h2>
+      <span class="fhelp" id="picks-for"></span>
+    </div>
+    <div class="card picks-note">
+      <strong>How to read this.</strong> Every set of 6 numbers has exactly the same chance: 1 in 8,145,060, every week.
+      Past results can't change that. These suggestions are <em>not</em> random, though. Numbers are weighted by how often
+      they came up (all time and the last year) and how overdue they are. Sets are kept only when their shape looks
+      like real winning draws: sum, odd/even, low/high, spread, repeats from last week. They also avoid sets many people pick,
+      so if one wins, the prize is shared with fewer people. <strong>Score</strong> = how well the set fits those patterns:
+      100 = this week's best set, 0 = a typical random set. Hover a score for its percentile. The suggestions stay the same
+      all week and are the same for everyone.
+    </div>
+    <div class="card">
+      <div class="card-hd">
+        <div class="card-title">🎯 Ranked suggestions</div>
+        <button class="btn btn-ghost btn-sm" data-act="picks-more">Show 10 more</button>
+      </div>
+      <div id="picks-list"></div>
+    </div>
+    <div class="dash-cols">
+      <div class="card">
+        <div class="card-hd"><div class="card-title">📊 Number statistics</div></div>
+        <div id="picks-grid"></div>
+      </div>
+      <div class="card">
+        <div class="card-hd"><div class="card-title">🧪 Backtest</div></div>
+        <div id="picks-backtest"></div>
+      </div>
+    </div>
   </div>
 
   <!-- ═══ INVESTORS ════════════════════════════════════════════════════════ -->
