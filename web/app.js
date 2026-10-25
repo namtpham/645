@@ -416,6 +416,7 @@ async function loadAll() {
   S.weeks = (wk || []).map((w) => ({ ...w, pool_used: +w.pool_used, prize_won: +w.prize_won }));
   S.tickets = sortTickets(tk || []);
   S.ledger = replay(S.weeks);
+  await loadBoard().catch(console.error);
   if (S.lbTicket) {
     S.lbTicket = S.tickets.find((t) => t.id === S.lbTicket.id) || S.lbTicket;
     if ($('lb-overlay').classList.contains('open')) renderLbQr();
@@ -441,7 +442,11 @@ async function loadDraws() {
   return out;
 }
 
-let _reloadT = null, _channel = null;
+let _reloadT = null, _boardT = null, _channel = null;
+function scheduleBoardReload() {
+  clearTimeout(_boardT);
+  _boardT = setTimeout(() => loadBoard().then(() => S.tab === 'picks' && renderBoard()).catch(console.error), 250);
+}
 function scheduleReload() {
   clearTimeout(_reloadT);
   _reloadT = setTimeout(async () => {
@@ -457,7 +462,8 @@ function scheduleReload() {
 function startRealtime() {
   if (_channel) return;
   _channel = S.sb.channel('db-changes')
-    .on('postgres_changes', { event: '*', schema: 'public' }, scheduleReload)
+    .on('postgres_changes', { event: '*', schema: 'public' },
+      (p) => (BOARD_TABLES.includes(p?.table) ? scheduleBoardReload() : scheduleReload()))
     .subscribe((status) => $('syncDot').classList.toggle('off', status !== 'SUBSCRIBED'));
 }
 function stopRealtime() {
@@ -502,6 +508,7 @@ function renderAll() {
   renderInvestors();
   renderSettings();
   if (S.tab === 'charts') renderCharts();
+  if (S.tab === 'picks') renderBoard();
 }
 
 function goTab(name) {
@@ -1442,6 +1449,7 @@ function renderPickControls() {
 const pickHistory = () => Object.values(S.draws).filter((d) => d.numbers?.length === 6).sort((a, b) => a.round - b.round);
 
 function renderPicks() {
+  renderBoard();
   const target = drawNo(currentDraw()), latestOut = drawNo(addDays(currentDraw(), -7));
   const hist = pickHistory().filter((d) => d.round < target);
   $('picks-for').textContent = `for draw #${target} · ${fmtD(currentDraw())}`;
@@ -1532,6 +1540,165 @@ function runBacktest() {
       <p class="fhelp" style="margin-top:8px">${r.draws} draws · ${r.games} suggested games. Differences this small are luck:
       every set has the same chance. The real benefit is a smaller chance of sharing a big prize.</p>`;
   }, 30);
+}
+
+// ── Our numbers: every member picks numbers for each group of the coming draw, live
+const BOARD_TABLES = ['pick_plans', 'group_picks'];
+const MEMBER_COLORS = ['#60a5fa', '#f87171', '#34d399', '#fbbf24', '#f472b6', '#2dd4bf', '#fb923c', '#a3e635', '#22d3ee', '#fda4af', '#93c5fd', '#fcd34d'];
+const ENGINE_COLOR = '#a78bfa';
+const memberColor = (id) => { const i = S.profiles.findIndex((p) => p.id === id); return i < 0 ? '#94a3b8' : MEMBER_COLORS[i % MEMBER_COLORS.length]; };
+const memberName = (id) => S.profiles.find((p) => p.id === id)?.display_name || 'someone';
+const pickColor = (p) => (p.by_engine ? ENGINE_COLOR : memberColor(p.picked_by));
+const pickWho = (p) => (p.by_engine ? `🤖 engine, asked by ${memberName(p.picked_by)}` : memberName(p.picked_by));
+S.board = { round: null, groups: 0, picks: [], missing: false, busy: {} };
+
+async function loadBoard() {
+  const round = drawNo(currentDraw());
+  const [pl, gp] = await Promise.all([
+    S.sb.from('pick_plans').select('*').eq('round', round).maybeSingle(),
+    S.sb.from('group_picks').select('*').eq('round', round).order('created_at'),
+  ]);
+  const err = pl.error || gp.error;   // tables not created yet → ask the admin to run the schema
+  S.board = { ...S.board, round, groups: pl.data?.groups || 0, picks: err ? [] : gp.data || [], missing: !!err };
+}
+
+const boardDefault = () => 5 * Math.max(1, simActiveMembers(currentDraw()));
+const groupPicks = (g) => S.board.picks.filter((p) => p.grp === g).sort((a, b) => a.num - b.num);
+
+// The same 0–100 scale as the ranked suggestions, so our own sets can be compared with them
+let _scale = null, _scaleKey = '';
+function boardScale() {
+  const target = drawNo(currentDraw()), hist = pickHistory().filter((d) => d.round < target);
+  if (hist.length < 100) return null;
+  const key = `${target}-${hist.length}`;
+  if (key !== _scaleKey) { _scale = suggestSets(hist, { seed: target * 7919, count: 1 }); _scaleKey = key; }
+  return _scale;
+}
+
+function renderBoard() {
+  const B = S.board, target = drawNo(currentDraw());
+  if (!$('board-body')) return;
+  $('board-for').textContent = `for draw #${target} · ${fmtD(currentDraw())}`;
+  if (B.round !== target) { loadBoard().then(renderBoard).catch(console.error); return; }
+  if (B.missing) {
+    $('board-legend').innerHTML = '';
+    $('board-body').innerHTML = `<div class="form-error">Picking numbers together needs two new database tables.
+      ${isAdmin() ? 'Run <code>supabase/schema.sql</code> again in the Supabase SQL editor, then reload.' : 'Ask the admin to update the database.'}</div>`;
+    return;
+  }
+  const inp = $('board-x');
+  if (document.activeElement !== inp) inp.value = B.groups || '';
+  inp.placeholder = String(boardDefault());
+  const members = S.profiles.filter((p) => p.status === 'active');
+  $('board-legend').innerHTML = members.map((p) => `<span class="${p.id === S.me.id ? 'me' : ''}"><span class="sw" style="--c:${memberColor(p.id)}"></span>${esc(p.display_name)}${p.id === S.me.id ? ' (you)' : ''}</span>`).join('')
+    + `<span><span class="sw" style="--c:${ENGINE_COLOR}"></span>🤖 engine</span>`;
+  if (!B.groups) {
+    $('board-body').innerHTML = `<div class="empty"><p>How many groups do we play for draw #${target}?</p>
+      <button class="btn btn-primary btn-sm" data-act="board-x" data-set="${boardDefault()}">Start with ${boardDefault()} groups</button>
+      <p class="fhelp" style="margin-top:8px">5 per active investor. Or use the buttons above.</p></div>`;
+    return;
+  }
+  const scale = boardScale(), stars = (f) => '★★★★★'.slice(0, Math.max(1, Math.round(f / 20))).padEnd(5, '☆');
+  const groups = Array.from({ length: B.groups }, (_, i) => {
+    const g = i + 1, picks = groupPicks(g), nums = picks.map((p) => p.num), full = nums.length >= 6;
+    const r = scale && full ? scale.rate(nums) : null;
+    return { g, picks, nums, full, r };
+  });
+  const scoreHtml = (x) => (!x.r ? (x.full ? '' : `${6 - x.nums.length} to go`)
+    : `<div class="stars">${stars(x.r.fit)}</div><div>score ${x.r.fit.toFixed(0)} · better than ${Math.min(99, Math.floor(x.r.percentile))}% of random sets</div>`);
+  const busy = (g) => (B.busy[g] ? 'disabled' : '');
+  const hidden = B.picks.filter((p) => p.grp > B.groups).length;
+  const done = groups.filter((x) => x.full);
+  $('board-body').innerHTML = `<div class="board-groups">${groups.map((x) => `<div class="bgroup ${x.full ? 'full' : ''}" data-g="${x.g}">
+      <div class="bg-hd">
+        <span class="bg-title">Group ${x.g}</span>
+        <span class="bg-count">${x.nums.length}/6</span>
+        <div class="bg-score">${scoreHtml(x)}</div>
+      </div>
+      <div class="bg-nums">${[...Array(45)].map((_, i) => {
+        const n = i + 1, p = x.picks.find((q) => q.num === n);
+        return `<button type="button" class="bn ${p ? 'on' : ''}" data-act="board-num" data-g="${x.g}" data-n="${n}"
+          ${p ? `style="--c:${pickColor(p)}" title="${n} · ${esc(pickWho(p))}"` : `title="${n}"`} ${busy(x.g)}>${n}</button>`;
+      }).join('')}</div>
+      ${x.full && x.r ? `<div class="bg-why">${x.r.reasons.map((t) => `<span>${esc(t)}</span>`).join('')}</div>` : ''}
+      <div class="bg-foot">
+        ${x.full ? '' : `<button class="btn btn-ghost btn-sm" data-act="board-engine" data-g="${x.g}" data-mode="one" ${busy(x.g)} title="The engine adds one number that fits the ones already picked">🤖 +1</button>
+        <button class="btn btn-ghost btn-sm" data-act="board-engine" data-g="${x.g}" data-mode="fill" ${busy(x.g)}>🤖 Fill the rest</button>`}
+        ${x.picks.some((p) => p.picked_by === S.me.id) ? `<button class="btn btn-ghost btn-sm" data-act="board-clear" data-g="${x.g}" ${busy(x.g)}>Clear mine</button>` : ''}
+      </div>
+    </div>`).join('')}</div>
+    ${hidden ? `<p class="fhelp" style="margin-top:10px">Groups above ${B.groups} still hold ${hidden} number${hidden > 1 ? 's' : ''}; raise the count to see them again.</p>` : ''}
+    <div class="board-sum">
+      <div class="bsum-hd">
+        <div class="card-title">🧾 Our tickets</div>
+        <span class="fhelp">${done.length} of ${B.groups} groups complete · ${esc(money(B.groups * TICKET_PRICE))}</span>
+        ${done.length ? `<button class="btn btn-ghost btn-sm" data-act="copy" data-text="${esc(done.map((x) => `${x.g}: ${x.nums.map((n) => String(n).padStart(2, '0')).join(' ')}`).join('\n'))}">Copy complete groups</button>` : ''}
+      </div>
+      ${groups.map((x) => `<div class="bsum-row">
+        <span class="bsum-n">${x.g}</span>
+        <span>${x.picks.map((p) => `<span class="ball mc" style="--c:${pickColor(p)}" title="${esc(pickWho(p))}">${String(p.num).padStart(2, '0')}</span>`).join('')}${'<span class="ball open">?</span>'.repeat(6 - x.nums.length)}</span>
+        <span class="fhelp">${x.full && x.r ? `<span class="stars">${stars(x.r.fit)}</span> ${x.r.fit.toFixed(0)}` : `${6 - x.nums.length} to go`}</span>
+      </div>`).join('')}
+    </div>`;
+}
+
+async function setBoardGroups(n) {
+  const B = S.board;
+  n = Math.max(1, Math.min(100, n | 0));
+  if (B.missing || n === B.groups) return;
+  const lost = B.picks.filter((p) => p.grp > n && p.grp <= (B.groups || 0)).length;
+  if (lost && !confirm(`Groups ${n + 1}–${B.groups} have ${lost} number${lost > 1 ? 's' : ''} picked. Hide them? (They come back if you raise the count again.)`)) { renderBoard(); return; }
+  B.groups = n;
+  renderBoard();
+  const { error } = await S.sb.from('pick_plans').upsert({ round: B.round, groups: n }, { onConflict: 'round' });
+  if (error) { fail(error); await loadBoard(); renderBoard(); }
+}
+
+async function toggleBoardNum(g, n) {
+  const B = S.board, p = B.picks.find((q) => q.grp === g && q.num === n);
+  if (p) {
+    if (p.picked_by !== S.me.id && !p.by_engine && !isAdmin()) { toast(`${memberName(p.picked_by)} picked ${n}. Only they or an admin can take it back.`, 'err'); return; }
+    B.picks = B.picks.filter((q) => q !== p);
+    renderBoard();
+    const { error } = await S.sb.from('group_picks').delete().eq('round', B.round).eq('grp', g).eq('num', n);
+    if (error) { fail(error); await loadBoard(); renderBoard(); }
+    return;
+  }
+  if (groupPicks(g).length >= 6) { toast(`Group ${g} already has 6 numbers. Take one back first.`, 'err'); return; }
+  B.picks.push({ round: B.round, grp: g, num: n, picked_by: S.me.id, by_engine: false, created_at: new Date().toISOString() });
+  renderBoard();
+  const { error } = await S.sb.from('group_picks').insert({ round: B.round, grp: g, num: n });
+  if (error) { fail(error); await loadBoard(); renderBoard(); }
+}
+
+/** The engine picks one number (or fills the group) around the numbers already in it. */
+async function engineFill(g, mode) {
+  const B = S.board, target = B.round, have = groupPicks(g).map((p) => p.num);
+  const hist = pickHistory().filter((d) => d.round < target);
+  if (have.length >= 6) return;
+  if (hist.length < 100) { toast('Past winning numbers are still loading. Try again in a moment.', 'err'); return; }
+  const k = mode === 'one' ? 1 : 6 - have.length;
+  B.busy[g] = true;
+  renderBoard();
+  await new Promise((r) => setTimeout(r, 20));   // let the page show the busy state
+  const res = suggestPartial(hist, { fixed: have, k, seed: target * 7919 + g * 131, count: 8 });
+  // when completing a group, don't repeat a set another group already has
+  const others = new Set(Array.from({ length: B.groups }, (_, i) => i + 1).filter((x) => x !== g).map((x) => groupPicks(x).map((p) => p.num).join()));
+  const pick = res.picks.find((p) => have.length + k < 6 || !others.has(p.nums.join())) || res.picks[0];
+  const rows = (pick?.part || []).map((num) => ({ round: target, grp: g, num, by_engine: true }));
+  const { error } = rows.length ? await S.sb.from('group_picks').insert(rows) : {};
+  delete B.busy[g];
+  if (error) fail(error);
+  await loadBoard();
+  renderBoard();
+}
+
+async function clearMine(g) {
+  const B = S.board;
+  B.picks = B.picks.filter((p) => !(p.grp === g && p.picked_by === S.me.id));
+  renderBoard();
+  const { error } = await S.sb.from('group_picks').delete().eq('round', B.round).eq('grp', g).eq('picked_by', S.me.id);
+  if (error) { fail(error); await loadBoard(); renderBoard(); }
 }
 
 // ── Past-week simulation: suggestions made only from draws before that week, then the real result
@@ -1980,6 +2147,82 @@ function renderKpis(d) {
   ].join('') : '';
 }
 
+/**
+ * Odd vs even draw numbers (회차): what we spent and won in each, and how often a gap that big
+ * appears when the same draws are split into two groups at random (a permutation test).
+ */
+function parityStats() {
+  const byDraw = {};
+  for (const w of S.weeks) {
+    const n = drawNo(w.result_date);
+    if (!n) continue;
+    const d = (byDraw[n] ||= { n, spent: 0, won: 0 });
+    d.spent += sum(Object.values(w.investments || {})) + (+w.pool_used || 0);
+    d.won += +w.prize_won || 0;
+  }
+  const draws = Object.values(byDraw).filter((d) => d.spent > 0 || d.won > 0);
+  const side = (list) => {
+    const spent = sum(list.map((d) => d.spent)), won = sum(list.map((d) => d.won)), wins = list.filter((d) => d.won > 0).length;
+    const best = list.reduce((b, d) => (!b || d.won > b.won ? d : b), null);
+    return { draws: list.length, spent, won, wins, best, ret: spent ? won / spent : 0, winRate: list.length ? wins / list.length : 0,
+      retNoBest: spent ? (won - (best?.won || 0)) / spent : 0 };
+  };
+  const odd = side(draws.filter((d) => d.n % 2)), even = side(draws.filter((d) => d.n % 2 === 0));
+  let pRet = null, pWin = null;
+  if (odd.draws && even.draws) {
+    const rng = window.PicksEngine.mulberry32(645), idx = draws.map((_, i) => i), N = 4000;
+    const gap = (a, b) => [Math.abs(a.ret - b.ret), Math.abs(a.winRate - b.winRate)];
+    const [obsR, obsW] = gap(odd, even);
+    let geR = 0, geW = 0;
+    for (let t = 0; t < N; t++) {
+      for (let i = idx.length - 1; i > 0; i--) { const j = Math.floor(rng() * (i + 1)); [idx[i], idx[j]] = [idx[j], idx[i]]; }
+      const a = side(idx.slice(0, odd.draws).map((i) => draws[i])), b = side(idx.slice(odd.draws).map((i) => draws[i]));
+      const [r, w] = gap(a, b);
+      if (r >= obsR - 1e-12) geR++;
+      if (w >= obsW - 1e-12) geW++;
+    }
+    pRet = (geR + 1) / (N + 1); pWin = (geW + 1) / (N + 1);
+  }
+  return { odd, even, pRet, pWin };
+}
+
+function renderParity(mk) {
+  const { odd, even, pRet, pWin } = parityStats();
+  const per1000 = (x) => money(Math.round(x * TICKET_PRICE));
+  const better = (a, b) => (a > b ? 'best' : '');
+  const row = (label, a, b, fa, fb = fa) => `<tr><td>${label}</td><td class="mono ${fb ? better(a, b) : ''}">${fa(a)}</td><td class="mono ${fb ? better(b, a) : ''}">${fa(b)}</td></tr>`;
+  const plain = (f) => (x) => esc(f(x));
+  $('parity-table').innerHTML = `<table>
+    <thead><tr><th></th><th>Odd draws</th><th>Even draws</th></tr></thead>
+    <tbody>
+      ${row('Draws played', odd.draws, even.draws, String, null)}
+      ${row('Spent', odd.spent, even.spent, plain(money), null)}
+      ${row('Prizes won', odd.won, even.won, plain(money))}
+      ${row('Back per ₩1,000', odd.ret, even.ret, plain(per1000))}
+      ${row('Draws with a prize', odd.winRate, even.winRate, (x) => `${Math.round(x * 100)}%`)}
+      ${row('Back per ₩1,000 without the biggest prize', odd.retNoBest, even.retNoBest, plain(per1000))}
+      ${row('Biggest prize', odd.best?.won || 0, even.best?.won || 0, plain(money))}
+    </tbody></table>`;
+  const opts = chartOpts();
+  opts.aspectRatio = window.innerWidth < 640 ? 1.3 : 1.8;
+  mk('parity', { type: 'bar', data: { labels: ['Odd draws', 'Even draws'], datasets: [
+    { label: 'Spent', data: [odd.spent, even.spent], ...barStyle(SERIES.invested), maxBarThickness: 56 },
+    { label: 'Prizes won', data: [odd.won, even.won], ...barStyle(SERIES.won), maxBarThickness: 56 },
+  ] }, options: opts });
+  let verdict;
+  if (pRet == null) verdict = 'Play both odd and even draws to compare them.';
+  else {
+    const lead = odd.ret === even.ret ? null : odd.ret > even.ret ? 'Odd' : 'Even';
+    const chance = (p) => (p < 0.01 ? 'under 1%' : `${Math.round(p * 100)}%`);
+    verdict = (lead ? `<strong>${lead} draws have paid back more so far</strong> (${esc(per1000(Math.max(odd.ret, even.ret)))} vs ${esc(per1000(Math.min(odd.ret, even.ret)))} per ₩1,000). ` : 'Odd and even draws have paid back the same. ')
+      + `If we split the same ${odd.draws + even.draws} draws into two groups at random, a gap this big shows up <strong>${chance(pRet)}</strong> of the time (${chance(pWin)} for the gap in how often we win). `
+      + (pRet < 0.05
+        ? 'That is unusual, but the machine doesn\'t know the draw number, so it is very likely to even out.'
+        : 'So it is luck, not a pattern: every draw has the same odds, whatever its number.');
+  }
+  $('parity-verdict').innerHTML = verdict;
+}
+
 function renderCharts() {
   if (!window.Chart) return;
   if (!Chart.registry.plugins.get('endLabels')) Chart.register(endLabelsPlugin);
@@ -1993,7 +2236,7 @@ function renderCharts() {
   const mk = (id, cfg) => {
     killChart(id);
     const canvas = $('ch-' + id), wide = !!canvas.closest('.wide');
-    cfg.options.aspectRatio = phone ? 1.15 : wide ? 3 : 1.6;
+    cfg.options.aspectRatio ??= phone ? 1.15 : wide ? 3 : 1.6;
     S.charts[id] = new Chart(canvas, cfg);
   };
 
@@ -2020,6 +2263,8 @@ function renderCharts() {
   outOpts.plugins.tooltip.callbacks.label = (c) => ` ${c.parsed.y} draw${c.parsed.y === 1 ? '' : 's'} (${Math.round(c.parsed.y / weeks.length * 100)}%)`;
   mk('outcome', { type: 'bar', data: { labels: d.outcomes.map((o) => o.label),
     datasets: [{ label: 'Draws', data: d.outcomes.map((o) => o.n), ...barStyle(SERIES.invested), maxBarThickness: 44 }] }, options: outOpts });
+
+  renderParity(mk);
 
   mk('pool', { type: 'line', data: { labels, datasets: [{ label: 'Pool balance', data: S.ledger.history, ...lineStyle(SERIES.pool, true), stepped: true }] },
     options: tl(chartOpts({ legend: false, timeline: true })) });
@@ -2411,6 +2656,10 @@ const ACTIONS = {
   'picks-backtest': () => runBacktest(),
   'picks-more': () => { _picksCount += 10; renderPicks(); },
   'pick-k': (el) => setPickK(+el.dataset.k),
+  'board-x': (el) => setBoardGroups(el.dataset.add ? (S.board.groups || boardDefault()) + +el.dataset.add : +el.dataset.set),
+  'board-num': (el) => toggleBoardNum(+el.dataset.g, +el.dataset.n),
+  'board-engine': (el) => engineFill(+el.dataset.g, el.dataset.mode),
+  'board-clear': (el) => clearMine(+el.dataset.g),
   'sim-x': (el) => simSetX(el.dataset.add ? (SIM.x || 0) + +el.dataset.add : +el.dataset.set),
   'sim-qty': (el) => { const i = +el.dataset.i; SIM.qty[i] = Math.max(0, (SIM.qty[i] || 0) + +el.dataset.d); renderSim(); },
   'sim-reveal': () => { SIM.revealed = true; renderSim(); },
@@ -2464,6 +2713,7 @@ const INPUTS = {
   'sim-date': (el, e) => { if (e.type === 'change' && el.value) simSetRound(drawNo(saturdayOf(el.value))); },
   'sim-x': (el, e) => { if (e.type === 'change') simSetX(parseInt(el.value, 10) || 1); },
   'pick-own': (el, e) => { if (e.type === 'change') setPickOwn(el.value); },
+  'board-x': (el, e) => { if (e.type === 'change' && el.value) setBoardGroups(parseInt(el.value, 10) || 1); },
   'up-round': () => { const n = parseInt($('up-round').value, 10); if (n >= 1) $('up-date').value = drawDate(n); upDateInfo(); },
   'money-hint': (el) => moneyHint(el.id, el.dataset.hint),
   'cur-select': (el) => { _curDraft.currency = el.value; renderCurrencyPicker(); moneyHint('cfg-threshold', 'cfg-threshold-hint'); },

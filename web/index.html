@@ -227,6 +227,34 @@
       <strong>Score</strong> = how well the set fits all of that: 100 = this week's best set, 0 = a typical random set.
       Hover a score for its percentile. The suggestions stay the same all week and are the same for everyone.
     </div>
+    <div class="card" id="board-card">
+      <div class="card-hd">
+        <div class="card-title">✍️ Our numbers</div>
+        <span class="fhelp" id="board-for"></span>
+      </div>
+      <div class="board-controls">
+        <div class="fgrp">
+          <label class="flbl" for="board-x">Groups of 6 this week (₩1,000 each)</label>
+          <div class="sim-x-row">
+            <input type="number" class="finp mono" id="board-x" min="1" max="100" step="1" inputmode="numeric" data-on-input="board-x">
+            <div class="quick-row">
+              <button type="button" class="qb" data-act="board-x" data-set="5">5</button>
+              <button type="button" class="qb" data-act="board-x" data-set="10">10</button>
+              <button type="button" class="qb" data-act="board-x" data-set="15">15</button>
+              <button type="button" class="qb" data-act="board-x" data-set="20">20</button>
+              <button type="button" class="qb" data-act="board-x" data-set="25">25</button>
+              <button type="button" class="qb" data-act="board-x" data-set="30">30</button>
+              <button type="button" class="qb qb-minus" data-act="board-x" data-add="-1">−1</button>
+              <button type="button" class="qb qb-plus" data-act="board-x" data-add="1">+1</button>
+            </div>
+          </div>
+          <span class="fhelp">Everyone picks together: tap a number to add it in your colour, tap it again to take it back.
+            🤖 asks the suggestion engine to pick for you.</span>
+        </div>
+        <div class="board-legend" id="board-legend"></div>
+      </div>
+      <div id="board-body"></div>
+    </div>
     <div class="card">
       <div class="card-hd">
         <div class="card-title">🎯 Ranked suggestions</div>
@@ -329,6 +357,10 @@
         <p class="chart-sub">Stacked by what happened to the money.</p><canvas id="ch-prize"></canvas></div>
       <div class="chart-card"><div class="chart-title">🎯 How often we win</div>
         <p class="chart-sub">Number of draws by prize size.</p><canvas id="ch-outcome"></canvas></div>
+      <div class="chart-card wide" id="parity-card"><div class="chart-title">🎲 Odd vs even draws (회차)</div>
+        <p class="chart-sub">Are we luckier in odd-numbered draws? Everything we played, split by the draw number. Spent = fresh money + money from the pool.</p>
+        <div class="parity"><div id="parity-table"></div><div class="parity-chart"><canvas id="ch-parity"></canvas></div></div>
+        <p class="parity-verdict" id="parity-verdict"></p></div>
       <div class="chart-card"><div class="chart-title">🏦 Prize pool balance</div>
         <p class="chart-sub">After each draw.</p><canvas id="ch-pool"></canvas></div>
       <div class="chart-card"><div class="chart-title">📅 Month by month</div>

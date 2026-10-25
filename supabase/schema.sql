@@ -147,6 +147,24 @@ create table if not exists public.audit_log (
 );
 create index if not exists audit_log_at_idx on public.audit_log (at desc);
 
+-- Our own numbers for a coming draw (Picks tab): how many groups of 6, and who picked which number.
+create table if not exists public.pick_plans (
+  round      int primary key,
+  groups     int not null check (groups between 1 and 100),
+  updated_by uuid references public.profiles (id) on delete set null default auth.uid(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists public.group_picks (
+  round      int not null,
+  grp        int not null check (grp between 1 and 100),
+  num        int not null check (num between 1 and 45),
+  picked_by  uuid not null references public.profiles (id) on delete cascade default auth.uid(),
+  by_engine  boolean not null default false,   -- chosen by the suggestion engine when this member asked
+  created_at timestamptz not null default now(),
+  primary key (round, grp, num)
+);
+
 -- ─── Helpers ────────────────────────────────────────────────────────────────
 
 create or replace function public.is_member()
@@ -348,6 +366,31 @@ drop trigger if exists touch_settings on public.settings;
 create trigger touch_settings before update on public.settings
   for each row execute function public.touch_settings();
 
+-- A group holds at most 6 numbers; the picker is always the signed-in member.
+create or replace function public.check_group_pick()
+returns trigger language plpgsql as $$
+begin
+  perform pg_advisory_xact_lock(hashtext('group_picks'), new.round * 1000 + new.grp);
+  new.picked_by  := auth.uid();
+  new.created_at := now();
+  if (select count(*) from group_picks where round = new.round and grp = new.grp) >= 6 then
+    raise exception 'This group already has 6 numbers';
+  end if;
+  return new;
+end $$;
+
+drop trigger if exists check_group_pick on public.group_picks;
+create trigger check_group_pick before insert on public.group_picks
+  for each row execute function public.check_group_pick();
+
+create or replace function public.touch_pick_plan()
+returns trigger language plpgsql as $$
+begin new.updated_by := auth.uid(); new.updated_at := now(); return new; end $$;
+
+drop trigger if exists touch_pick_plan on public.pick_plans;
+create trigger touch_pick_plan before insert or update on public.pick_plans
+  for each row execute function public.touch_pick_plan();
+
 -- ─── Audit log (who changed what, readable by every member) ─────────────────
 
 create or replace function public.audit()
@@ -382,13 +425,16 @@ alter table public.weeks     enable row level security;
 alter table public.tickets   enable row level security;
 alter table public.audit_log enable row level security;
 alter table public.draws     enable row level security;
+alter table public.pick_plans  enable row level security;
+alter table public.group_picks enable row level security;
 
 do $$
 declare p record;
 begin
   for p in select policyname, tablename from pg_policies
            where schemaname = 'public'
-             and tablename in ('profiles', 'invites', 'settings', 'investors', 'weeks', 'tickets', 'audit_log', 'draws')
+             and tablename in ('profiles', 'invites', 'settings', 'investors', 'weeks', 'tickets', 'audit_log', 'draws',
+                               'pick_plans', 'group_picks')
   loop
     execute format('drop policy %I on public.%I', p.policyname, p.tablename);
   end loop;
@@ -432,6 +478,17 @@ create policy "admin delete tickets" on public.tickets for delete to authenticat
 create policy "read audit log"  on public.audit_log for select to authenticated using (public.is_member());
 create policy "read draws"      on public.draws     for select to authenticated using (public.is_member());
 
+-- Every member sets the number of groups and picks numbers in any group. A number can be
+-- taken back by whoever picked it (engine picks by anyone), or by an admin.
+create policy "read pick plans" on public.pick_plans for select to authenticated using (public.is_member());
+create policy "add pick plans"  on public.pick_plans for insert to authenticated with check (public.is_member());
+create policy "edit pick plans" on public.pick_plans for update to authenticated
+  using (public.is_member()) with check (public.is_member());
+create policy "read group picks" on public.group_picks for select to authenticated using (public.is_member());
+create policy "pick a number"    on public.group_picks for insert to authenticated with check (public.is_member());
+create policy "take back a number" on public.group_picks for delete to authenticated
+  using (public.is_member() and (picked_by = auth.uid() or by_engine or public.is_admin()));
+
 -- ─── Grants ─────────────────────────────────────────────────────────────────
 
 revoke all on all tables in schema public from anon, authenticated;
@@ -442,6 +499,8 @@ grant select, update                 on public.settings  to authenticated;
 grant select, update, delete         on public.invites   to authenticated;
 grant select                         on public.profiles, public.audit_log, public.draws to authenticated;
 grant update (display_name)          on public.profiles  to authenticated;
+grant select, insert, update         on public.pick_plans  to authenticated;
+grant select, insert, delete         on public.group_picks to authenticated;
 
 revoke execute on all functions in schema public from public, anon;
 grant execute on function public.is_member(), public.is_admin(), public.normalize_invite(text),
@@ -482,7 +541,7 @@ create policy "645 delete tickets" on storage.objects for delete to authenticate
 do $$
 declare t text;
 begin
-  foreach t in array array['investors', 'weeks', 'tickets', 'settings', 'profiles', 'draws'] loop
+  foreach t in array array['investors', 'weeks', 'tickets', 'settings', 'profiles', 'draws', 'pick_plans', 'group_picks'] loop
     if not exists (select 1 from pg_publication_tables
                    where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = t) then
       execute format('alter publication supabase_realtime add table public.%I', t);

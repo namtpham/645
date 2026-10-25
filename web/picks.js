@@ -141,8 +141,24 @@
     }
     // "fit": 0 = a typical random set, 100 = the best set found this week
     const median = ref[ref.length >> 1] ?? 0, best = picks[0]?.score ?? 1;
-    return { st, picks: picks.map((c) => ({ ...c, percentile: pct(c.score),
-      fit: Math.max(0, Math.min(100, 100 * (c.score - median) / (best - median || 1))), reasons: pickReasons(c.nums, st) })) };
+    const fit = (score) => Math.max(0, Math.min(100, 100 * (score - median) / (best - median || 1)));
+    /**
+     * Score any set on the same scale as the suggestions (a set the members chose themselves).
+     * With fewer than 6 numbers: the average over random ways of filling the rest.
+     */
+    const rate = (nums) => {
+      nums = [...new Set(nums)].sort((x, y) => x - y);
+      let score;
+      if (nums.length >= 6) score = scoreCombo(nums.slice(0, 6), st, so);
+      else {
+        const r = mulberry32(nums.reduce((a, n) => a * 47 + n, 7) | 0), free = [...Array(45)].map((_, i) => i + 1).filter((n) => !nums.includes(n));
+        score = 0;
+        for (let i = 0; i < 20; i++) score += scoreCombo([...nums, ...[...free].sort(() => r() - 0.5).slice(0, 6 - nums.length)], st, so) / 20;
+      }
+      return { score, percentile: pct(score), fit: fit(score), complete: nums.length >= 6,
+        reasons: nums.length >= 6 ? pickReasons(nums, st) : nums.length ? partReasons(nums, st) : [] };
+    };
+    return { st, rate, picks: picks.map((c) => ({ ...c, percentile: pct(c.score), fit: fit(c.score), reasons: pickReasons(c.nums, st) })) };
   }
 
   function pickReasons(nums, st) {

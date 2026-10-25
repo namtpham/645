@@ -48,11 +48,25 @@ with an invitation key from the admin.
   Prize buttons **+5K / +10K / +50K** add to the prize (two 5th-prize tickets = +5K twice).
   Each investor has **5K / 10K**, which set the amount, and **−1K / +1K**, which adjust it.
 - **Statistics**: headline numbers (return rate, win rate, biggest prize, average per draw,
-  draws since the last win, longest dry spell) plus 10 charts:
+  draws since the last win, longest dry spell) plus 11 charts:
   - invested vs. prizes won (running total), prize per draw, how often we win by prize size
   - prize pool balance, month by month
   - net P/L per investor, invested vs. received per investor, each investor's P/L over time
   - share of money invested, fresh investment per draw
+  - **odd vs even draws (회차)**: spent, won, money back per ₩1,000 and how often we win, for
+    odd- and even-numbered draws. It also reports how often a gap that big appears when the same
+    draws are split into two groups at random, which tells luck from a real pattern.
+- **Our numbers** (Picks tab, first card): we pick the coming draw's numbers together.
+  - Choose how many groups of 6 we play (quick buttons 5–30, ±1).
+  - Each group shows 45 round buttons: gray = free, coloured = taken. Every member has their
+    own colour. Tap a number to add it; tap it again to take it back. Only the person who
+    picked a number (or an admin) can take it back.
+  - **🤖 +1** and **🤖 Fill the rest** ask the suggestion engine to pick around the numbers
+    already chosen (purple, marked "asked by" whoever pressed it).
+  - A complete group gets a score on the same scale as the ranked suggestions. **Our tickets**
+    lists all groups combined, with **Copy complete groups**.
+  - Changes show up live on every member's screen. Needs the database update below
+    (run `supabase/schema.sql` again).
 - **Picks**: ranked suggestions of 6 numbers for the coming draw. They're not random. The main
   lever is avoiding numbers that many people pick, so a 1등–3등 win is shared with fewer people
   (see [How good are the picks?](#how-good-are-the-picks)). Sets also keep the shape of real
@@ -363,4 +377,5 @@ python3 -m http.server -d web 8000
 ### Upgrading the database later
 
 `supabase/schema.sql` is safe to run again. It keeps existing data and re-applies
-functions, policies and grants.
+functions, policies and grants. Run it again after updates that add tables, for example
+**Our numbers** (tables `pick_plans` and `group_picks`).
