@@ -115,50 +115,44 @@
 
   <!-- ═══ DASHBOARD ═══════════════════════════════════════════════════════ -->
   <div class="tab-pane active" id="tab-dashboard">
-    <div class="draw-card" id="draw-card"></div>
+    <div class="dash-top">
+      <div class="draw-card" id="draw-card"></div>
+      <div class="card last-card" id="last-card"></div>
+    </div>
 
-    <div class="stat-grid">
-      <div class="stat-card">
-        <div class="stat-label">Prize Pool</div>
-        <div class="stat-value" id="s-pool">—</div>
-        <div class="stat-sub">small wins kept for re-investing</div>
+    <div class="stat-grid dash-kpis" id="dash-kpis"></div>
+
+    <div class="dash-cols">
+      <div class="card">
+        <div class="card-hd">
+          <div class="card-title">🗓️ Recent draws</div>
+          <button class="btn btn-ghost btn-sm" data-act="tab" data-tab="weeks">All weeks →</button>
+        </div>
+        <div id="recent-draws"></div>
       </div>
-      <div class="stat-card em">
-        <div class="stat-label">Total Won (paid out)</div>
-        <div class="stat-value" id="s-won">—</div>
-        <div class="stat-sub">prizes shared to investors</div>
-      </div>
-      <div class="stat-card bl">
-        <div class="stat-label">Total Invested</div>
-        <div class="stat-value" id="s-inv">—</div>
-        <div class="stat-sub" id="s-inv-sub">fresh money</div>
-      </div>
-      <div class="stat-card pu">
-        <div class="stat-label">Weeks Played</div>
-        <div class="stat-value" id="s-wks">—</div>
-        <div class="stat-sub" id="s-tix">lottery sessions</div>
+      <div class="card">
+        <div class="card-hd">
+          <div class="card-title">👥 Investors</div>
+          <button class="btn btn-ghost btn-sm" data-act="tab" data-tab="investors">Details →</button>
+        </div>
+        <div id="dash-investors"></div>
       </div>
     </div>
 
     <div class="card">
+      <div class="card-hd">
+        <div class="card-title">📈 Group result over time</div>
+        <span class="fhelp">All prizes (shared + pool) minus fresh money invested, after each draw</span>
+      </div>
+      <canvas id="ch-dash"></canvas>
+    </div>
+
+    <div class="card" id="pool-card">
       <div class="card-hd">
         <div class="card-title">🏦 Current Prize Pool Breakdown</div>
         <span class="badge bg-gold" id="pool-ttl-badge">—</span>
       </div>
       <div id="pool-breakdown"></div>
-    </div>
-
-    <div class="card">
-      <div class="card-hd">
-        <div class="card-title">🕐 Recent Activity</div>
-        <button class="btn btn-ghost btn-sm" data-act="tab" data-tab="weeks">All weeks →</button>
-      </div>
-      <div class="tbl-wrap">
-        <table>
-          <thead><tr><th>Draw</th><th>Pool</th><th>Fresh Invested</th><th>Prize Won</th><th>Result</th><th>Tickets</th></tr></thead>
-          <tbody id="recent-body"></tbody>
-        </table>
-      </div>
     </div>
   </div>
 

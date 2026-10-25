@@ -91,6 +91,7 @@ function drawNo(d) {
 }
 
 const drawDate = (n) => addDays(FIRST_DRAW, (n - 1) * 7);
+const fmtShort = (d) => new Date(d + 'T12:00:00Z').toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: '2-digit', timeZone: 'UTC' });
 const fmtD = (d) => d ? new Date(d + 'T12:00:00Z').toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', timeZone: 'UTC' }) : '—';
 const fmtKST = (ts) => ts ? new Date(ts).toLocaleString('en-GB', { timeZone: TZ, day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false }) + ' KST' : '—';
 const drawLabel = (d) => { const n = drawNo(d); return n ? `#${n}` : ''; };
@@ -491,6 +492,7 @@ function goTab(name) {
   document.querySelectorAll('.tab-pane').forEach((el) => el.classList.toggle('active', el.id === 'tab-' + name));
   document.querySelectorAll('.nav-tab').forEach((el) => el.classList.toggle('active', el.dataset.tab === name));
   if (name === 'charts') setTimeout(renderCharts, 60);
+  if (name === 'dashboard') setTimeout(renderDashChart, 60);
   if (name === 'tickets') hydrateImages($('tickets-list'));
   if (name === 'activity') loadActivity();
   if (name === 'settings' && isAdmin()) loadInvites();
@@ -508,75 +510,152 @@ function resultBadge(w, long = false) {
 }
 
 function renderDrawCard() {
-  const d = currentDraw(), n = drawNo(d), tix = ticketsFor(d), now = Date.now();
+  const d = currentDraw(), n = drawNo(d), tix = ticketsFor(d), now = Date.now(), qs = qrSummary(tix);
   const close = kstAt(d, SALES_CLOSE).getTime(), results = kstAt(d, RESULTS_TIME).getTime();
   const status = now < close
     ? `Sales close in <strong>${countdown(close - now)}</strong> (Sat ${SALES_CLOSE} KST)`
     : `Sales closed · results at <strong>${RESULTS_TIME} KST</strong> (${countdown(results - now)})`;
+  const games = sum(qs.items.map((i) => i.games?.length || 0));
+  const week = S.weeks.find((w) => w.result_date === d);
   $('draw-card').innerHTML = `
-    <div><div class="fhelp">DRAW</div><div class="draw-no">#${n}</div></div>
-    <div class="draw-meta">
-      <div class="t">Saturday ${esc(fmtD(d))}</div>
-      <div class="s">${status}</div>
-      <div class="s">${tix.length ? `🎟️ ${tix.length} ticket photo${tix.length > 1 ? 's' : ''} uploaded` : 'No ticket photos uploaded yet for this draw.'}
-        ${qrSummary(tix).n ? ` · ${qrSummary(tix).n} QR codes ${qrBadge(qrSummary(tix))}` : ''}</div>
+    <div class="dc-head">
+      <div><div class="fhelp">THIS WEEK · DRAW</div><div class="draw-no">#${n}</div></div>
+      <div class="draw-meta">
+        <div class="t">Saturday ${esc(fmtD(d))}</div>
+        <div class="s">${status}</div>
+      </div>
     </div>
-    <div class="draw-thumbs">${tix.slice(0, 6).map((t) => thumbImg(t)).join('')}</div>
-    <button class="btn btn-primary" data-act="tab" data-tab="tickets">📤 Upload tickets</button>
-    ${lastDraw() ? `<div class="draw-last">Last draw #${lastDraw().round}${lastDraw().draw_date ? ` · ${esc(fmtD(lastDraw().draw_date))}` : ''}
-      <span class="rs-win">${drawBalls(lastDraw())}</span></div>` : ''}`;
+    <div class="dc-facts">
+      <span>🎟️ <strong>${tix.length}</strong> photo${tix.length === 1 ? '' : 's'}</span>
+      <span>🔍 <strong>${qs.n}</strong> QR · <strong>${games}</strong> game${games === 1 ? '' : 's'}</span>
+      <span>💰 ${week ? `<strong>${esc(money(sum(Object.values(week.investments || {}))))}</strong> entered` : 'week not entered yet'}</span>
+    </div>
+    ${tix.length ? `<div class="draw-thumbs">${tix.slice(0, 8).map((t) => thumbImg(t)).join('')}</div>` : ''}
+    <div class="btn-row">
+      <button class="btn btn-primary" data-act="tab" data-tab="tickets">📤 Upload tickets</button>
+      ${week ? `<button class="btn btn-secondary" data-act="week-edit" data-id="${esc(week.id)}">Edit week</button>`
+        : `<button class="btn btn-secondary" data-act="week-add-date" data-date="${d}">+ Add week</button>`}
+    </div>`;
   hydrateImages($('draw-card'));
+}
+
+/** Result of the most recent finished draw: winning numbers, our games, what we won. */
+function renderLastCard() {
+  const d = addDays(currentDraw(), -7), n = drawNo(d), draw = S.draws[n];
+  const tix = ticketsFor(d), qs = qrSummary(tix), week = S.weeks.find((w) => w.result_date === d);
+  const ranks = {};
+  for (const it of qs.items) for (const g of it.games || []) {
+    const r = gameResult(g, S.draws[it.round || n]);
+    if (r?.rank != null) ranks[r.rank] = (ranks[r.rank] || 0) + 1;
+  }
+  const games = sum(Object.values(ranks));
+  const rankLine = games ? [1, 2, 3, 4, 5].filter((r) => ranks[r]).map((r) => `<span class="rs-rank r${r}">${ranks[r]}× ${r}등</span>`).join(' ')
+    + (ranks[0] ? ` <span class="rs-rank r0">${ranks[0]}× 낙첨</span>` : '') : '';
+  const prize = week ? +week.prize_won || 0 : qs.done ? qs.total : null;
+  const verdict = !week && !tix.length ? `<div class="rs-verdict lose">Not played</div>`
+    : prize > 0 ? `<div class="rs-verdict win">축하합니다! <span>총 ${esc(money(prize))} 당첨${week ? (week.big_win ? ' · 💸 shared' : ' · 🏦 to pool') : ''}</span></div>`
+      : prize === 0 ? `<div class="rs-verdict lose">아쉽게도, <span>낙첨되었습니다.</span></div>`
+        : `<div class="rs-verdict wait">⏳ Results are being checked</div>`;
+  $('last-card').innerHTML = `
+    <div class="card-hd"><div class="card-title">🎱 Last draw #${n}</div><span class="fhelp">${esc(fmtD(d))}</span></div>
+    <div class="lc-balls">${draw ? drawBalls(draw) : '<span class="fhelp">Winning numbers appear after the result check.</span>'}</div>
+    ${verdict}
+    ${rankLine ? `<div class="lc-ranks">${games} game${games === 1 ? '' : 's'}: ${rankLine}</div>` : ''}
+    <div class="lc-facts fhelp">${week ? `Invested ${esc(money(sum(Object.values(week.investments || {}))))}${week.pool_used > 0 ? ` + ${esc(money(week.pool_used))} from pool` : ''}` : 'No week entry'}
+      · ${tix.length} ticket photo${tix.length === 1 ? '' : 's'}
+      ${!week && (tix.length || qs.n) ? ` · <a href="#" data-act="week-add-date" data-date="${d}">add the week</a>` : ''}
+      ${qs.done && week && Math.round(qs.total) !== Math.round(+week.prize_won || 0) ? `<div class="red">⚠️ QR results say ${esc(money(qs.total))}, the week records ${esc(money(+week.prize_won || 0))}</div>` : ''}</div>`;
 }
 
 const lastDraw = () => S.draws[Math.max(0, ...Object.keys(S.draws).map(Number))] || null;
 
 function renderDashboard() {
   const weeks = S.weeks, pool = S.ledger.pool;
-  let totalInv = 0, totalWon = 0;
+  let totalInv = 0, paidOut = 0, allPrizes = 0;
   for (const w of weeks) {
     totalInv += sum(Object.values(w.investments || {}));
-    if (w.big_win) totalWon += +w.prize_won || 0;
+    allPrizes += +w.prize_won || 0;
+    if (w.big_win) paidOut += +w.prize_won || 0;
   }
   renderDrawCard();
-  $('s-pool').textContent = money(pool.total);
-  $('s-won').textContent = money(totalWon);
-  $('s-inv').textContent = money(totalInv);
-  $('s-inv-sub').textContent = `fresh money · ${money(totalInv / Math.max(1, groupDays()))} per day since ${fmtD(groupStart())}`;
-  $('s-wks').textContent = weeks.length;
-  $('s-tix').textContent = `${S.tickets.length} ticket photo${S.tickets.length === 1 ? '' : 's'}`;
-  $('pool-ttl-badge').textContent = money(pool.total);
+  renderLastCard();
 
-  const pb = $('pool-breakdown');
+  const timeline = weekTimeline().filter((r) => r.date < currentDraw());
+  const played = timeline.filter((r) => r.weeks.length).length;
+  const wins = weeks.filter((w) => +w.prize_won > 0).length;
+  const net = allPrizes - totalInv;
+  const tile = (cls, label, id, value, sub, subId = '') => `<div class="stat-card ${cls}"><div class="stat-label">${label}</div>
+    <div class="stat-value" id="${id}">${value}</div><div class="stat-sub" ${subId ? `id="${subId}"` : ''}>${sub}</div></div>`;
+  $('dash-kpis').innerHTML = [
+    tile('', 'Prize pool', 's-pool', esc(money(pool.total)), 'kept for re-investing'),
+    tile('bl', 'Total invested', 's-inv', esc(money(totalInv)), `${esc(money(totalInv / Math.max(1, groupDays())))} per day since ${esc(fmtD(groupStart()))}`, 's-inv-sub'),
+    tile('em', 'Paid out', 's-won', esc(money(paidOut)), 'prizes shared to investors'),
+    tile(net >= 0 ? 'em' : 'rd', 'Group result', 's-net', `${net >= 0 ? '+' : ''}${esc(money(net))}`, `${esc(money(allPrizes))} won in total`),
+    tile('pu', 'Win rate', 's-rate', weeks.length ? `${Math.round(wins / weeks.length * 100)}%` : '—', `${wins} of ${weeks.length} draws won something`),
+    tile('', 'Draws played', 's-wks', `${played}`, `of ${timeline.length} since ${esc(fmtD(groupStart()))} · ${S.tickets.length} photos`, 's-tix'),
+  ].join('');
+
+  // Recent draws, including the ones we did not play
+  $('recent-draws').innerHTML = timeline.slice(0, 8).map((r) => {
+    const n = drawNo(r.date), tix = ticketsFor(r.date);
+    if (!r.weeks.length) return `<div class="rd-row muted"><span class="rd-no">#${n}</span><span class="rd-date">${esc(fmtD(r.date))}</span>
+      <span class="rd-main">Not played</span><span class="rd-res"></span></div>`;
+    return r.weeks.map((w) => {
+      const fresh = sum(Object.values(w.investments || {})), prize = +w.prize_won || 0;
+      const res = prize ? `<span class="rd-prize ${w.big_win ? 'shared' : 'pooled'}">${esc(money(prize))} ${w.big_win ? '💸' : '🏦'}</span>` : '<span class="muted">낙첨</span>';
+      return `<div class="rd-row" data-act="week-edit" data-id="${esc(w.id)}" title="Edit this week"><span class="rd-no">#${n}</span><span class="rd-date">${esc(fmtD(r.date))}</span>
+        <span class="rd-main"><span class="green mono">${esc(money(fresh))}</span>${w.pool_used > 0 ? ` <span class="gold mono">+${esc(money(w.pool_used))}</span>` : ''}${tix.length ? ` · 🎟️ ${tix.length}` : ''}</span>
+        <span class="rd-res">${res}</span></div>`;
+    }).join('');
+  }).join('') || '<div class="empty"><p>No draws yet.</p></div>';
+
+  // Investors at a glance
+  const stats = investorStats();
+  const invRows = S.investors.filter((i) => invState(i) === 'active' || stats[i.id]?.invested > 0).map((inv) => {
+    const s = stats[inv.id] || {};
+    return { inv, invested: s.invested || 0, net: (s.won || 0) - (s.invested || 0), daily: perDay(inv, s.invested || 0) };
+  }).sort((a, b) => b.invested - a.invested);
+  $('dash-investors').innerHTML = invRows.length ? `<div class="di-head"><span>Investor</span><span>Invested</span><span>Net</span><span>Per day</span></div>` +
+    invRows.map((r) => `<div class="di-row" data-act="inv-detail" data-id="${esc(r.inv.id)}">
+      <span class="di-name"><i style="background:${invColor(r.inv)}"></i>${esc(r.inv.nickname)}</span>
+      <span class="mono">${esc(money(r.invested))}</span>
+      <span class="mono ${r.net >= 0 ? 'green' : 'red'}">${r.net >= 0 ? '+' : ''}${esc(money(r.net))}</span>
+      <span class="mono">${esc(money(r.daily))}</span></div>`).join('')
+    : '<div class="empty"><p>No investors yet.</p></div>';
+
+  // Pool breakdown (only when there is money in the pool)
+  $('pool-card').hidden = !pool.entries.length;
+  $('pool-ttl-badge').textContent = money(pool.total);
   if (pool.entries.length) {
     const ids = [...new Set(pool.entries.flatMap((e) => Object.keys(e.percentages || {})))];
     let h = `<div class="tbl-wrap"><table><thead><tr><th>Won On</th><th>Amount in Pool</th>`;
     for (const id of ids) h += `<th>${esc(invName(id))}</th>`;
     h += `</tr></thead><tbody>`;
     for (const e of pool.entries) {
-      h += `<tr><td>${esc(fmtD(e.result_date))}</td><td class="mono gold">${esc(money(e.amount))}</td>`;
+      h += `<tr><td>${esc(fmtD(e.result_date))} <span class="fhelp">${drawLabel(e.result_date)}</span></td><td class="mono gold">${esc(money(e.amount))}</td>`;
       for (const id of ids) {
         const pct = e.percentages?.[id] || 0;
         h += `<td><span class="mono">${esc(money(e.amount * pct / 100))}</span> <span class="fhelp">(${pct.toFixed(1)}%)</span></td>`;
       }
       h += `</tr>`;
     }
-    pb.innerHTML = h + `</tbody></table></div>`;
-  } else {
-    pb.innerHTML = `<div class="empty"><div class="ico">🏦</div><p>Pool is empty. Prizes you choose to add to the pool will accumulate here.</p></div>`;
+    $('pool-breakdown').innerHTML = h + `</tbody></table></div>`;
   }
+  if (S.tab === 'dashboard') renderDashChart();
+}
 
-  const recent = sortWeeks(weeks).reverse().slice(0, 6);
-  $('recent-body').innerHTML = recent.length ? recent.map((w) => {
-    const prize = +w.prize_won || 0, fresh = sum(Object.values(w.investments || {})), n = ticketsFor(w.result_date).length;
-    return `<tr>
-      <td><strong>${esc(fmtD(w.result_date))}</strong> <span class="fhelp">${drawLabel(w.result_date)}</span></td>
-      <td class="mono">${esc(money(S.ledger.perWeek[w.id]?.total))}</td>
-      <td class="mono green">${esc(money(fresh))}</td>
-      <td class="mono ${prize > 0 ? 'gold' : ''}">${prize > 0 ? esc(money(prize)) : '—'}</td>
-      <td>${resultBadge(w)}</td>
-      <td>${n ? `🎟️ ${n}` : '<span class="fhelp">—</span>'}</td>
-    </tr>`;
-  }).join('') : `<tr><td colspan="6" class="empty">No weeks recorded yet.</td></tr>`;
+function renderDashChart() {
+  if (!window.Chart) return;
+  const weeks = sortWeeks(S.weeks);
+  let run = 0;
+  const data = weeks.map((w) => (run += (+w.prize_won || 0) - sum(Object.values(w.investments || {}))));
+  const opts = chartOpts({ legend: false, timeline: true });
+  opts.aspectRatio = window.innerWidth < 640 ? 1.4 : 4;
+  opts.plugins.tooltip.callbacks.title = (items) => `${drawLabel(weeks[items[0].dataIndex].result_date)} · ${fmtD(weeks[items[0].dataIndex].result_date)}`;
+  opts.scales.y.grid.color = (c) => (c.tick.value === 0 ? INK.zero : INK.grid);
+  killChart('dash');
+  S.charts.dash = new Chart($('ch-dash'), { type: 'line', data: { labels: weeks.map((w) => fmtShort(w.result_date)),
+    datasets: [{ label: 'Group result', data, ...lineStyle(run >= 0 ? SERIES.won : SERIES.down, true) }] }, options: opts });
 }
 
 // ─── Weeks ────────────────────────────────────────────────────────────────────
@@ -948,8 +1027,10 @@ function checkFailHelp(e) {
 let _lastAutoCheck = 0;
 function maybeAutoCheck() {
   if (Date.now() - _lastAutoCheck < QR_SEEN_MS) return;
-  const due = S.tickets.some((t) => resultsOut(t.draw_date) && qrItems(t).some((i) =>
-    qrNeedsCheck(i) && !(i.checked_at && Date.now() - new Date(i.checked_at).getTime() < QR_SEEN_MS)));
+  const due = S.tickets.some((t) => resultsOut(t.draw_date) && (qrItems(t).some((i) =>
+    qrNeedsCheck(i) && !(i.checked_at && Date.now() - new Date(i.checked_at).getTime() < QR_SEEN_MS))
+    // or a finished draw whose winning numbers are not saved yet
+    || qrItems(t).some((i) => i.round && !S.draws[i.round])));
   if (!due) return;
   _lastAutoCheck = Date.now();
   checkResults().catch((e) => console.warn(e.message));
@@ -1499,13 +1580,13 @@ function openInvDetail(id) {
 // Investor colours follow the investor (by order added), validated for colour-blind separation
 // on the dark card surface. A 9th+ investor gets neutral gray rather than a re-used hue.
 const SERIES = { invested: '#3987e5', won: '#199e70', pool: '#c98500', up: '#3987e5', down: '#e66767' };
-const INK = { text: '#94a3b8', muted: '#64748b', grid: 'rgba(30,45,74,.55)', surface: '#131b2e' };
+const INK = { text: '#94a3b8', muted: '#64748b', grid: 'rgba(30,45,74,.55)', zero: '#475569', surface: '#131b2e' };
 const invColor = (inv) => { const i = S.investors.indexOf(inv); return i >= 0 && i < COLORS.length ? COLORS[i] : '#6b7280'; };
 
 function killChart(id) { if (S.charts[id]) { S.charts[id].destroy(); delete S.charts[id]; } }
 
 /** Shared Chart.js options: hairline grid, money ticks & tooltips, hover by column. */
-function chartOpts({ stacked = false, horizontal = false, legend = true, endLabels = false, pct = false, hideZero = false } = {}) {
+function chartOpts({ stacked = false, horizontal = false, legend = true, endLabels = false, pct = false, hideZero = false, timeline = false } = {}) {
   const phone = window.innerWidth < 640;
   if (phone) endLabels = false;   // the legend names the lines; keep the narrow plot for data
   const fmt = pct ? (v) => `${(+v).toFixed(0)}%` : (v) => money(v);
@@ -1513,7 +1594,11 @@ function chartOpts({ stacked = false, horizontal = false, legend = true, endLabe
     stacked, beginAtZero: true, grid: { color: INK.grid }, border: { display: false },
     ticks: { color: INK.muted, font: { size: 11 }, callback: fmt, maxTicksLimit: 6 },
   };
-  const catAxis = { stacked, grid: { display: false }, border: { color: INK.grid }, ticks: { color: INK.muted, font: { size: 11 }, maxRotation: 0, autoSkipPadding: 12, maxTicksLimit: phone && !horizontal ? 4 : undefined } };
+  // Timelines: dates at an angle so many more fit; other category axes stay horizontal
+  const catAxis = { stacked, grid: { display: false }, border: { color: INK.grid },
+    ticks: timeline
+      ? { color: INK.muted, font: { size: 10 }, minRotation: 60, maxRotation: 60, autoSkip: true, autoSkipPadding: 2 }
+      : { color: INK.muted, font: { size: 11 }, maxRotation: 0, autoSkipPadding: 12, maxTicksLimit: phone && !horizontal ? 4 : undefined } };
   return {
     responsive: true,
     indexAxis: horizontal ? 'y' : 'x',
@@ -1525,9 +1610,9 @@ function chartOpts({ stacked = false, horizontal = false, legend = true, endLabe
         labels: { color: INK.text, boxWidth: 10, boxHeight: 10, useBorderRadius: true, borderRadius: 2, font: { family: "'DM Sans',sans-serif", size: 12 } } },
       tooltip: {
         backgroundColor: '#0d1117', borderColor: '#253656', borderWidth: 1, titleColor: '#e2e8f0', bodyColor: '#cbd5e1', padding: 10,
-        callbacks: { label: (c) => ` ${c.dataset.label}: ${fmt(horizontal ? c.parsed.x : c.parsed.y)}` },
+        callbacks: { label: (c) => (c.dataset.marker ? ` ${c.dataset.label}` : ` ${c.dataset.label}: ${fmt(horizontal ? c.parsed.x : c.parsed.y)}`) },
         // e.g. investors who did not take part in that draw
-        filter: hideZero ? (c) => (horizontal ? c.parsed.x : c.parsed.y) !== 0 : undefined,
+        filter: hideZero ? (c) => (c.dataset.marker ? c.raw != null : (horizontal ? c.parsed.x : c.parsed.y) !== 0) : undefined,
       },
       endLabels: { enabled: endLabels },
     },
@@ -1572,7 +1657,8 @@ const endLabelsPlugin = {
 /** Everything the statistics tab needs, computed once from the weeks + ledger. */
 function chartData() {
   const weeks = sortWeeks(S.weeks), stats = investorStats();
-  const labels = weeks.map((w) => fmtD(w.result_date));
+  const labels = weeks.map((w) => fmtShort(w.result_date));
+  const titles = weeks.map((w) => `${drawLabel(w.result_date)} · ${fmtD(w.result_date)}`);
   let ci = 0, cw = 0;
   const cumInvested = [], cumWon = [];
   for (const w of weeks) { ci += sum(Object.values(w.investments || {})); cw += +w.prize_won || 0; cumInvested.push(ci); cumWon.push(cw); }
@@ -1602,7 +1688,7 @@ function chartData() {
   const outcomes = buckets.map(([label, test]) => ({ label, n: weeks.filter((w) => test(+w.prize_won || 0)).length }))
     .filter((b, i) => b.n > 0 || i < 2);
 
-  return { weeks, labels, stats, cumInvested, cumWon, cumPL, months, outcomes };
+  return { weeks, labels, titles, stats, cumInvested, cumWon, cumPL, months, outcomes };
 }
 
 function renderKpis(d) {
@@ -1630,6 +1716,7 @@ function renderCharts() {
   if (!window.Chart) return;
   if (!Chart.registry.plugins.get('endLabels')) Chart.register(endLabelsPlugin);
   const d = chartData(), { weeks, labels, stats } = d, investors = S.investors;
+  const tl = (opts, titles = d.titles) => { opts.plugins.tooltip.callbacks.title = (items) => titles[items[0].dataIndex]; return opts; };
   renderKpis(d);
   show('charts-empty', !weeks.length);
   document.querySelector('#tab-charts .charts-grid').hidden = !weeks.length;
@@ -1645,12 +1732,26 @@ function renderCharts() {
   mk('cum', { type: 'line', data: { labels, datasets: [
     { label: 'Invested', data: d.cumInvested, ...lineStyle(SERIES.invested) },
     { label: 'Prizes won', data: d.cumWon, ...lineStyle(SERIES.won, true) },
-  ] }, options: chartOpts({ endLabels: true }) });
+  ] }, options: tl(chartOpts({ endLabels: true, timeline: true })) });
 
-  mk('prize', { type: 'bar', data: { labels, datasets: [
-    { label: 'Shared to investors', data: weeks.map((w) => w.big_win ? +w.prize_won || 0 : 0), ...barStyle(SERIES.won, true) },
-    { label: 'Added to pool', data: weeks.map((w) => w.big_win ? 0 : +w.prize_won || 0), ...barStyle(SERIES.pool, true) },
-  ] }, options: chartOpts({ stacked: true, hideZero: true }) });
+  // Every finished draw: prize bars, plus markers on the baseline for "played, no prize" and "not played"
+  const draws = weekTimeline().filter((r) => r.weeks.length || r.date < currentDraw()).reverse();
+  const tot = (r, shared) => sum(r.weeks.filter((w) => !!w.big_win === shared).map((w) => +w.prize_won || 0));
+  const marker = (label, style, color, show) => ({
+    type: 'line', label, marker: true, stack: 'markers', showLine: false, clip: 10,
+    data: draws.map((r) => (show(r) ? 0 : null)), pointStyle: style, pointRadius: 4.5, pointHoverRadius: 6,
+    borderColor: color, backgroundColor: style === 'circle' ? 'transparent' : color, borderWidth: 1.5,
+  });
+  mk('prize', { type: 'bar', data: { labels: draws.map((r) => fmtShort(r.date)), datasets: [
+    { label: 'Shared to investors', data: draws.map((r) => tot(r, true)), ...barStyle(SERIES.won, true), pointStyle: 'rectRounded' },
+    { label: 'Added to pool', data: draws.map((r) => tot(r, false)), ...barStyle(SERIES.pool, true), pointStyle: 'rectRounded' },
+    marker('Played, no prize', 'circle', '#94a3b8', (r) => r.weeks.length && !sum(r.weeks.map((w) => +w.prize_won || 0))),
+    marker('Not played', 'crossRot', '#64748b', (r) => !r.weeks.length),
+  ] }, options: (() => {
+    const o = tl(chartOpts({ stacked: true, hideZero: true, timeline: true }), draws.map((r) => `${drawLabel(r.date)} · ${fmtD(r.date)}`));
+    o.plugins.legend.labels.usePointStyle = true;   // legend shows ○ and × like the chart
+    return o;
+  })() });
 
   const outOpts = chartOpts({ legend: false });
   outOpts.scales.y.ticks.callback = (v) => (Number.isInteger(v) ? v : '');
@@ -1660,14 +1761,14 @@ function renderCharts() {
     datasets: [{ label: 'Draws', data: d.outcomes.map((o) => o.n), ...barStyle(SERIES.invested), maxBarThickness: 44 }] }, options: outOpts });
 
   mk('pool', { type: 'line', data: { labels, datasets: [{ label: 'Pool balance', data: S.ledger.history, ...lineStyle(SERIES.pool, true), stepped: true }] },
-    options: chartOpts({ legend: false }) });
+    options: tl(chartOpts({ legend: false, timeline: true })) });
 
   const monthKeys = Object.keys(d.months).sort();
   const monthLabel = (k) => new Date(k + '-15T00:00:00Z').toLocaleDateString('en-GB', { month: 'short', year: '2-digit', timeZone: 'UTC' });
   mk('monthly', { type: 'bar', data: { labels: monthKeys.map(monthLabel), datasets: [
     { label: 'Invested', data: monthKeys.map((k) => d.months[k].invested), ...barStyle(SERIES.invested) },
     { label: 'Prizes won', data: monthKeys.map((k) => d.months[k].won), ...barStyle(SERIES.won) },
-  ] }, options: chartOpts() });
+  ] }, options: chartOpts({ timeline: monthKeys.length > 6 }) });
 
   const byNet = [...investors].sort((a, b) => ((stats[b.id].won - stats[b.id].invested) - (stats[a.id].won - stats[a.id].invested)));
   mk('netpl', { type: 'bar', data: { labels: byNet.map((i) => i.nickname), datasets: [{
@@ -1688,7 +1789,7 @@ function renderCharts() {
   }] }, options: dailyOpts });
 
   mk('cumpl', { type: 'line', data: { labels, datasets: investors.map((inv) => ({ label: inv.nickname, data: d.cumPL[inv.id], ...lineStyle(invColor(inv)) })) },
-    options: chartOpts({ endLabels: investors.length <= 8 }) });
+    options: tl(chartOpts({ endLabels: investors.length <= 8, timeline: true })) });
 
   const shareOpts = chartOpts({ horizontal: true, legend: false, pct: true });
   shareOpts.scales.x.max = 100;
@@ -1702,7 +1803,7 @@ function renderCharts() {
   const payers = investors.filter((inv) => weeks.some((w) => +w.investments?.[inv.id] > 0));
   mk('wkly', { type: 'bar', data: { labels, datasets: payers.map((inv) => ({
     label: inv.nickname, data: weeks.map((w) => +w.investments?.[inv.id] || null), ...barStyle(invColor(inv), true), maxBarThickness: 22,
-  })) }, options: chartOpts({ stacked: true, hideZero: true }) });
+  })) }, options: tl(chartOpts({ stacked: true, hideZero: true, timeline: true })) });
 }
 
 // ─── Activity log ─────────────────────────────────────────────────────────────
@@ -2068,7 +2169,7 @@ const ACTIONS = {
     const items = qrItems(S.lbTicket).filter((_, i) => i !== +el.dataset.i);
     saveQr(items, 'Removed.');
   },
-  'week-add-date': (el, e) => { e.stopPropagation(); openWeekModal(null, el.dataset.date); },
+  'week-add-date': (el, e) => { e.preventDefault(); e.stopPropagation(); openWeekModal(null, el.dataset.date); },
   'wm-use-qr': (el) => quickSet($('wm-prize'), +el.dataset.v),
   'save-name': () => saveName(),
   'save-pw': () => savePassword(),

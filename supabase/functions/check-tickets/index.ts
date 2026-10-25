@@ -234,5 +234,13 @@ async function handle(req: Request): Promise<Response> {
       updated.push({ ticket: t.id, items: items.map(({ status, prize, source }) => ({ status, prize, source })) });
     }
   }
+  // Make sure the winning numbers of every finished draw with tickets are saved (the site shows them),
+  // even when all tickets of that draw were settled earlier.
+  for (const t of tickets ?? []) {
+    if (!resultsOut(t.draw_date) || !Array.isArray(t.qr_data)) continue;
+    for (const r of new Set([roundOf(t.draw_date), ...t.qr_data.map((i: QrItem) => i.round).filter(Boolean)])) {
+      if (!cache.has(r as number)) await getDraw(r as number, cache);
+    }
+  }
   return json({ ok: true, checked, draws: [...cache.values()].filter(Boolean).map((d) => d!.round), updated });
 }
