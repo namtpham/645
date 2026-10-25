@@ -259,6 +259,17 @@ const roundOf = (d: string) => Math.round((Date.parse(d + 'T00:00:00Z') - FIRST_
 
 async function handle(req: Request): Promise<Response> {
   const body = await req.json().catch(() => ({}));
+
+  // Public draw history as dhlottery publishes it (used by the analysis workflow in GitHub Actions,
+  // whose servers may not reach dhlottery directly). Read-only; nothing private is returned.
+  if (body.export === 'history') {
+    const res = await fetch('https://www.dhlottery.co.kr/lt645/selectPstLt645Info.do?srchLtEpsd=all', {
+      signal: AbortSignal.timeout(30000), headers: { 'User-Agent': UA, Accept: 'application/json' },
+    });
+    if (!res.ok) return json({ error: `dhlottery: HTTP ${res.status}` }, 502);
+    const data = await res.json();
+    return json({ list: data?.data?.list ?? data?.list ?? [] });
+  }
   const member = await callerIsMember(req);
   const force = member && typeof body.ticket_id === 'string';
 

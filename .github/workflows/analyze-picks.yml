@@ -1,0 +1,44 @@
+name: Analyze picks
+
+# Tests the number-suggestion engine against the real draw history (read-only).
+# Actions → Analyze picks → Run workflow. The report appears on the run's summary page.
+on:
+  workflow_dispatch:
+    inputs:
+      dump:
+        description: 'Also print the draw data (one line per draw) in the log'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Download draw history
+        run: |
+          ok() { node -e "const d=require('./history.json'); process.exit(((d.data&&d.data.list)||d.list||[]).length > 100 ? 0 : 1)"; }
+          if curl -fsS -m 60 -A "Mozilla/5.0" -H "Accept: application/json" \
+               "https://www.dhlottery.co.kr/lt645/selectPstLt645Info.do?srchLtEpsd=all" -o history.json && ok; then
+            echo "History from dhlottery.co.kr"
+          else
+            URL=$(grep -oP "supabaseUrl:\s*'\K[^']+" web/config.js)
+            KEY=$(grep -oP "supabaseKey:\s*'\K[^']+" web/config.js)
+            curl -fsS -m 90 -X POST "$URL/functions/v1/check-tickets" -H "apikey: $KEY" -H "x-region: ap-northeast-2" \
+              -H "Content-Type: application/json" -d '{"export":"history"}' -o history.json
+            ok
+            echo "History via the check-tickets function"
+          fi
+      - name: Analyze
+        run: |
+          node tools/analyze-picks.mjs history.json ${{ inputs.dump && '--dump' || '' }} > out.txt
+          grep -v '^D|' out.txt | grep -v '^POPULARITY_BETA=' | tee report.md
+          cat report.md >> "$GITHUB_STEP_SUMMARY"
+          if [ "${{ inputs.dump }}" = "true" ]; then grep -E '^(D\||POPULARITY_BETA=)' out.txt; fi
