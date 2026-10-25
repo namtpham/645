@@ -222,6 +222,10 @@ link to that ticket's result page on dhlottery.co.kr.
 
 1. **On upload**, the browser finds every lotto QR code in the photo (one photo can hold
    several tickets) and stores the links with the ticket. The other two codes are ignored.
+   Pick the week by **draw number (회차) or date**; the two fill each other in. If the QR codes
+   name a different draw, the photo is filed under the QR's draw. An older photo filed under
+   the wrong week shows **"QR says #N"** and gets a **Move photo to draw #N** button in the
+   viewer. The move is only allowed to the draw the QR names, and it is logged.
 2. **After 20:50 KST on draw day**, the `check-tickets` Edge Function opens each link and
    reads the page:
    - "축하합니다! 총 5,000원 당첨" means **won ₩5,000**

@@ -131,7 +131,7 @@
       <div class="stat-card bl">
         <div class="stat-label">Total Invested</div>
         <div class="stat-value" id="s-inv">—</div>
-        <div class="stat-sub">fresh money</div>
+        <div class="stat-sub" id="s-inv-sub">fresh money</div>
       </div>
       <div class="stat-card pu">
         <div class="stat-label">Weeks Played</div>
@@ -184,8 +184,11 @@
       </div>
       <div class="fgrid3">
         <div class="fgrp">
-          <label class="flbl" for="up-date">Draw date (Saturday)</label>
-          <input type="date" class="finp" id="up-date" data-on-input="up-date">
+          <label class="flbl" for="up-round">Draw (회차) &amp; date</label>
+          <div class="round-date">
+            <input type="number" class="finp mono" id="up-round" min="1" step="1" inputmode="numeric" placeholder="#" data-on-input="up-round" title="Draw number (회차)">
+            <input type="date" class="finp" id="up-date" data-on-input="up-date">
+          </div>
           <span class="fhelp" id="up-date-info"></span>
         </div>
         <div class="fgrp">
@@ -225,8 +228,9 @@
     <h3 class="sub-title">🏆 Leaderboard</h3>
     <div class="tbl-wrap">
       <table>
-        <thead><tr><th>#</th><th>Investor</th><th>Invested</th><th>Won</th><th>Net P/L</th><th>ROI</th><th>Weeks</th><th title="Fresh money ÷ days of their active period">Per day</th></tr></thead>
+        <thead id="leaderboard-head"></thead>
         <tbody id="leaderboard-body"></tbody>
+        <tfoot id="leaderboard-foot"></tfoot>
       </table>
     </div>
   </div>

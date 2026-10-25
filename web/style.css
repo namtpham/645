@@ -633,3 +633,10 @@ body.is-admin .admin-hide { display: none !important; }
 .invd-list .week-item { margin-bottom: 6px; }
 .invd-list .wk-row { cursor: default; }
 @media (max-width: 760px) { .lb-nav { width: 38px; height: 52px; font-size: 24px; } }
+
+.round-date { display: grid; grid-template-columns: 92px 1fr; gap: 8px; }
+th.sortable { cursor: pointer; user-select: none; }
+th.sortable:hover, th.sorted { color: var(--dim); }
+.sort-ind { margin-left: 4px; font-size: 9px; opacity: .6; }
+th.sorted .sort-ind { opacity: 1; color: var(--gold); }
+tfoot td { border-top: 1px solid var(--border2); border-bottom: none; font-weight: 600; background: rgba(255,255,255,.02); }

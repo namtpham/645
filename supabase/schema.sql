@@ -272,6 +272,25 @@ begin
    where id = p_user;
 end $$;
 
+-- A photo filed under the wrong week can be moved — but only to the draw its own QR codes name.
+create or replace function public.move_ticket_to_qr_draw(p_ticket uuid)
+returns date language plpgsql security definer set search_path = public as $$
+declare
+  v_rounds int[];
+  v_date date;
+begin
+  if not is_member() then raise exception 'Members only'; end if;
+  select array_agg(distinct (q ->> 'round')::int) into v_rounds
+    from tickets t, jsonb_array_elements(coalesce(t.qr_data, '[]'::jsonb)) q
+   where t.id = p_ticket and q ->> 'round' ~ '^\d+$';
+  if v_rounds is null or array_length(v_rounds, 1) <> 1 then
+    raise exception 'The QR codes on this photo do not name exactly one draw';
+  end if;
+  v_date := date '2002-12-07' + (v_rounds[1] - 1) * 7;
+  update tickets set draw_date = v_date where id = p_ticket;
+  return v_date;
+end $$;
+
 -- ─── Stamping triggers (values the client must not choose) ──────────────────
 
 create or replace function public.stamp_row()
@@ -427,6 +446,7 @@ grant execute on function public.is_member(), public.is_admin(), public.normaliz
                           public.admin_update_member(uuid, text, text),
                           public.admin_set_password(uuid, text)
   to authenticated;
+grant execute on function public.move_ticket_to_qr_draw(uuid) to authenticated;
 grant execute on function public.check_invite(text), public.username_available(text, text),
                           public.ping()
   to anon, authenticated;

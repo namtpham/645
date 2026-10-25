@@ -90,6 +90,7 @@ function drawNo(d) {
   return days >= 0 ? days / 7 + 1 : null;
 }
 
+const drawDate = (n) => addDays(FIRST_DRAW, (n - 1) * 7);
 const fmtD = (d) => d ? new Date(d + 'T12:00:00Z').toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', timeZone: 'UTC' }) : '—';
 const fmtKST = (ts) => ts ? new Date(ts).toLocaleString('en-GB', { timeZone: TZ, day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false }) + ' KST' : '—';
 const drawLabel = (d) => { const n = drawNo(d); return n ? `#${n}` : ''; };
@@ -412,7 +413,7 @@ async function loadAll() {
   S.profiles = pr || [];
   S.investors = iv || [];
   S.weeks = (wk || []).map((w) => ({ ...w, pool_used: +w.pool_used, prize_won: +w.prize_won }));
-  S.tickets = tk || [];
+  S.tickets = sortTickets(tk || []);
   S.ledger = replay(S.weeks);
   if (S.lbTicket) {
     S.lbTicket = S.tickets.find((t) => t.id === S.lbTicket.id) || S.lbTicket;
@@ -465,7 +466,7 @@ function renderTimebar() {
   if (c) {
     const d = describeChange(c);
     const at = new Date(c.at).toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false });
-    $('tb-update').innerHTML = `🔄 Last update <strong>${esc(at)}</strong> (${ago(c.at)}) · ${esc(d.self ? userName(d.self) : userName(c.actor))} ${esc(d.head)} ${esc(d.subject || '')}`;
+    $('tb-update').innerHTML = `🔄 Last update <strong>${esc(at)}</strong> (${ago(c.at)}) · ${esc(d.self ? userName(d.self) : d.auto || userName(c.actor))} ${esc(d.head)} ${esc(d.subject || '')}`;
   } else $('tb-update').textContent = '';
   $('tb-update').title = S.loadedAt ? `Data loaded ${S.loadedAt.toLocaleTimeString('en-GB', { hour12: false })}` : '';
 }
@@ -540,6 +541,7 @@ function renderDashboard() {
   $('s-pool').textContent = money(pool.total);
   $('s-won').textContent = money(totalWon);
   $('s-inv').textContent = money(totalInv);
+  $('s-inv-sub').textContent = `fresh money · ${money(totalInv / Math.max(1, groupDays()))} per day since ${fmtD(groupStart())}`;
   $('s-wks').textContent = weeks.length;
   $('s-tix').textContent = `${S.tickets.length} ticket photo${S.tickets.length === 1 ? '' : 's'}`;
   $('pool-ttl-badge').textContent = money(pool.total);
@@ -880,6 +882,15 @@ async function readTicketQRs(source) {
   return items;
 }
 
+function sortTickets(list) {
+  return [...list].sort((a, b) => (a.draw_date < b.draw_date ? 1 : a.draw_date > b.draw_date ? -1
+    : (a.created_at || '') < (b.created_at || '') ? -1 : 1));
+}
+/** The one draw all QR codes on a photo belong to (null if none or mixed). */
+function qrRound(items) {
+  const rounds = [...new Set((items || []).map((i) => i.round).filter(Boolean))];
+  return rounds.length === 1 ? rounds[0] : null;
+}
 const qrItems = (t) => (Array.isArray(t.qr_data) ? t.qr_data : []);
 const qrNeedsCheck = (i) => !i.manual && (i.status === 'pending' || i.status === 'error');
 const qrProblem = (i) => i.status === 'error' || i.status === 'invalid' || (i.status === 'win' && !(+i.prize > 0));
@@ -988,6 +999,7 @@ function renderLbQr() {
   const elsewhere = (url) => S.tickets.some((x) => x.id !== t.id && qrItems(x).some((i) => i.url === url));
   const head = `<div class="qr-head">
       <strong>🔍 QR codes on this photo${t.qr_data ? ` (${items.length})` : ''}</strong>
+      ${qrRound(items) && qrRound(items) !== drawN ? `<button class="btn btn-primary btn-sm" data-act="qr-move">Move photo to draw #${qrRound(items)} (${esc(fmtD(drawDate(qrRound(items))))})</button>` : ''}
       <div class="btn-row">
         <button class="btn btn-secondary btn-sm" data-act="qr-scan">${t.qr_data ? 'Scan again' : 'Scan photo'}</button>
         ${items.some((i) => !i.manual) ? `<button class="btn btn-secondary btn-sm" data-act="qr-check">Check results now</button>` : ''}
@@ -1073,6 +1085,17 @@ function editLbItem(i, patch) {
   saveQr(items, 'Correction saved.');
 }
 
+async function moveLbToQrDraw() {
+  const t = S.lbTicket, r = qrRound(qrItems(t));
+  if (!r || !confirm(`Move this photo from draw #${drawNo(t.draw_date)} to draw #${r}, as its QR code says?`)) return;
+  const { error } = await S.sb.rpc('move_ticket_to_qr_draw', { p_ticket: t.id });
+  if (error) return fail(/function|schema/i.test(error.message) ? new Error('Run the latest supabase/schema.sql once in Supabase to enable this.') : error);
+  t.draw_date = drawDate(r);
+  toast(`Moved to draw #${r}.`, 'ok');
+  await loadAll();
+  openTicket(t.id);
+}
+
 function addLbLink() {
   const text = prompt('Paste the link from the ticket\'s QR code (scan it with your phone camera):');
   if (!text) return;
@@ -1085,8 +1108,8 @@ function addLbLink() {
 
 // ─── Tickets ──────────────────────────────────────────────────────────────────
 function renderTickets() {
-  if (!$('up-date').value) { $('up-date').value = currentDraw(); }
-  $('up-date-info').textContent = drawNo($('up-date').value) ? `Draw #${drawNo($('up-date').value)}` : '⚠️ Not a Saturday';
+  if (!$('up-date').value) { $('up-date').value = currentDraw(); $('up-round').value = drawNo(currentDraw()); }
+  upDateInfo();
 
   const groups = {};
   for (const t of S.tickets) (groups[t.draw_date] ||= []).push(t);
@@ -1111,7 +1134,8 @@ function renderTickets() {
             <strong>${esc(userName(t.uploaded_by))}</strong>
             <span>${esc(fmtKST(t.created_at))}</span>
             <span>${uploadBadge(t)}${t.game_count ? ` <span class="badge bg-gray">${t.game_count} games</span>` : ''}</span>
-            <span>${t.qr_data ? (qrItems(t).length ? qrBadge(qrSummary([t])) : '<span class="badge bg-red">no QR found</span>') : '<span class="badge bg-gray">QR not scanned</span>'}</span>
+            <span>${t.qr_data ? (qrItems(t).length ? qrBadge(qrSummary([t])) : '<span class="badge bg-red">no QR found</span>') : '<span class="badge bg-gray">QR not scanned</span>'}
+              ${qrRound(t.qr_data) && qrRound(t.qr_data) !== drawNo(t.draw_date) ? `<span class="badge bg-red">QR says #${qrRound(t.qr_data)}</span>` : ''}</span>
             ${t.note ? `<span>${esc(t.note)}</span>` : ''}
           </div>
         </div>`).join('')}
@@ -1119,6 +1143,11 @@ function renderTickets() {
     </div>`;
   }).join('');
   if (S.tab === 'tickets') hydrateImages(el);
+}
+
+function upDateInfo() {
+  const d = $('up-date').value, n = drawNo(d);
+  $('up-date-info').textContent = !d ? '' : n ? `제${n}회 · ${fmtD(d)}${d === currentDraw() ? ' (this week)' : ''}` : '⚠️ Not a Saturday';
 }
 
 function addUploadFiles(files) {
@@ -1163,14 +1192,15 @@ async function prepareImage(file) {
 }
 
 async function uploadTickets() {
-  const draw_date = $('up-date').value;
-  if (!draw_date) return toast('Choose the draw date.', 'err');
-  if (!drawNo(draw_date) && !confirm(`${fmtD(draw_date)} is not a Saturday. Upload anyway?`)) return;
+  const chosen = $('up-date').value;
+  if (!chosen) return toast('Choose the draw (회차) or its date.', 'err');
+  if (!drawNo(chosen) && !confirm(`${fmtD(chosen)} is not a Saturday. Upload anyway?`)) return;
   const games = parseInt($('up-games').value, 10);
   const note = $('up-note').value.trim();
   const btn = $('up-btn'), status = $('up-status');
   btn.disabled = true;
   let done = 0, qrFound = 0;
+  const movedTo = [];
   const total = S.uploads.length;
   try {
     while (S.uploads.length) {
@@ -1179,6 +1209,9 @@ async function uploadTickets() {
       let qr_data = null;   // null = not scanned (reader failed), [] = scanned, nothing found
       try { qr_data = await readTicketQRs(u.file); qrFound += qr_data.length; }
       catch (e) { console.warn('QR scan failed', e); }
+      // The QR code knows the ticket's draw: file the photo there even if another week was chosen
+      const r = qrRound(qr_data), draw_date = r ? drawDate(r) : chosen;
+      if (draw_date !== chosen) movedTo.push(r);
       status.textContent = `Uploading ${done + 1} of ${total}…`;
       const img = await prepareImage(u.file);
       const id = uuid();
@@ -1204,7 +1237,8 @@ async function uploadTickets() {
     }
     status.textContent = '';
     $('up-games').value = $('up-note').value = '';
-    toast(`Uploaded ${done} photo${done > 1 ? 's' : ''} · ${qrFound} QR code${qrFound === 1 ? '' : 's'} read. Good luck! 🍀`, 'ok');
+    toast(`Uploaded ${done} photo${done > 1 ? 's' : ''} · ${qrFound} QR code${qrFound === 1 ? '' : 's'} read.` +
+      (movedTo.length ? ` ${movedTo.length} filed under draw ${[...new Set(movedTo)].map((x) => '#' + x).join(', ')} as their QR codes say.` : ' Good luck! 🍀'), 'ok');
     _lastAutoCheck = 0;
     await loadAll();
   } catch (e) {
@@ -1285,20 +1319,47 @@ function renderInvestors() {
       </div>`;
     }).join('');
 
+  renderLeaderboard(stats);
+}
+
+const LB_COLS = [
+  { key: 'nickname', label: 'Investor', text: true },
+  { key: 'invested', label: 'Invested' },
+  { key: 'won', label: 'Won' },
+  { key: 'net', label: 'Net P/L' },
+  { key: 'weeks', label: 'Weeks' },
+  { key: 'daily', label: 'Per day', title: 'Fresh money ÷ days of their active period' },
+];
+
+function renderLeaderboard(stats = investorStats()) {
+  const { key, dir } = S.lbSort ||= { key: 'net', dir: -1 };
   const rows = S.investors.map((inv) => {
-    const s = stats[inv.id] || {}, net = (s.won || 0) - (s.invested || 0);
-    return { ...inv, ...s, net, roi: s.invested > 0 ? net / s.invested * 100 : 0, days: activeDays(inv), daily: perDay(inv, s.invested || 0) };
-  }).sort((a, b) => b.net - a.net);
+    const s = stats[inv.id] || {};
+    return { ...inv, invested: s.invested || 0, won: s.won || 0, weeks: s.weeks || 0,
+      net: (s.won || 0) - (s.invested || 0), days: activeDays(inv), daily: perDay(inv, s.invested || 0) };
+  }).sort((a, b) => {
+    const x = a[key], y = b[key];
+    return (typeof x === 'string' ? x.localeCompare(y) : x - y) * dir || a.nickname.localeCompare(b.nickname);
+  });
+  $('leaderboard-head').innerHTML = `<tr><th>#</th>${LB_COLS.map((c) => `<th class="sortable ${c.key === key ? 'sorted' : ''}" data-act="lb-sort"
+    data-id="${c.key}" ${c.title ? `title="${c.title}"` : ''}>${c.label}<span class="sort-ind">${c.key === key ? (dir > 0 ? '▲' : '▼') : '↕'}</span></th>`).join('')}</tr>`;
   $('leaderboard-body').innerHTML = rows.map((r, i) => `<tr>
     <td class="fhelp">${i + 1}</td>
     <td><strong>${esc(r.nickname)}</strong></td>
-    <td class="mono">${esc(money(r.invested || 0))}</td>
-    <td class="mono">${esc(money(r.won || 0))}</td>
+    <td class="mono">${esc(money(r.invested))}</td>
+    <td class="mono">${esc(money(r.won))}</td>
     <td class="mono ${r.net >= 0 ? 'green' : 'red'}">${r.net >= 0 ? '+' : ''}${esc(money(r.net))}</td>
-    <td class="mono ${r.roi >= 0 ? 'green' : 'red'}">${r.roi.toFixed(1)}%</td>
-    <td>${r.weeks || 0}</td>
+    <td>${r.weeks}</td>
     <td class="mono" title="${r.days} days">${esc(money(r.daily))} <span class="fhelp">/ ${r.days} d</span></td>
   </tr>`).join('');
+  const inv = sum(rows.map((r) => r.invested)), won = sum(rows.map((r) => r.won)), days = groupDays();
+  $('leaderboard-foot').innerHTML = rows.length ? `<tr>
+    <td></td><td><strong>Group</strong></td>
+    <td class="mono">${esc(money(inv))}</td><td class="mono">${esc(money(won))}</td>
+    <td class="mono ${won - inv >= 0 ? 'green' : 'red'}">${won - inv >= 0 ? '+' : ''}${esc(money(won - inv))}</td>
+    <td>${S.weeks.length}</td>
+    <td class="mono" title="since ${fmtD(groupStart())}">${esc(money(inv / Math.max(1, days)))} <span class="fhelp">/ ${days} d</span></td>
+  </tr>` : '';
 }
 
 function openInvModal(id) {
@@ -1335,6 +1396,11 @@ function activeDays(inv) {
   const today = kstToday(), start = invStart(inv), end = invEnd(inv) < today ? invEnd(inv) : today;
   if (end < start) return 0;
   return Math.round((Date.parse(end + 'T00:00:00Z') - Date.parse(start + 'T00:00:00Z')) / 864e5) + 1;
+}
+/** The group's own period: first draw played (or 17 May 2025) to today, both counted. */
+function groupStart() { return [START_DEFAULT, ...S.weeks.map((w) => w.result_date)].sort()[0]; }
+function groupDays() {
+  return Math.round((Date.parse(kstToday() + 'T00:00:00Z') - Date.parse(groupStart() + 'T00:00:00Z')) / 864e5) + 1;
 }
 const perDay = (inv, invested) => { const d = activeDays(inv); return d > 0 ? invested / d : 0; };
 
@@ -1554,6 +1620,7 @@ function renderKpis(d) {
     tile('Win rate', `${Math.round(wins.length / weeks.length * 100)}%`, `${wins.length} of ${weeks.length} draws won something`, 'bl'),
     tile('Biggest prize', biggest ? esc(money(biggest.prize_won)) : '—', biggest ? `${esc(fmtD(biggest.result_date))} ${drawLabel(biggest.result_date)}` : 'no wins yet'),
     tile('Avg. per draw', esc(money(invested / weeks.length)), 'fresh money invested', 'pu'),
+    tile('Group per day', esc(money(invested / Math.max(1, groupDays()))), `${groupDays()} days since ${esc(fmtD(groupStart()))}`, 'bl'),
     tile('Since last win', `${streak}`, streak === 1 ? 'draw without a prize' : 'draws without a prize', 'rd'),
     tile('Longest dry spell', `${longest}`, 'draws in a row without a prize'),
   ].join('') : '';
@@ -1642,6 +1709,26 @@ function renderCharts() {
 const TABLE_LABEL = { weeks: 'week', investors: 'investor', tickets: 'ticket photo', settings: 'settings', profiles: 'member' };
 const SKIP_FIELDS = new Set(['updated_at', 'updated_by', 'created_at', 'created_by', 'id']);
 
+function qrStatusText(it) {
+  if (it.status === 'win') return `🎉 won ${+it.prize > 0 ? money(it.prize) : '(amount ?)'}`;
+  return { lose: '낙첨', pending: '⏳ waiting', error: '❓ could not check', invalid: '❓ not a lotto QR' }[it.status] || it.status;
+}
+
+function describeQrChange(oldItems, newItems) {
+  const o = Array.isArray(oldItems) ? oldItems : [], n = Array.isArray(newItems) ? newItems : [];
+  const out = [];
+  n.forEach((it, i) => {
+    const prev = o.find((x) => x.url === it.url), name = `QR ${i + 1}${it.round ? ` (#${it.round})` : ''}`;
+    if (!prev) out.push(`${name} added`);
+    else if (prev.status !== it.status || (+prev.prize || 0) !== (+it.prize || 0)) {
+      out.push(`${name}: ${qrStatusText(prev)} → ${qrStatusText(it)}${it.manual && !prev.manual ? ' (corrected by hand)' : ''}`);
+    }
+  });
+  const removed = o.filter((x) => !n.some((it) => it.url === x.url)).length;
+  if (removed) out.push(`${removed} QR code${removed > 1 ? 's' : ''} removed`);
+  return out.length ? out : ['winning numbers compared, no change in result'];
+}
+
 function describeChange(r) {
   const o = r.old_data || {}, n = r.new_data || {}, row = r.new_data || r.old_data || {};
   let subject = '';
@@ -1657,7 +1744,11 @@ function describeChange(r) {
   if (r.action === 'UPDATE') {
     for (const k of Object.keys(n)) {
       if (SKIP_FIELDS.has(k) || JSON.stringify(o[k]) === JSON.stringify(n[k])) continue;
-      if (k === 'investments') {
+      if (k === 'qr_data') {
+        details.push(...describeQrChange(o[k], n[k]));
+      } else if (k === 'draw_date') {
+        details.push(`moved from draw ${drawLabel(o[k])} to ${drawLabel(n[k])}`);
+      } else if (k === 'investments') {
         const ids = new Set([...Object.keys(o[k] || {}), ...Object.keys(n[k] || {})]);
         for (const id of ids) {
           const a = o[k]?.[id] || 0, b = n[k]?.[id] || 0;
@@ -1667,6 +1758,8 @@ function describeChange(r) {
         details.push(`prize ${n[k] ? 'shared to investors' : 'added to pool'}`);
       } else if (['pool_used', 'prize_won', 'big_win_threshold'].includes(k)) {
         details.push(`${k.replace(/_/g, ' ')}: ${money(o[k])} → ${money(n[k])}`);
+      } else if (typeof n[k] === 'object' && n[k] !== null) {
+        details.push(`${k.replace(/_/g, ' ')} updated`);
       } else {
         details.push(`${k.replace(/_/g, ' ')}: ${o[k] ?? '—'} → ${n[k] ?? '—'}`);
       }
@@ -1674,7 +1767,9 @@ function describeChange(r) {
   } else if (r.table_name === 'weeks') {
     details.push(`fresh ${money(sum(Object.values(row.investments || {})))}, from pool ${money(row.pool_used)}, prize ${money(row.prize_won)}`);
   }
-  return { head: `${verb} ${TABLE_LABEL[r.table_name] || r.table_name}`, subject, detail: details.join(' · ') };
+  // Changes without a logged-in user come from the result checker (tickets) or database upgrades
+  const auto = r.actor ? null : r.table_name === 'tickets' ? '🤖 Result checker' : '⚙️ System';
+  return { head: `${verb} ${TABLE_LABEL[r.table_name] || r.table_name}`, subject, detail: details.join(' · '), auto };
 }
 
 async function loadActivity() {
@@ -1684,7 +1779,7 @@ async function loadActivity() {
   const el = $('activity-list');
   el.innerHTML = S.audit.length ? S.audit.map((r) => {
     const d = describeChange(r);
-    const who = d.self ? userName(d.self) : userName(r.actor);
+    const who = d.self ? userName(d.self) : d.auto || userName(r.actor);
     return `<div class="act-row">
       <div class="act-time">${esc(fmtKST(r.at))}</div>
       <div class="act-body">
@@ -1951,6 +2046,11 @@ const ACTIONS = {
   'inv-edit': (el, e) => { e.stopPropagation(); openInvModal(el.dataset.id); },
   'inv-detail': (el) => openInvDetail(el.dataset.id),
   'invd-week': (el) => { closeModal('invd-overlay'); openWeekModal(el.dataset.id); },
+  'lb-sort': (el) => {
+    const k = el.dataset.id, col = LB_COLS.find((c) => c.key === k);
+    S.lbSort = S.lbSort?.key === k ? { key: k, dir: -S.lbSort.dir } : { key: k, dir: col.text ? 1 : -1 };
+    renderLeaderboard();
+  },
   'invd-add': (el) => { closeModal('invd-overlay'); openWeekModal(null, el.dataset.date); },
   'lb-prev': (el, e) => { e.stopPropagation(); navTicket(-1); },
   'lb-next': (el, e) => { e.stopPropagation(); navTicket(1); },
@@ -1962,6 +2062,7 @@ const ACTIONS = {
   'qr-scan': () => scanLbPhoto(),
   'qr-check': () => checkLb(),
   'qr-add': () => addLbLink(),
+  'qr-move': () => moveLbToQrDraw(),
   'qr-remove': (el) => {
     if (!confirm('Remove this QR code from the photo? (e.g. a wrong detection)')) return;
     const items = qrItems(S.lbTicket).filter((_, i) => i !== +el.dataset.i);
@@ -1989,7 +2090,8 @@ const ACTIONS = {
 const INPUTS = {
   'wm-preview': () => previewWeek(),
   'wm-date': () => refreshWeekPool(),
-  'up-date': () => { const n = drawNo($('up-date').value); $('up-date-info').textContent = n ? `Draw #${n}` : '⚠️ Not a Saturday'; },
+  'up-date': () => { $('up-round').value = drawNo($('up-date').value) || ''; upDateInfo(); },
+  'up-round': () => { const n = parseInt($('up-round').value, 10); if (n >= 1) $('up-date').value = drawDate(n); upDateInfo(); },
   'money-hint': (el) => moneyHint(el.id, el.dataset.hint),
   'cur-select': (el) => { _curDraft.currency = el.value; renderCurrencyPicker(); moneyHint('cfg-threshold', 'cfg-threshold-hint'); },
   'qr-status': (el, e) => { if (e.type === 'change') editLbItem(+el.dataset.i, { status: el.value }); },
