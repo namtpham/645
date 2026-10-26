@@ -71,14 +71,19 @@ with an invitation key from the admin.
     already chosen (purple, marked "asked by" whoever pressed it).
   - **➕ Add to picks** on any suggestion puts it into the first empty group (or a new group).
     With your own numbers typed in Suggestion, those stay yours and the rest are the engine's.
-  - A complete group gets a score on the same scale as the ranked suggestions. **Our tickets**
-    lists all groups combined, with **Copy complete groups**.
+  - **Our tickets** sits at the top, above the group pickers, so the week's numbers are the first
+    thing you see: one row per group that has numbers (empty groups are left out), with
+    **Copy complete groups**. A complete group can also get a score on the same scale as the
+    ranked suggestions; stars and scores are hidden until you press **⭐ Show scores**
+    (remembered on that device).
   - **Bought by …:** when a ticket photo for that draw is uploaded, its QR games are compared
     with our groups. The same 6 numbers, or the closest group with at least 5 in common, is
     marked **🛒 Bought by** whoever uploaded it (a 5-of-6 match also says which number differs).
     Games that match no group are added to Our tickets as extra rows, so the list is the union of
-    what we chose on the site and what was really bought.
-  - **Focus while copying:** tap a row of Our tickets and everything else on the page is dimmed,
+    what we chose on the site and what was really bought. Only bought tickets get a blue frame,
+    a blue background and a **🛒 Bought · name** label, in the list and on the group card; the
+    rest stay plain.
+  - **Focus while copying:** tap a row of Our tickets that isn't bought yet and everything else on the page is dimmed,
     so you copy the right numbers onto the slip. Tap another row to move the focus, the same row
     again (or anywhere else, or Esc) to go back to normal.
   - Changes show up live on every member's screen. Needs the database update below
@@ -98,7 +103,9 @@ with an invitation key from the admin.
     up to 5 numbers you already like; suggestions are then built around them (gold rings), and
     **All N left** fills the rest. The choice is remembered on that device.
 - **📺 Live** (Picks tab): while watching the draw, tap each number as it comes out (the 7th
-  is the bonus). Our tickets (as bought) are ranked on the left by how many numbers they match,
+  is the bonus). The taps are shared: every member sees the same numbers in real time and anyone
+  can tap (needs the database update: run `supabase/schema.sql` again, which adds `live_picks`;
+  until then the taps stay on your device). Our tickets (as bought) are ranked on the left by how many numbers they match,
   the system's top suggestions (as many as our tickets) on the right, with 등수 and prizes once 6
   numbers are in. It works any time for fun: outside Saturday 20:00–24:00 KST it is a test and
   clears itself after 10 minutes without a tap. When the official result is downloaded, it
@@ -402,4 +409,4 @@ python3 -m http.server -d web 8000
 
 `supabase/schema.sql` is safe to run again. It keeps existing data and re-applies
 functions, policies and grants. Run it again after updates that add tables, for example
-**Our numbers** (tables `pick_plans` and `group_picks`).
+**Our numbers** (tables `pick_plans` and `group_picks`) and shared **Live** picks (`live_picks`).

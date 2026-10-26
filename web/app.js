@@ -416,7 +416,7 @@ async function loadAll() {
   S.weeks = (wk || []).map((w) => ({ ...w, pool_used: +w.pool_used, prize_won: +w.prize_won }));
   S.tickets = sortTickets(tk || []);
   S.ledger = replay(S.weeks);
-  await loadBoard().catch(console.error);
+  await Promise.all([loadBoard(), loadLive()]).catch(console.error);
   if (S.lbTicket) {
     S.lbTicket = S.tickets.find((t) => t.id === S.lbTicket.id) || S.lbTicket;
     if ($('lb-overlay').classList.contains('open')) renderLbQr();
@@ -463,7 +463,7 @@ function startRealtime() {
   if (_channel) return;
   _channel = S.sb.channel('db-changes')
     .on('postgres_changes', { event: '*', schema: 'public' },
-      (p) => (BOARD_TABLES.includes(p?.table) ? scheduleBoardReload() : scheduleReload()))
+      (p) => (p?.table === 'live_picks' ? scheduleLiveReload() : BOARD_TABLES.includes(p?.table) ? scheduleBoardReload() : scheduleReload()))
     .subscribe((status) => $('syncDot').classList.toggle('off', status !== 'SUBSCRIBED'));
 }
 function stopRealtime() {
@@ -1139,7 +1139,9 @@ function renderLbQr() {
         <a class="fhelp" href="${esc(it.url)}" target="_blank" rel="noopener noreferrer">Open result page ↗</a>
       </div>`).join('');
   const s = qrSummary([t]);
-  el.innerHTML = head + body + (s.n ? `<div class="qr-total">This photo: ${qrBadge(s)}</div>` : '');
+  // a failed check stays visible when live updates re-draw the panel
+  const err = S.lbError?.id === t.id ? `<div class="form-error qr-error">${S.lbError.html}</div>` : '';
+  el.innerHTML = err + head + body + (s.n ? `<div class="qr-total">This photo: ${qrBadge(s)}</div>` : '');
 }
 
 async function saveQr(items, msg = 'Saved.') {
@@ -1174,13 +1176,14 @@ async function checkLb() {
     const { data, error } = await S.sb.from('tickets').select('*').eq('id', t.id).maybeSingle();
     if (error) throw error;
     Object.assign(t, data);
+    S.lbError = null;
     renderLbQr();
     toast('Results checked.', 'ok');
     scheduleReload();
   } catch (e) {
     console.warn(e);
+    S.lbError = { id: t.id, html: checkFailHelp(e) };
     renderLbQr();
-    $('lb-qr').insertAdjacentHTML('afterbegin', `<div class="form-error qr-error">${checkFailHelp(e)}</div>`);
     toast(e.unreachable ? 'Could not reach the result checker — see the note under the photo.' : e.message, 'err');
   }
 }
@@ -1710,6 +1713,14 @@ function boughtNote(b) {
   return `the ticket has ${b.extra.map(two).join(', ')} instead of ${b.missing.map(two).join(', ')}`;
 }
 
+// Stars and scores in ✍️ Picks are hidden unless a member turns them on (this device only)
+let _showScores = (() => { try { return localStorage.getItem('645-board-scores') === '1'; } catch { return false; } })();
+function toggleScores() {
+  _showScores = !_showScores;
+  try { localStorage.setItem('645-board-scores', _showScores ? '1' : '0'); } catch { /* private mode */ }
+  renderBoard();
+}
+
 // ── Focus on one row of "Our tickets" (copying numbers onto paper slips): everything else is dimmed
 let _focusKey = null;
 function setFocus(key) {
@@ -1773,19 +1784,47 @@ function renderBoard() {
   const done = groups.filter((x) => x.full);
   const { bought, extras } = matchBought(groups, realGames(B.round));
   const boughtBadge = (b) => `<span class="bg-badge bought" title="${esc(`${memberName(b.by)}'s ticket photo, game ${b.label}`)}">🛒 Bought by ${esc(memberName(b.by))}</span>`;
-  $('board-body').innerHTML = `<div class="board-groups">${groups.map((x) => `<div class="bgroup ${x.full ? 'full' : 'open'}" data-g="${x.g}">
+  const rows = groups.filter((x) => x.nums.length), nBought = Object.keys(bought).length + extras.length;
+  $('board-body').innerHTML = `<div class="board-sum">
+      <div class="bsum-hd">
+        <div class="card-title">🧾 Our tickets</div>
+        <span class="fhelp">${done.length} of ${B.groups} groups complete · ${nBought} bought${extras.length ? ` (${extras.length} extra from photos)` : ''}
+          · ${esc(money((B.groups + extras.length) * TICKET_PRICE))}</span>
+        <button class="btn btn-ghost btn-sm" data-act="board-scores" aria-pressed="${_showScores}">${_showScores ? '⭐ Hide scores' : '⭐ Show scores'}</button>
+        ${done.length ? `<button class="btn btn-ghost btn-sm" data-act="copy" data-text="${esc(done.map((x) => `${x.g}: ${x.nums.map(two).join(' ')}`).join('\n'))}">Copy complete groups</button>` : ''}
+      </div>
+      ${rows.length ? `<p class="fhelp bsum-tip">Tap a row that is not bought yet to dim everything else while you copy it onto a slip; tap it again (or anywhere else) to go back.</p>` : ''}
+      ${rows.map((x) => {
+        const b = bought[x.g];
+        return `<div class="bsum-row ${b ? 'is-bought' : x.full ? 'full' : 'open'}" ${b ? '' : `data-act="bsum-focus" data-key="g${x.g}"`}>
+        <span class="bsum-n">${x.g}</span>
+        <span class="bsum-balls">${x.picks.map((p) => `<span class="ball mc" style="--c:${pickColor(p)}" title="${esc(pickWho(p))}">${two(p.num)}</span>`).join('')}${'<span class="ball open">?</span>'.repeat(6 - x.nums.length)}</span>
+        <span class="bsum-end">${b ? `<span class="bought-pill">🛒 Bought · ${esc(memberName(b.by))}</span>`
+          : x.full ? (_showScores && x.r ? `<span class="fhelp"><span class="stars">${stars(x.r.fit)}</span> ${x.r.fit.toFixed(0)}</span>` : '<span class="bsum-ready">✓ ready</span>')
+          : `<span class="bsum-todo">${6 - x.nums.length} to go</span>`}</span>
+        ${b && boughtNote(b) ? `<span class="bsum-note">⚠️ ${esc(boughtNote(b))}</span>` : ''}
+      </div>`; }).join('')}
+      ${extras.map((gm) => `<div class="bsum-row is-bought extra">
+        <span class="bsum-n">+</span>
+        <span class="bsum-balls">${gm.nums.map((n) => ball(n, 'hit')).join('')}</span>
+        <span class="bsum-end"><span class="bought-pill">🛒 Bought · ${esc(memberName(gm.by))}</span></span>
+        <span class="bsum-note">Extra: on ${esc(memberName(gm.by))}'s photo (game ${esc(gm.label)}), not one of our groups</span>
+      </div>`).join('')}
+      ${!rows.length && !extras.length ? '<p class="fhelp">No numbers picked yet. Pick them in the groups below.</p>' : ''}
+    </div>
+    <div class="board-groups">${groups.map((x) => `<div class="bgroup ${bought[x.g] ? 'bought' : x.full ? 'full' : 'open'}" data-g="${x.g}">
       <div class="bg-hd">
         <span class="bg-title">Group ${x.g}</span>
-        ${x.full ? '<span class="bg-badge done">✓ Complete</span>' : `<span class="bg-badge todo">${x.nums.length}/6 · ${6 - x.nums.length} to go</span>`}
-        <div class="bg-score">${scoreHtml(x)}</div>
+        ${bought[x.g] ? boughtBadge(bought[x.g]) : x.full ? '<span class="bg-badge done">✓ Complete</span>' : `<span class="bg-badge todo">${x.nums.length}/6 · ${6 - x.nums.length} to go</span>`}
+        <div class="bg-score">${_showScores ? scoreHtml(x) : ''}</div>
       </div>
-      ${bought[x.g] ? `<div class="bg-bought">${boughtBadge(bought[x.g])}${boughtNote(bought[x.g]) ? ` <span class="warn">⚠️ ${esc(boughtNote(bought[x.g]))}</span>` : ''}</div>` : ''}
+      ${bought[x.g] && boughtNote(bought[x.g]) ? `<div class="bg-bought"><span class="warn">⚠️ ${esc(boughtNote(bought[x.g]))}</span></div>` : ''}
       <div class="bg-nums">${layoutOrder(x.g).map((n) => {
         const p = x.picks.find((q) => q.num === n);
         return `<button type="button" class="bn ${p ? 'on' : ''}" data-act="board-num" data-g="${x.g}" data-n="${n}"
           ${p ? `style="--c:${pickColor(p)}" title="${n} · ${esc(pickWho(p))}"` : `title="${n}"`} ${busy(x.g)}>${n}</button>`;
       }).join('')}</div>
-      ${x.full && x.r ? `<div class="bg-why">${x.r.reasons.map((t) => `<span>${esc(t)}</span>`).join('')}</div>` : ''}
+      ${_showScores && x.full && x.r ? `<div class="bg-why">${x.r.reasons.map((t) => `<span>${esc(t)}</span>`).join('')}</div>` : ''}
       <div class="bg-foot">
         ${x.full ? '' : `<button class="btn btn-ghost btn-sm" data-act="board-engine" data-g="${x.g}" data-mode="one" ${busy(x.g)} title="The engine adds one number that fits the ones already picked">🤖 +1</button>
         <button class="btn btn-ghost btn-sm" data-act="board-engine" data-g="${x.g}" data-mode="fill" ${busy(x.g)}>🤖 Fill the rest</button>`}
@@ -1796,27 +1835,7 @@ function renderBoard() {
       </div>
     </div>`).join('')}</div>
     ${hidden ? `<p class="fhelp" style="margin-top:10px">Groups above ${B.groups} still hold ${hidden} number${hidden > 1 ? 's' : ''}; raise the count to see them again.</p>` : ''}
-    <div class="board-sum">
-      <div class="bsum-hd">
-        <div class="card-title">🧾 Our tickets</div>
-        <span class="fhelp">${done.length} of ${B.groups} groups complete · ${Object.keys(bought).length} bought${extras.length ? ` · ${extras.length} extra from photos` : ''}
-          · ${esc(money((B.groups + extras.length) * TICKET_PRICE))}</span>
-        ${done.length ? `<button class="btn btn-ghost btn-sm" data-act="copy" data-text="${esc(done.map((x) => `${x.g}: ${x.nums.map((n) => String(n).padStart(2, '0')).join(' ')}`).join('\n'))}">Copy complete groups</button>` : ''}
-      </div>
-      <p class="fhelp bsum-tip">Tap a row to dim everything else while you copy it onto a slip; tap it again (or anywhere else) to go back.</p>
-      ${groups.map((x) => `<div class="bsum-row ${x.full ? 'full' : 'open'}${bought[x.g] ? ' is-bought' : ''}" data-act="bsum-focus" data-key="g${x.g}">
-        <span class="bsum-n">${x.g}</span>
-        <span class="bsum-balls">${x.picks.map((p) => `<span class="ball mc" style="--c:${pickColor(p)}" title="${esc(pickWho(p))}">${two(p.num)}</span>`).join('')}${'<span class="ball open">?</span>'.repeat(6 - x.nums.length)}
-          ${bought[x.g] ? `<span class="bsum-bought">🛒 ${esc(memberName(bought[x.g].by))}${boughtNote(bought[x.g]) ? ` · ⚠️ ${esc(boughtNote(bought[x.g]))}` : ''}</span>` : ''}</span>
-        <span class="fhelp">${x.full ? (x.r ? `<span class="stars">${stars(x.r.fit)}</span> ${x.r.fit.toFixed(0)}` : '✓') : `<span class="bsum-todo">${6 - x.nums.length} to go</span>`}</span>
-      </div>`).join('')}
-      ${extras.map((gm, i) => `<div class="bsum-row extra is-bought" data-act="bsum-focus" data-key="x${i}">
-        <span class="bsum-n">+</span>
-        <span class="bsum-balls">${gm.nums.map((n) => ball(n, 'hit')).join('')}
-          <span class="bsum-bought">🛒 ${esc(memberName(gm.by))}'s photo, game ${esc(gm.label)} · not one of our groups</span></span>
-        <span class="fhelp">${scale ? `<span class="stars">${stars(scale.rate(gm.nums).fit)}</span> ${scale.rate(gm.nums).fit.toFixed(0)}` : ''}</span>
-      </div>`).join('')}
-    </div>`;
+`;
   applyFocus();
 }
 
@@ -1903,8 +1922,22 @@ async function clearMine(g) {
 }
 
 // ── Live results: tap the numbers as the draw is streamed, our tickets and the top suggestions re-rank
+// Shared by all members through the live_picks table (realtime); on this device only until that table exists.
 const LIVE_RESET_MS = 10 * 60e3;   // outside draw time, a test run is cleared after 10 minutes without a tap
-let _live = (() => { try { return JSON.parse(localStorage.getItem('645-live')) || null; } catch { return null; } })();
+let _live = null, _liveShared = null;   // _liveShared: true = live_picks table, false = this device only
+
+async function loadLive() {
+  const round = liveRound();
+  const { data, error } = await S.sb.from('live_picks').select('*').eq('round', round).maybeSingle();
+  _liveShared = !error;
+  if (error) {   // database not updated yet: keep the taps on this device
+    let local = null;
+    try { local = JSON.parse(localStorage.getItem('645-live')); } catch { /* none */ }
+    _live = local?.round === round ? local : { round, main: [], bonus: null, at: 0 };
+    return;
+  }
+  _live = { round, main: data?.main || [], bonus: data?.bonus ?? null, at: data ? Date.parse(data.updated_at) : 0, by: data?.updated_by || null };
+}
 let _liveBoard = null, _liveSugg = null, _liveSuggKey = '';
 
 /** From Saturday 20:00 KST (sales close) to the end of Sunday: the draw just held; otherwise the coming one. */
@@ -1922,11 +1955,25 @@ function inDrawTime(now = Date.now()) {
 const mss = (ms) => `${Math.floor(ms / 60000)}:${String(Math.floor(ms / 1000) % 60).padStart(2, '0')}`;
 function liveState() {
   const round = liveRound();
-  if (!_live || _live.round !== round) _live = { round, main: [], bonus: null, at: 0 };
+  if (!_live || _live.round !== round) {
+    _live = { round, main: [], bonus: null, at: 0 };
+    if (_liveShared !== false) loadLive().then(() => S.tab === 'picks' && _picksSec === 'live' && renderLive()).catch(console.error);
+  }
+  // every member's screen applies the same rule, so nothing needs to be written to clear a test run
   if (_live.at && !inDrawTime() && Date.now() - _live.at > LIVE_RESET_MS) Object.assign(_live, { main: [], bonus: null, at: 0 });
   return _live;
 }
-function saveLive() { try { localStorage.setItem('645-live', JSON.stringify(_live)); } catch { /* private mode */ } }
+async function saveLive() {
+  _live.by = S.me.id;
+  if (!_liveShared) { try { localStorage.setItem('645-live', JSON.stringify(_live)); } catch { /* private mode */ } return; }
+  const { error } = await S.sb.from('live_picks').upsert({ round: _live.round, main: _live.main, bonus: _live.bonus }, { onConflict: 'round' });
+  if (error) { fail(error); await loadLive(); renderLive(); }
+}
+let _liveT = null;
+function scheduleLiveReload() {
+  clearTimeout(_liveT);
+  _liveT = setTimeout(() => loadLive().then(() => S.tab === 'picks' && _picksSec === 'live' && renderLive()).catch(console.error), 150);
+}
 
 function liveTap(n) {
   const L = liveState();
@@ -2013,9 +2060,13 @@ function renderLive() {
   const main = draw ? draw.numbers : L.main, bonus = draw ? draw.bonus : L.bonus, final = !!draw;
   $('live-for').textContent = `draw #${round} · ${fmtD(drawDate(round))}`;
   const left = !draw && L.at && !inDrawTime() ? Math.max(0, LIVE_RESET_MS - (Date.now() - L.at)) : 0;
-  $('live-mode').innerHTML = draw ? `<p class="live-mode official">✓ Official result for #${round}${L.main.length ? ' — it replaced the numbers tapped live' : ''}.</p>`
-    : inDrawTime() ? '<p class="live-mode on">🔴 Draw time: taps are kept until the official result arrives.</p>'
-    : `<p class="live-mode test">🧪 Test mode (not draw time)${left ? ` · clears in <span id="live-left">${mss(left)}</span> without a tap` : ''}.</p>`;
+  const who = !draw && L.at && L.by ? ` · last tap by ${esc(L.by === S.me.id ? 'you' : memberName(L.by))}` : '';
+  $('live-mode').innerHTML = (draw ? `<p class="live-mode official">✓ Official result for #${round}${L.main.length ? ' — it replaced the numbers tapped live' : ''}.</p>`
+    : inDrawTime() ? `<p class="live-mode on">🔴 Draw time: taps are kept until the official result arrives${who}.</p>`
+    : `<p class="live-mode test">🧪 Test mode (not draw time)${left ? ` · clears in <span id="live-left">${mss(left)}</span> without a tap` : ''}${who}.</p>`)
+    + (_liveShared === false ? `<p class="fhelp">Only on this device: sharing live picks with everyone needs the database update
+      (${isAdmin() ? 'run <code>supabase/schema.sql</code> again' : 'ask the admin'}).</p>`
+      : '<p class="fhelp live-shared">👥 Shared: every member sees the same numbers, and anyone can tap.</p>');
   const slot = (n, i, cls = '') => (n ? ball(n, cls || 'hit') : `<span class="ball open">${i}</span>`);
   $('live-drawn').innerHTML = `${[0, 1, 2, 3, 4, 5].map((i) => slot(main[i], i + 1)).join('')}<span class="plus">+</span>${slot(bonus, 'B', 'hit-bonus')}`;
   $('live-pad').innerHTML = [...Array(45)].map((_, i) => {
@@ -2045,7 +2096,7 @@ setInterval(() => {
   if (S.tab !== 'picks' || _picksSec !== 'live' || !_live?.at) return;
   const before = _live.main.length + (_live.bonus != null);
   liveState();
-  if (before !== _live.main.length + (_live.bonus != null)) { saveLive(); renderLive(); return; }
+  if (before !== _live.main.length + (_live.bonus != null)) { renderLive(); return; }
   const el = $('live-left');
   if (el) el.textContent = mss(Math.max(0, LIVE_RESET_MS - (Date.now() - _live.at)));
 }, 1000);
@@ -3025,6 +3076,7 @@ const ACTIONS = {
   'pick-merge': (el) => { el.disabled = true; mergeSuggestion(+el.dataset.i); },
   'picks-section': (el) => setPicksSection(el.dataset.sec),
   'bsum-focus': (el) => setFocus(el.dataset.key),
+  'board-scores': () => toggleScores(),
   'live-num': (el) => liveTap(+el.dataset.n),
   'live-undo': () => liveUndo(),
   'live-reset': () => liveReset(),

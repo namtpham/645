@@ -165,6 +165,15 @@ create table if not exists public.group_picks (
   primary key (round, grp, num)
 );
 
+-- Live results (Picks → Live): the numbers members tap while watching the draw, shared by everyone.
+create table if not exists public.live_picks (
+  round      int primary key,
+  main       int[] not null default '{}',   -- winning numbers in the order they came out (at most 6)
+  bonus      int,
+  updated_by uuid references public.profiles (id) on delete set null default auth.uid(),
+  updated_at timestamptz not null default now()
+);
+
 -- ─── Helpers ────────────────────────────────────────────────────────────────
 
 create or replace function public.is_member()
@@ -391,6 +400,24 @@ drop trigger if exists touch_pick_plan on public.pick_plans;
 create trigger touch_pick_plan before insert or update on public.pick_plans
   for each row execute function public.touch_pick_plan();
 
+create or replace function public.check_live_picks()
+returns trigger language plpgsql as $$
+begin
+  if coalesce(cardinality(new.main), 0) > 6
+     or exists (select 1 from unnest(new.main) n where n not between 1 and 45)
+     or (select count(distinct n) from unnest(new.main) n) <> coalesce(cardinality(new.main), 0)
+     or (new.bonus is not null and (new.bonus not between 1 and 45 or new.bonus = any (new.main))) then
+    raise exception 'Live picks need up to 6 different numbers from 1 to 45 and a different bonus';
+  end if;
+  new.updated_by := auth.uid();
+  new.updated_at := now();
+  return new;
+end $$;
+
+drop trigger if exists check_live_picks on public.live_picks;
+create trigger check_live_picks before insert or update on public.live_picks
+  for each row execute function public.check_live_picks();
+
 -- ─── Audit log (who changed what, readable by every member) ─────────────────
 
 create or replace function public.audit()
@@ -427,6 +454,7 @@ alter table public.audit_log enable row level security;
 alter table public.draws     enable row level security;
 alter table public.pick_plans  enable row level security;
 alter table public.group_picks enable row level security;
+alter table public.live_picks  enable row level security;
 
 do $$
 declare p record;
@@ -434,7 +462,7 @@ begin
   for p in select policyname, tablename from pg_policies
            where schemaname = 'public'
              and tablename in ('profiles', 'invites', 'settings', 'investors', 'weeks', 'tickets', 'audit_log', 'draws',
-                               'pick_plans', 'group_picks')
+                               'pick_plans', 'group_picks', 'live_picks')
   loop
     execute format('drop policy %I on public.%I', p.policyname, p.tablename);
   end loop;
@@ -488,6 +516,10 @@ create policy "read group picks" on public.group_picks for select to authenticat
 create policy "pick a number"    on public.group_picks for insert to authenticated with check (public.is_member());
 create policy "take back a number" on public.group_picks for delete to authenticated
   using (public.is_member() and (picked_by = auth.uid() or by_engine or public.is_admin()));
+create policy "read live picks" on public.live_picks for select to authenticated using (public.is_member());
+create policy "add live picks"  on public.live_picks for insert to authenticated with check (public.is_member());
+create policy "edit live picks" on public.live_picks for update to authenticated
+  using (public.is_member()) with check (public.is_member());
 
 -- ─── Grants ─────────────────────────────────────────────────────────────────
 
@@ -501,6 +533,7 @@ grant select                         on public.profiles, public.audit_log, publi
 grant update (display_name)          on public.profiles  to authenticated;
 grant select, insert, update         on public.pick_plans  to authenticated;
 grant select, insert, delete         on public.group_picks to authenticated;
+grant select, insert, update         on public.live_picks  to authenticated;
 
 revoke execute on all functions in schema public from public, anon;
 grant execute on function public.is_member(), public.is_admin(), public.normalize_invite(text),
@@ -541,7 +574,7 @@ create policy "645 delete tickets" on storage.objects for delete to authenticate
 do $$
 declare t text;
 begin
-  foreach t in array array['investors', 'weeks', 'tickets', 'settings', 'profiles', 'draws', 'pick_plans', 'group_picks'] loop
+  foreach t in array array['investors', 'weeks', 'tickets', 'settings', 'profiles', 'draws', 'pick_plans', 'group_picks', 'live_picks'] loop
     if not exists (select 1 from pg_publication_tables
                    where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = t) then
       execute format('alter publication supabase_realtime add table public.%I', t);
