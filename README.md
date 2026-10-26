@@ -56,13 +56,21 @@ with an invitation key from the admin.
   - **odd vs even draws (회차)**: spent, won, money back per ₩1,000 and how often we win, for
     odd- and even-numbered draws. It also reports how often a gap that big appears when the same
     draws are split into two groups at random, which tells luck from a real pattern.
-- **Our numbers** (Picks tab, first card): we pick the coming draw's numbers together.
+- **Picks tab** has three sections: **✍️ Picks** (our own numbers), **🎯 Suggestion** (the
+  engine's ranked sets, number statistics, backtest) and **🕰️ Simulation** (a past week). The
+  section you last opened is remembered on that device.
+- **Our numbers** (✍️ Picks): we pick the coming draw's numbers together.
   - Choose how many groups of 6 we play (quick buttons 5–30, ±1).
   - Each group shows 45 round buttons: gray = free, coloured = taken. Every member has their
-    own colour. Tap a number to add it; tap it again to take it back. Only the person who
+    own colour. The buttons are shuffled by default (so nobody picks a row or diagonal of a
+    1–45 grid, which many players do); **🔀 Random / 🔢 Sorted** switches each group, keeps the
+    chosen numbers, and is remembered on that device. Complete groups have a green frame and
+    **✓ Complete**; unfinished ones a dashed amber frame with how many are still to pick. Tap a number to add it; tap it again to take it back. Only the person who
     picked a number (or an admin) can take it back.
   - **🤖 +1** and **🤖 Fill the rest** ask the suggestion engine to pick around the numbers
     already chosen (purple, marked "asked by" whoever pressed it).
+  - **➕ Add to picks** on any suggestion puts it into the first empty group (or a new group).
+    With your own numbers typed in Suggestion, those stay yours and the rest are the engine's.
   - A complete group gets a score on the same scale as the ranked suggestions. **Our tickets**
     lists all groups combined, with **Copy complete groups**.
   - Changes show up live on every member's screen. Needs the database update below

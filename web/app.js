@@ -445,7 +445,7 @@ async function loadDraws() {
 let _reloadT = null, _boardT = null, _channel = null;
 function scheduleBoardReload() {
   clearTimeout(_boardT);
-  _boardT = setTimeout(() => loadBoard().then(() => S.tab === 'picks' && renderBoard()).catch(console.error), 250);
+  _boardT = setTimeout(() => loadBoard().then(() => S.tab === 'picks' && renderPicks()).catch(console.error), 250);
 }
 function scheduleReload() {
   clearTimeout(_reloadT);
@@ -508,7 +508,7 @@ function renderAll() {
   renderInvestors();
   renderSettings();
   if (S.tab === 'charts') renderCharts();
-  if (S.tab === 'picks') renderBoard();
+  if (S.tab === 'picks') renderPicks();
 }
 
 function goTab(name) {
@@ -1448,21 +1448,48 @@ function renderPickControls() {
 }
 const pickHistory = () => Object.values(S.draws).filter((d) => d.numbers?.length === 6).sort((a, b) => a.round - b.round);
 
+// Picks tab sections: our own numbers, the engine's suggestions, past-week simulation
+const PICK_SECTIONS = ['board', 'suggest', 'sim'];
+let _picksSec = (() => { try { return localStorage.getItem('645-picks-sec'); } catch { return null; } })();
+if (!PICK_SECTIONS.includes(_picksSec)) _picksSec = 'board';
+let _historyErr = '';
+
+function setPicksSection(sec) {
+  _picksSec = PICK_SECTIONS.includes(sec) ? sec : 'board';
+  try { localStorage.setItem('645-picks-sec', _picksSec); } catch { /* private mode */ }
+  renderPicks();
+}
+
+/** The full history of winning numbers is downloaded once (by the result checker); true when it is here. */
+function historyReady() {
+  const latestOut = drawNo(addDays(currentDraw(), -7));
+  if (pickHistory().length >= latestOut - 5) return true;
+  if (!_historyAsked) {
+    _historyAsked = true;
+    checkResults().then(() => loadAll()).then(() => S.tab === 'picks' && renderPicks())
+      .catch((e) => { _historyErr = checkFailHelp(e); if (S.tab === 'picks') renderPicks(); });
+  }
+  return false;
+}
+
 function renderPicks() {
-  renderBoard();
+  document.querySelectorAll('#picks-sections .seg-btn').forEach((b) => b.classList.toggle('active', b.dataset.sec === _picksSec));
+  for (const sec of PICK_SECTIONS) $('pk-' + sec).hidden = sec !== _picksSec;
+  $('picks-for').textContent = `for draw #${drawNo(currentDraw())} · ${fmtD(currentDraw())}`;
+  const ready = historyReady();
+  if (_picksSec === 'board') renderBoard();
+  else if (_picksSec === 'sim') renderSim();
+  else renderSuggestions(ready);
+}
+
+function renderSuggestions(ready) {
   const target = drawNo(currentDraw()), latestOut = drawNo(addDays(currentDraw(), -7));
   const hist = pickHistory().filter((d) => d.round < target);
-  $('picks-for').textContent = `for draw #${target} · ${fmtD(currentDraw())}`;
-  if (hist.length < latestOut - 5) {
-    $('picks-list').innerHTML = `<div class="empty"><div class="spinner" style="margin:0 auto 12px"></div>
+  if (!ready) {
+    $('picks-list').innerHTML = _historyErr ? `<div class="form-error">${_historyErr}</div>` : `<div class="empty"><div class="spinner" style="margin:0 auto 12px"></div>
       <p>Loading past winning numbers (${hist.length} of ${latestOut} draws)…</p>
       <p class="fhelp">The result checker downloads the full history once. This needs the check-tickets function.</p></div>`;
     $('picks-grid').innerHTML = $('picks-backtest').innerHTML = '';
-    if (!_historyAsked) {
-      _historyAsked = true;
-      checkResults().then(() => loadAll()).then(() => S.tab === 'picks' && renderPicks())
-        .catch((e) => { $('picks-list').innerHTML = `<div class="form-error">${checkFailHelp(e)}</div>`; });
-    }
     return;
   }
   renderPickControls();
@@ -1473,7 +1500,7 @@ function renderPicks() {
       // building partial suggestions takes up to a second; show that something is happening
       _picksKey = `working:${key}`;
       $('picks-list').innerHTML = '<div class="empty"><div class="spinner" style="margin:0 auto 12px"></div><p>Working out suggestions…</p></div>';
-      setTimeout(() => S.tab === 'picks' && _picksKey === `working:${key}` && renderPicks(), 20);
+      setTimeout(() => S.tab === 'picks' && _picksSec === 'suggest' && _picksKey === `working:${key}` && renderPicks(), 20);
       return;
     }
     _picks = partial
@@ -1493,6 +1520,9 @@ function renderPicks() {
       ${own.length ? `<span>${ball(own[0], 'own')}yours</span>` : ''}
       ${open ? `<span><span class="ball open">?</span>you choose${open > 1 ? ` (${open})` : ''}</span>` : ''}
     </div>`;
+  // suggestions already merged into our picks (same numbers in a group)
+  const inBoard = new Map();
+  for (let g = S.board.groups; g >= 1; g--) inBoard.set(groupPicks(g).map((q) => q.num).join(), g);
   $('picks-list').innerHTML = key6 + (picks.length ? picks.map((p, i) => `<div class="pick">
       <div class="pick-rank">${i + 1}</div>
       <div class="pick-main">
@@ -1503,7 +1533,11 @@ function renderPicks() {
         <div class="stars">${stars(p.fit)}</div>
         <div class="fhelp">score ${p.fit.toFixed(0)}</div>
       </div>
-      <button class="btn btn-ghost btn-sm" data-act="copy" data-text="${p.nums.map((n) => String(n).padStart(2, '0')).join(' ')}" title="Copy numbers">Copy</button>
+      <div class="pick-acts">
+        ${inBoard.has(p.nums.join()) ? `<span class="fhelp in-board">✓ in group ${inBoard.get(p.nums.join())}</span>`
+          : `<button class="btn btn-secondary btn-sm" data-act="pick-merge" data-i="${i}" title="Put these numbers into the next empty group in ✍️ Picks">➕ Add to picks</button>`}
+        <button class="btn btn-ghost btn-sm" data-act="copy" data-text="${p.nums.map((n) => String(n).padStart(2, '0')).join(' ')}" title="Copy numbers">Copy</button>
+      </div>
     </div>`).join('') : '<div class="empty"><p>No suggestions for this choice.</p></div>');
 
   const maxR = Math.max(...st.recent.slice(1));
@@ -1523,7 +1557,6 @@ function renderPicks() {
       against 5 random sets. This shows honestly what the analysis is worth.</p>
       <button class="btn btn-secondary btn-sm" data-act="picks-backtest">Run backtest</button>`;
   }
-  renderSim();
 }
 
 function runBacktest() {
@@ -1562,6 +1595,28 @@ async function loadBoard() {
   S.board = { ...S.board, round, groups: pl.data?.groups || 0, picks: err ? [] : gp.data || [], missing: !!err };
 }
 
+// Layout of the 45 buttons per group, on this device only: shuffled (default) or 1–45 in order.
+// Shuffling keeps people from picking shapes on a 1–45 grid (rows, diagonals), which many players do.
+let _layout = (() => { try { return JSON.parse(localStorage.getItem('645-board-layout')) || {}; } catch { return {}; } })();
+function groupLayout(g) {
+  if (_layout.round !== S.board.round) _layout = { round: S.board.round, groups: {} };
+  return (_layout.groups[g] ||= { mode: 'random', seed: (Math.random() * 2 ** 31) | 0 });
+}
+function setGroupLayout(g, mode) {
+  const l = groupLayout(g);
+  l.mode = mode;
+  if (mode === 'random') l.seed = (Math.random() * 2 ** 31) | 0;   // a fresh shuffle each time
+  try { localStorage.setItem('645-board-layout', JSON.stringify(_layout)); } catch { /* private mode */ }
+  renderBoard();
+}
+function layoutOrder(g) {
+  const l = groupLayout(g), order = [...Array(45)].map((_, i) => i + 1);
+  if (l.mode === 'sorted') return order;
+  const r = window.PicksEngine.mulberry32(l.seed);
+  for (let i = order.length - 1; i > 0; i--) { const j = Math.floor(r() * (i + 1)); [order[i], order[j]] = [order[j], order[i]]; }
+  return order;
+}
+
 const boardDefault = () => 5 * Math.max(1, simActiveMembers(currentDraw()));
 const groupPicks = (g) => S.board.picks.filter((p) => p.grp === g).sort((a, b) => a.num - b.num);
 
@@ -1578,7 +1633,6 @@ function boardScale() {
 function renderBoard() {
   const B = S.board, target = drawNo(currentDraw());
   if (!$('board-body')) return;
-  $('board-for').textContent = `for draw #${target} · ${fmtD(currentDraw())}`;
   if (B.round !== target) { loadBoard().then(renderBoard).catch(console.error); return; }
   if (B.missing) {
     $('board-legend').innerHTML = '';
@@ -1599,24 +1653,25 @@ function renderBoard() {
     return;
   }
   const scale = boardScale(), stars = (f) => '★★★★★'.slice(0, Math.max(1, Math.round(f / 20))).padEnd(5, '☆');
+  try { localStorage.setItem('645-board-layout', JSON.stringify(_layout)); } catch { /* private mode */ }
   const groups = Array.from({ length: B.groups }, (_, i) => {
     const g = i + 1, picks = groupPicks(g), nums = picks.map((p) => p.num), full = nums.length >= 6;
     const r = scale && full ? scale.rate(nums) : null;
     return { g, picks, nums, full, r };
   });
-  const scoreHtml = (x) => (!x.r ? (x.full ? '' : `${6 - x.nums.length} to go`)
+  const scoreHtml = (x) => (!x.r ? ''
     : `<div class="stars">${stars(x.r.fit)}</div><div>score ${x.r.fit.toFixed(0)} · better than ${Math.min(99, Math.floor(x.r.percentile))}% of random sets</div>`);
   const busy = (g) => (B.busy[g] ? 'disabled' : '');
   const hidden = B.picks.filter((p) => p.grp > B.groups).length;
   const done = groups.filter((x) => x.full);
-  $('board-body').innerHTML = `<div class="board-groups">${groups.map((x) => `<div class="bgroup ${x.full ? 'full' : ''}" data-g="${x.g}">
+  $('board-body').innerHTML = `<div class="board-groups">${groups.map((x) => `<div class="bgroup ${x.full ? 'full' : 'open'}" data-g="${x.g}">
       <div class="bg-hd">
         <span class="bg-title">Group ${x.g}</span>
-        <span class="bg-count">${x.nums.length}/6</span>
+        ${x.full ? '<span class="bg-badge done">✓ Complete</span>' : `<span class="bg-badge todo">${x.nums.length}/6 · ${6 - x.nums.length} to go</span>`}
         <div class="bg-score">${scoreHtml(x)}</div>
       </div>
-      <div class="bg-nums">${[...Array(45)].map((_, i) => {
-        const n = i + 1, p = x.picks.find((q) => q.num === n);
+      <div class="bg-nums">${layoutOrder(x.g).map((n) => {
+        const p = x.picks.find((q) => q.num === n);
         return `<button type="button" class="bn ${p ? 'on' : ''}" data-act="board-num" data-g="${x.g}" data-n="${n}"
           ${p ? `style="--c:${pickColor(p)}" title="${n} · ${esc(pickWho(p))}"` : `title="${n}"`} ${busy(x.g)}>${n}</button>`;
       }).join('')}</div>
@@ -1625,6 +1680,9 @@ function renderBoard() {
         ${x.full ? '' : `<button class="btn btn-ghost btn-sm" data-act="board-engine" data-g="${x.g}" data-mode="one" ${busy(x.g)} title="The engine adds one number that fits the ones already picked">🤖 +1</button>
         <button class="btn btn-ghost btn-sm" data-act="board-engine" data-g="${x.g}" data-mode="fill" ${busy(x.g)}>🤖 Fill the rest</button>`}
         ${x.picks.some((p) => p.picked_by === S.me.id) ? `<button class="btn btn-ghost btn-sm" data-act="board-clear" data-g="${x.g}" ${busy(x.g)}>Clear mine</button>` : ''}
+        <div class="seg bg-layout" title="Order of the 45 buttons (only on this device)">
+          ${['random', 'sorted'].map((m) => `<button type="button" class="seg-btn ${groupLayout(x.g).mode === m ? 'active' : ''}" data-act="board-layout" data-g="${x.g}" data-mode="${m}">${m === 'random' ? '🔀 Random' : '🔢 Sorted'}</button>`).join('')}
+        </div>
       </div>
     </div>`).join('')}</div>
     ${hidden ? `<p class="fhelp" style="margin-top:10px">Groups above ${B.groups} still hold ${hidden} number${hidden > 1 ? 's' : ''}; raise the count to see them again.</p>` : ''}
@@ -1634,10 +1692,10 @@ function renderBoard() {
         <span class="fhelp">${done.length} of ${B.groups} groups complete · ${esc(money(B.groups * TICKET_PRICE))}</span>
         ${done.length ? `<button class="btn btn-ghost btn-sm" data-act="copy" data-text="${esc(done.map((x) => `${x.g}: ${x.nums.map((n) => String(n).padStart(2, '0')).join(' ')}`).join('\n'))}">Copy complete groups</button>` : ''}
       </div>
-      ${groups.map((x) => `<div class="bsum-row">
+      ${groups.map((x) => `<div class="bsum-row ${x.full ? 'full' : 'open'}">
         <span class="bsum-n">${x.g}</span>
         <span>${x.picks.map((p) => `<span class="ball mc" style="--c:${pickColor(p)}" title="${esc(pickWho(p))}">${String(p.num).padStart(2, '0')}</span>`).join('')}${'<span class="ball open">?</span>'.repeat(6 - x.nums.length)}</span>
-        <span class="fhelp">${x.full && x.r ? `<span class="stars">${stars(x.r.fit)}</span> ${x.r.fit.toFixed(0)}` : `${6 - x.nums.length} to go`}</span>
+        <span class="fhelp">${x.full ? (x.r ? `<span class="stars">${stars(x.r.fit)}</span> ${x.r.fit.toFixed(0)}` : '✓') : `<span class="bsum-todo">${6 - x.nums.length} to go</span>`}</span>
       </div>`).join('')}
     </div>`;
 }
@@ -1693,6 +1751,29 @@ async function engineFill(g, mode) {
   renderBoard();
 }
 
+/** "Add to picks": a suggestion goes into the first empty group (a new group if none is empty). */
+async function mergeSuggestion(i) {
+  const B = S.board, p = _picks?.picks[i];
+  if (!p) return;
+  if (B.missing) { toast('Picking together needs the database update (see ✍️ Picks).', 'err'); return; }
+  let g = Array.from({ length: B.groups }, (_, j) => j + 1).find((x) => !groupPicks(x).length);
+  if (!g) {
+    g = B.groups + 1;
+    while (groupPicks(g).length) g++;   // groups hidden by a lower count may still hold numbers
+    if (g > 100) { toast('We already have 100 groups.', 'err'); return; }
+    const { error } = await S.sb.from('pick_plans').upsert({ round: B.round, groups: g }, { onConflict: 'round' });
+    if (error) { fail(error); return; }
+    B.groups = g;
+  }
+  const mine = new Set(p.part ? _picks.fixed : []);   // own numbers typed in Suggestion stay the member's
+  const rows = p.nums.map((num) => ({ round: B.round, grp: g, num, by_engine: !mine.has(num) }));
+  const { error } = await S.sb.from('group_picks').insert(rows);
+  if (error) fail(error);
+  else toast(`Added to group ${g}${p.nums.length < 6 ? ` — ${6 - p.nums.length} left to pick` : ''}.`, 'ok');
+  await loadBoard();
+  renderPicks();
+}
+
 async function clearMine(g) {
   const B = S.board;
   B.picks = B.picks.filter((p) => !(p.grp === g && p.picked_by === S.me.id));
@@ -1739,7 +1820,10 @@ function renderSim() {
   const el = $('sim-body');
   if (!el) return;
   const all = pickHistory(), latestOut = drawNo(addDays(currentDraw(), -7));
-  if (all.length < latestOut - 5) { el.innerHTML = '<p class="fhelp">Waiting for the history of winning numbers (see above).</p>'; return; }
+  if (all.length < latestOut - 5) {
+    el.innerHTML = _historyErr ? `<div class="form-error">${_historyErr}</div>` : '<div class="empty"><div class="spinner" style="margin:0 auto 12px"></div><p>Loading past winning numbers…</p></div>';
+    return;
+  }
   if (!SIM.round) SIM.round = latestOut;
   const date = drawDate(SIM.round), draw = S.draws[SIM.round];
   const members = simActiveMembers(date);
@@ -2660,6 +2744,9 @@ const ACTIONS = {
   'board-num': (el) => toggleBoardNum(+el.dataset.g, +el.dataset.n),
   'board-engine': (el) => engineFill(+el.dataset.g, el.dataset.mode),
   'board-clear': (el) => clearMine(+el.dataset.g),
+  'board-layout': (el) => setGroupLayout(+el.dataset.g, el.dataset.mode),
+  'pick-merge': (el) => { el.disabled = true; mergeSuggestion(+el.dataset.i); },
+  'picks-section': (el) => setPicksSection(el.dataset.sec),
   'sim-x': (el) => simSetX(el.dataset.add ? (SIM.x || 0) + +el.dataset.add : +el.dataset.set),
   'sim-qty': (el) => { const i = +el.dataset.i; SIM.qty[i] = Math.max(0, (SIM.qty[i] || 0) + +el.dataset.d); renderSim(); },
   'sim-reveal': () => { SIM.revealed = true; renderSim(); },

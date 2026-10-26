@@ -172,7 +172,7 @@
     if (od.length) out.push(`⏳ overdue: ${od.slice(0, 3).map((n) => `${n} (${st.gap[n]} draws)`).join(', ')}`);
     out.push(f.repeat ? `${f.repeat} from last draw` : 'none from last draw');
     const pp = popPercentile(nums);
-    if (pp <= 40) out.push(`👥 less picked than ${Math.round(100 - pp)}% of sets — a win is shared less`);
+    if (pp <= 40) out.push(`👥 less picked than ${Math.min(99, Math.round(100 - pp))}% of sets — a win is shared less`);
     else if (pp >= 70) out.push(`👥 popular numbers — a win may be shared more`);
     return out;
   }
