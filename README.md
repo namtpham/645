@@ -56,9 +56,9 @@ with an invitation key from the admin.
   - **odd vs even draws (회차)**: spent, won, money back per ₩1,000 and how often we win, for
     odd- and even-numbered draws. It also reports how often a gap that big appears when the same
     draws are split into two groups at random, which tells luck from a real pattern.
-- **Picks tab** has three sections: **✍️ Picks** (our own numbers), **🎯 Suggestion** (the
-  engine's ranked sets, number statistics, backtest) and **🕰️ Simulation** (a past week). The
-  section you last opened is remembered on that device.
+- **Picks tab** has four sections: **✍️ Picks** (our own numbers), **🎯 Suggestion** (the
+  engine's ranked sets, number statistics, backtest), **🕰️ Simulation** (a past week) and
+  **📺 Live** (follow the draw). The section you last opened is remembered on that device.
 - **Our numbers** (✍️ Picks): we pick the coming draw's numbers together.
   - Choose how many groups of 6 we play (quick buttons 5–30, ±1).
   - Each group shows 45 round buttons: gray = free, coloured = taken. Every member has their
@@ -73,6 +73,14 @@ with an invitation key from the admin.
     With your own numbers typed in Suggestion, those stay yours and the rest are the engine's.
   - A complete group gets a score on the same scale as the ranked suggestions. **Our tickets**
     lists all groups combined, with **Copy complete groups**.
+  - **Bought by …:** when a ticket photo for that draw is uploaded, its QR games are compared
+    with our groups. The same 6 numbers, or the closest group with at least 5 in common, is
+    marked **🛒 Bought by** whoever uploaded it (a 5-of-6 match also says which number differs).
+    Games that match no group are added to Our tickets as extra rows, so the list is the union of
+    what we chose on the site and what was really bought.
+  - **Focus while copying:** tap a row of Our tickets and everything else on the page is dimmed,
+    so you copy the right numbers onto the slip. Tap another row to move the focus, the same row
+    again (or anywhere else, or Esc) to go back to normal.
   - Changes show up live on every member's screen. Needs the database update below
     (run `supabase/schema.sql` again).
 - **Picks**: ranked suggestions of 6 numbers for the coming draw. They're not random. The main
@@ -80,13 +88,21 @@ with an invitation key from the admin.
   (see [How good are the picks?](#how-good-are-the-picks)). Sets also keep the shape of real
   winning draws (sum, odd/even, low/high, spread, repeats from last week), with a small weight
   for all-time and last-year frequency. The page says plainly that every set has the same
-  1 in 8,145,060 chance. It also shows a 1–45 frequency grid, hot / cold / overdue numbers, and a
-  backtest over the last 100 draws against random sets. The full history of winning numbers is
+  1 in 8,145,060 chance. **Number statistics** cover the last 6 months, 1 year, 2 years or all
+  time (one button each), sorted by number or by how often each came up, with tables of hot,
+  cold and overdue numbers and hot pairs (their counts, and what chance alone would give). A
+  backtest replays the last 100 draws against random sets. The full history of winning numbers is
   downloaded once by the `check-tickets` function.
   - **Only some numbers:** choose **Numbers to suggest** = 1–5 to get just that many, ranked;
     dashed **?** circles are the ones you pick yourself. Under **Your own numbers** you can enter
     up to 5 numbers you already like; suggestions are then built around them (gold rings), and
     **All N left** fills the rest. The choice is remembered on that device.
+- **📺 Live** (Picks tab): while watching the draw, tap each number as it comes out (the 7th
+  is the bonus). Our tickets (as bought) are ranked on the left by how many numbers they match,
+  the system's top suggestions (as many as our tickets) on the right, with 등수 and prizes once 6
+  numbers are in. It works any time for fun: outside Saturday 20:00–24:00 KST it is a test and
+  clears itself after 10 minutes without a tap. When the official result is downloaded, it
+  replaces the tapped numbers (**Get official result** asks for it after 20:50 KST).
 - **Simulate a past week** (Picks tab): choose a draw by number or by any date. A Sunday counts
   toward the coming Saturday; Monday–Saturday count toward that week's Saturday. The
   suggestions are made only from the draws before it, exactly as they would have been that week.

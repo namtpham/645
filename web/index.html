@@ -222,6 +222,7 @@
       <button type="button" class="seg-btn" data-act="picks-section" data-sec="board">✍️ Picks</button>
       <button type="button" class="seg-btn" data-act="picks-section" data-sec="suggest">🎯 Suggestion</button>
       <button type="button" class="seg-btn" data-act="picks-section" data-sec="sim">🕰️ Simulation</button>
+      <button type="button" class="seg-btn" data-act="picks-section" data-sec="live">📺 Live</button>
     </div>
     <section class="picks-sec" id="pk-board">
       <div class="card" id="board-card">
@@ -287,14 +288,53 @@
         </div>
         <div id="picks-list"></div>
       </div>
-      <div class="dash-cols">
+      <div class="card" id="stats-card">
+        <div class="card-hd"><div class="card-title">📊 Number statistics</div></div>
+        <div class="stats-controls">
+          <div class="seg" id="stat-range">
+            <button type="button" class="seg-btn" data-act="stat-range" data-n="26">6 months</button>
+            <button type="button" class="seg-btn" data-act="stat-range" data-n="52">1 year</button>
+            <button type="button" class="seg-btn" data-act="stat-range" data-n="104">2 years</button>
+            <button type="button" class="seg-btn" data-act="stat-range" data-n="all">All time</button>
+          </div>
+          <div class="seg" id="stat-sort">
+            <button type="button" class="seg-btn" data-act="stat-sort" data-sort="num">🔢 By number</button>
+            <button type="button" class="seg-btn" data-act="stat-sort" data-sort="freq">📶 By frequency</button>
+          </div>
+        </div>
+        <div id="picks-grid"></div>
+      </div>
+      <div class="card">
+        <div class="card-hd"><div class="card-title">🧪 Backtest</div></div>
+        <div id="picks-backtest"></div>
+      </div>
+    </section>
+    <section class="picks-sec" id="pk-live" hidden>
+      <div class="card" id="live-card">
+        <div class="card-hd">
+          <div class="card-title">📺 Live results</div>
+          <span class="fhelp" id="live-for"></span>
+        </div>
+        <p class="fhelp" style="margin:-6px 0 12px">Watching the draw (Saturday 20:35 KST)? Tap each number as it comes out: the first 6 are the
+          winning numbers, the 7th is the bonus. Our tickets and the system's top suggestions are re-ranked after every number.
+          Works any time for testing or fun.</p>
+        <div id="live-mode"></div>
+        <div class="live-drawn" id="live-drawn"></div>
+        <div class="live-pad" id="live-pad"></div>
+        <div class="live-acts">
+          <button class="btn btn-ghost btn-sm" data-act="live-undo">↩ Undo last</button>
+          <button class="btn btn-ghost btn-sm" data-act="live-reset">Reset</button>
+          <button class="btn btn-secondary btn-sm" data-act="live-official" id="live-official">Get official result</button>
+        </div>
+      </div>
+      <div class="live-cols">
         <div class="card">
-          <div class="card-hd"><div class="card-title">📊 Number statistics</div></div>
-          <div id="picks-grid"></div>
+          <div class="card-hd"><div class="card-title">🎟️ Our tickets</div></div>
+          <div id="live-ours"></div>
         </div>
         <div class="card">
-          <div class="card-hd"><div class="card-title">🧪 Backtest</div></div>
-          <div id="picks-backtest"></div>
+          <div class="card-hd"><div class="card-title">🎯 Top suggestions</div></div>
+          <div id="live-sugg"></div>
         </div>
       </div>
     </section>
@@ -644,6 +684,7 @@
   </div>
 </div>
 
+<div id="focus-veil" data-act="focus-off" hidden></div>
 <div class="toast" id="toast"></div>
 </body>
 </html>

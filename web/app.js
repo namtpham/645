@@ -513,6 +513,7 @@ function renderAll() {
 
 function goTab(name) {
   S.tab = name;
+  if (_focusKey) setFocus(null);
   document.querySelectorAll('.tab-pane').forEach((el) => el.classList.toggle('active', el.id === 'tab-' + name));
   document.querySelectorAll('.nav-tab').forEach((el) => el.classList.toggle('active', el.dataset.tab === name));
   if (name === 'charts') setTimeout(renderCharts, 60);
@@ -1449,12 +1450,13 @@ function renderPickControls() {
 const pickHistory = () => Object.values(S.draws).filter((d) => d.numbers?.length === 6).sort((a, b) => a.round - b.round);
 
 // Picks tab sections: our own numbers, the engine's suggestions, past-week simulation
-const PICK_SECTIONS = ['board', 'suggest', 'sim'];
+const PICK_SECTIONS = ['board', 'suggest', 'sim', 'live'];
 let _picksSec = (() => { try { return localStorage.getItem('645-picks-sec'); } catch { return null; } })();
 if (!PICK_SECTIONS.includes(_picksSec)) _picksSec = 'board';
 let _historyErr = '';
 
 function setPicksSection(sec) {
+  if (_focusKey) setFocus(null);
   _picksSec = PICK_SECTIONS.includes(sec) ? sec : 'board';
   try { localStorage.setItem('645-picks-sec', _picksSec); } catch { /* private mode */ }
   renderPicks();
@@ -1479,6 +1481,7 @@ function renderPicks() {
   const ready = historyReady();
   if (_picksSec === 'board') renderBoard();
   else if (_picksSec === 'sim') renderSim();
+  else if (_picksSec === 'live') renderLive();
   else renderSuggestions(ready);
 }
 
@@ -1540,23 +1543,67 @@ function renderSuggestions(ready) {
       </div>
     </div>`).join('') : '<div class="empty"><p>No suggestions for this choice.</p></div>');
 
-  const maxR = Math.max(...st.recent.slice(1));
-  $('picks-grid').innerHTML = `<div class="num-grid">${[...Array(45)].map((_, i) => {
-      const n = i + 1, a = 0.08 + 0.6 * st.recent[n] / (maxR || 1);
-      return `<div class="num-cell" style="background:rgba(57,135,229,${a.toFixed(2)})" title="#${n}: ${st.recent[n]}× in the last ${RECENT_DRAWS} draws · ${st.freq[n]}× in all ${st.N} draws · last seen ${st.gap[n]} draw${st.gap[n] === 1 ? '' : 's'} ago">
-        ${ball(n, 'hit')}<small>${st.recent[n]}×</small></div>`;
-    }).join('')}</div>
-    <p class="fhelp" style="margin:8px 0 12px">Shading and count: times drawn in the last ${RECENT_DRAWS} draws (≈ 1 year). Hover for all-time numbers.</p>
-    <div class="num-lists">
-      <div><span class="flbl">🔥 Hot</span>${st.hot.slice(0, 8).map((n) => ball(n, 'hit')).join('')}</div>
-      <div><span class="flbl">🧊 Cold</span>${st.cold.map((n) => ball(n, 'hit')).join('')}</div>
-      <div><span class="flbl">⏳ Overdue</span>${st.overdue.map((n) => `<span title="${st.gap[n]} draws">${ball(n, 'hit')}</span>`).join('')}</div>
-    </div>`;
+  renderNumStats(hist);
   if (!$('picks-backtest').innerHTML) {
     $('picks-backtest').innerHTML = `<p class="fhelp">Replays the last 100 draws: 5 suggestions per draw made only from the draws before it,
       against 5 random sets. This shows honestly what the analysis is worth.</p>
       <button class="btn btn-secondary btn-sm" data-act="picks-backtest">Run backtest</button>`;
   }
+}
+
+// ── Number statistics over a chosen range: counts, hot / cold / overdue, hot pairs
+const STAT_PREF = (() => { try { return JSON.parse(localStorage.getItem('645-stats')) || {}; } catch { return {}; } })();
+let _statRange = ['26', '52', '104', 'all'].includes(STAT_PREF.range) ? STAT_PREF.range : '52';
+let _statSort = STAT_PREF.sort === 'freq' ? 'freq' : 'num';
+function setStatPref(patch) {
+  if (patch.range) _statRange = patch.range;
+  if (patch.sort) _statSort = patch.sort;
+  try { localStorage.setItem('645-stats', JSON.stringify({ range: _statRange, sort: _statSort })); } catch { /* private mode */ }
+  renderNumStats(pickHistory().filter((d) => d.round < drawNo(currentDraw())));
+}
+
+/** Main numbers only (not the bonus) of the last `n` draws, or of all draws. */
+function rangeStats(hist, n) {
+  const draws = n === 'all' ? hist : hist.slice(-n), count = Array(46).fill(0), pairs = new Map();
+  for (const d of draws) {
+    const ns = [...d.numbers].sort((a, b) => a - b);
+    ns.forEach((x, i) => { count[x]++; for (const y of ns.slice(i + 1)) pairs.set(x * 100 + y, (pairs.get(x * 100 + y) || 0) + 1); });
+  }
+  const gap = Array(46).fill(hist.length);
+  hist.forEach((d, i) => d.numbers.forEach((x) => { gap[x] = hist.length - 1 - i; }));
+  const nums = [...Array(45)].map((_, i) => i + 1);
+  const byFreq = [...nums].sort((a, b) => count[b] - count[a] || a - b);
+  return {
+    N: draws.length, count, gap, byFreq,
+    hot: byFreq.slice(0, 8), cold: [...byFreq].reverse().slice(0, 8),
+    overdue: [...nums].sort((a, b) => gap[b] - gap[a] || a - b).slice(0, 8),
+    pairs: [...pairs].sort((a, b) => b[1] - a[1] || a[0] - b[0]).slice(0, 8).map(([k, c]) => ({ a: Math.floor(k / 100), b: k % 100, c })),
+  };
+}
+
+function renderNumStats(hist) {
+  document.querySelectorAll('#stat-range .seg-btn').forEach((b) => b.classList.toggle('active', b.dataset.n === _statRange));
+  document.querySelectorAll('#stat-sort .seg-btn').forEach((b) => b.classList.toggle('active', b.dataset.sort === _statSort));
+  if (!hist.length) { $('picks-grid').innerHTML = ''; return; }
+  const r = rangeStats(hist, _statRange === 'all' ? 'all' : +_statRange);
+  const max = Math.max(...r.count.slice(1)), order = _statSort === 'freq' ? r.byFreq : [...Array(45)].map((_, i) => i + 1);
+  const span = _statRange === 'all' ? `all ${r.N} draws` : `the last ${r.N} draws (${{ 26: '≈ 6 months', 52: '≈ 1 year', 104: '≈ 2 years' }[_statRange]})`;
+  const times = (c) => `${c}×`;
+  const table = (title, head, rows) => `<table class="stat-tbl"><thead><tr><th>${title}</th><th>${head}</th></tr></thead>
+    <tbody>${rows.map(([a, b, t]) => `<tr${t ? ` title="${esc(t)}"` : ''}><td>${a}</td><td class="mono">${b}</td></tr>`).join('')}</tbody></table>`;
+  $('picks-grid').innerHTML = `<div class="num-grid">${order.map((n, i) => {
+      const a = 0.08 + 0.6 * r.count[n] / (max || 1);
+      return `<div class="num-cell" style="background:rgba(57,135,229,${a.toFixed(2)})" title="#${n}: ${r.count[n]}× in ${span} · last seen ${r.gap[n]} draw${r.gap[n] === 1 ? '' : 's'} ago">
+        ${_statSort === 'freq' ? `<span class="num-rank">${i + 1}</span>` : ''}${ball(n, 'hit')}<small>${r.count[n]}×</small></div>`;
+    }).join('')}</div>
+    <p class="fhelp" style="margin:8px 0 14px">Times each number was drawn in ${span} (main numbers, not the bonus).
+      On average each number comes up ${(r.N * 6 / 45).toFixed(1)}× in that time and each pair ${(r.N / 66).toFixed(1)}×; gaps like these are what chance looks like.</p>
+    <div class="stat-tables">
+      ${table('🔥 Hot', 'Drawn', r.hot.map((n) => [ball(n, 'hit'), times(r.count[n])]))}
+      ${table('🧊 Cold', 'Drawn', r.cold.map((n) => [ball(n, 'hit'), times(r.count[n])]))}
+      ${table('⏳ Overdue', 'Not seen for', r.overdue.map((n) => [ball(n, 'hit'), `${r.gap[n]} draw${r.gap[n] === 1 ? '' : 's'}`]))}
+      ${table('👯 Hot pairs', 'Together', r.pairs.map((p) => [`${ball(p.a, 'hit')}${ball(p.b, 'hit')}`, times(p.c), `${p.a} and ${p.b} were drawn together ${p.c}×`]))}
+    </div>`;
 }
 
 function runBacktest() {
@@ -1617,6 +1664,66 @@ function layoutOrder(g) {
   return order;
 }
 
+// ── Tickets actually bought: games read from the QR codes of uploaded photos for a draw
+/** Every game on the ticket photos of one draw (a QR code that is in two photos counts once). */
+function realGames(round) {
+  const seen = new Set(), out = [];
+  for (const t of [...S.tickets].sort((a, b) => ((a.created_at || '') < (b.created_at || '') ? -1 : 1))) {
+    for (const it of qrItems(t)) {
+      if (it.round !== round || seen.has(it.url)) continue;
+      seen.add(it.url);
+      (it.games || []).forEach((g, i) => out.push({ nums: [...g.nums].sort((a, b) => a - b), by: t.uploaded_by, ticket: t.id, label: GAME_LABELS[i] || String(i + 1) }));
+    }
+  }
+  return out;
+}
+
+/**
+ * Which of our groups were bought: the same 6 numbers first, then the closest game with at least
+ * 5 numbers in common (a slip when copying, or a 6th number added at the shop). One game per group;
+ * games that match no group are extra tickets.
+ */
+function matchBought(groups, games) {
+  const bought = {}, used = new Set();
+  const common = (a, b) => a.filter((n) => b.includes(n)).length;
+  for (const need of [6, 5]) {
+    const pairs = [];
+    for (const x of groups) {
+      if (bought[x.g] || x.nums.length < 5) continue;
+      games.forEach((gm, j) => { if (!used.has(j)) { const c = common(x.nums, gm.nums); if (c >= need) pairs.push({ x, j, c }); } });
+    }
+    pairs.sort((a, b) => b.c - a.c || a.x.g - b.x.g || a.j - b.j);
+    for (const { x, j, c } of pairs) {
+      if (bought[x.g] || used.has(j)) continue;
+      const gm = games[j];
+      bought[x.g] = { ...gm, common: c, missing: x.nums.filter((n) => !gm.nums.includes(n)), extra: gm.nums.filter((n) => !x.nums.includes(n)) };
+      used.add(j);
+    }
+  }
+  return { bought, extras: games.filter((_, j) => !used.has(j)) };
+}
+
+const two = (n) => String(n).padStart(2, '0');
+function boughtNote(b) {
+  if (!b.missing.length && !b.extra.length) return '';
+  if (!b.missing.length) return `the ticket adds ${b.extra.map(two).join(', ')}`;
+  return `the ticket has ${b.extra.map(two).join(', ')} instead of ${b.missing.map(two).join(', ')}`;
+}
+
+// ── Focus on one row of "Our tickets" (copying numbers onto paper slips): everything else is dimmed
+let _focusKey = null;
+function setFocus(key) {
+  _focusKey = key && key !== _focusKey ? key : null;
+  applyFocus();
+}
+function applyFocus() {
+  const rows = [...document.querySelectorAll('#board-body .bsum-row')];
+  if (_focusKey && !rows.some((r) => r.dataset.key === _focusKey)) _focusKey = null;
+  rows.forEach((r) => r.classList.toggle('focused', r.dataset.key === _focusKey));
+  document.body.classList.toggle('focus-mode', !!_focusKey);
+  $('focus-veil').hidden = !_focusKey;
+}
+
 const boardDefault = () => 5 * Math.max(1, simActiveMembers(currentDraw()));
 const groupPicks = (g) => S.board.picks.filter((p) => p.grp === g).sort((a, b) => a.num - b.num);
 
@@ -1664,12 +1771,15 @@ function renderBoard() {
   const busy = (g) => (B.busy[g] ? 'disabled' : '');
   const hidden = B.picks.filter((p) => p.grp > B.groups).length;
   const done = groups.filter((x) => x.full);
+  const { bought, extras } = matchBought(groups, realGames(B.round));
+  const boughtBadge = (b) => `<span class="bg-badge bought" title="${esc(`${memberName(b.by)}'s ticket photo, game ${b.label}`)}">🛒 Bought by ${esc(memberName(b.by))}</span>`;
   $('board-body').innerHTML = `<div class="board-groups">${groups.map((x) => `<div class="bgroup ${x.full ? 'full' : 'open'}" data-g="${x.g}">
       <div class="bg-hd">
         <span class="bg-title">Group ${x.g}</span>
         ${x.full ? '<span class="bg-badge done">✓ Complete</span>' : `<span class="bg-badge todo">${x.nums.length}/6 · ${6 - x.nums.length} to go</span>`}
         <div class="bg-score">${scoreHtml(x)}</div>
       </div>
+      ${bought[x.g] ? `<div class="bg-bought">${boughtBadge(bought[x.g])}${boughtNote(bought[x.g]) ? ` <span class="warn">⚠️ ${esc(boughtNote(bought[x.g]))}</span>` : ''}</div>` : ''}
       <div class="bg-nums">${layoutOrder(x.g).map((n) => {
         const p = x.picks.find((q) => q.num === n);
         return `<button type="button" class="bn ${p ? 'on' : ''}" data-act="board-num" data-g="${x.g}" data-n="${n}"
@@ -1689,15 +1799,25 @@ function renderBoard() {
     <div class="board-sum">
       <div class="bsum-hd">
         <div class="card-title">🧾 Our tickets</div>
-        <span class="fhelp">${done.length} of ${B.groups} groups complete · ${esc(money(B.groups * TICKET_PRICE))}</span>
+        <span class="fhelp">${done.length} of ${B.groups} groups complete · ${Object.keys(bought).length} bought${extras.length ? ` · ${extras.length} extra from photos` : ''}
+          · ${esc(money((B.groups + extras.length) * TICKET_PRICE))}</span>
         ${done.length ? `<button class="btn btn-ghost btn-sm" data-act="copy" data-text="${esc(done.map((x) => `${x.g}: ${x.nums.map((n) => String(n).padStart(2, '0')).join(' ')}`).join('\n'))}">Copy complete groups</button>` : ''}
       </div>
-      ${groups.map((x) => `<div class="bsum-row ${x.full ? 'full' : 'open'}">
+      <p class="fhelp bsum-tip">Tap a row to dim everything else while you copy it onto a slip; tap it again (or anywhere else) to go back.</p>
+      ${groups.map((x) => `<div class="bsum-row ${x.full ? 'full' : 'open'}${bought[x.g] ? ' is-bought' : ''}" data-act="bsum-focus" data-key="g${x.g}">
         <span class="bsum-n">${x.g}</span>
-        <span>${x.picks.map((p) => `<span class="ball mc" style="--c:${pickColor(p)}" title="${esc(pickWho(p))}">${String(p.num).padStart(2, '0')}</span>`).join('')}${'<span class="ball open">?</span>'.repeat(6 - x.nums.length)}</span>
+        <span class="bsum-balls">${x.picks.map((p) => `<span class="ball mc" style="--c:${pickColor(p)}" title="${esc(pickWho(p))}">${two(p.num)}</span>`).join('')}${'<span class="ball open">?</span>'.repeat(6 - x.nums.length)}
+          ${bought[x.g] ? `<span class="bsum-bought">🛒 ${esc(memberName(bought[x.g].by))}${boughtNote(bought[x.g]) ? ` · ⚠️ ${esc(boughtNote(bought[x.g]))}` : ''}</span>` : ''}</span>
         <span class="fhelp">${x.full ? (x.r ? `<span class="stars">${stars(x.r.fit)}</span> ${x.r.fit.toFixed(0)}` : '✓') : `<span class="bsum-todo">${6 - x.nums.length} to go</span>`}</span>
       </div>`).join('')}
+      ${extras.map((gm, i) => `<div class="bsum-row extra is-bought" data-act="bsum-focus" data-key="x${i}">
+        <span class="bsum-n">+</span>
+        <span class="bsum-balls">${gm.nums.map((n) => ball(n, 'hit')).join('')}
+          <span class="bsum-bought">🛒 ${esc(memberName(gm.by))}'s photo, game ${esc(gm.label)} · not one of our groups</span></span>
+        <span class="fhelp">${scale ? `<span class="stars">${stars(scale.rate(gm.nums).fit)}</span> ${scale.rate(gm.nums).fit.toFixed(0)}` : ''}</span>
+      </div>`).join('')}
     </div>`;
+  applyFocus();
 }
 
 async function setBoardGroups(n) {
@@ -1780,6 +1900,163 @@ async function clearMine(g) {
   renderBoard();
   const { error } = await S.sb.from('group_picks').delete().eq('round', B.round).eq('grp', g).eq('picked_by', S.me.id);
   if (error) { fail(error); await loadBoard(); renderBoard(); }
+}
+
+// ── Live results: tap the numbers as the draw is streamed, our tickets and the top suggestions re-rank
+const LIVE_RESET_MS = 10 * 60e3;   // outside draw time, a test run is cleared after 10 minutes without a tap
+let _live = (() => { try { return JSON.parse(localStorage.getItem('645-live')) || null; } catch { return null; } })();
+let _liveBoard = null, _liveSugg = null, _liveSuggKey = '';
+
+/** From Saturday 20:00 KST (sales close) to the end of Sunday: the draw just held; otherwise the coming one. */
+function liveRound() {
+  const today = kstToday(), wd = weekday(today);
+  const sat = wd === 6 ? today : wd === 0 ? addDays(today, -1) : null;
+  if (sat && Date.now() >= kstAt(sat, SALES_CLOSE).getTime()) return drawNo(sat);
+  return drawNo(currentDraw());
+}
+/** Draw time: Saturday 20:00–23:59 KST. Outside it, live picks are a test and reset after a while. */
+function inDrawTime(now = Date.now()) {
+  const d = new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(now));
+  return weekday(d) === 6 && now >= kstAt(d, SALES_CLOSE).getTime();
+}
+const mss = (ms) => `${Math.floor(ms / 60000)}:${String(Math.floor(ms / 1000) % 60).padStart(2, '0')}`;
+function liveState() {
+  const round = liveRound();
+  if (!_live || _live.round !== round) _live = { round, main: [], bonus: null, at: 0 };
+  if (_live.at && !inDrawTime() && Date.now() - _live.at > LIVE_RESET_MS) Object.assign(_live, { main: [], bonus: null, at: 0 });
+  return _live;
+}
+function saveLive() { try { localStorage.setItem('645-live', JSON.stringify(_live)); } catch { /* private mode */ } }
+
+function liveTap(n) {
+  const L = liveState();
+  if (S.draws[L.round]) { toast('The official result is in; it is shown instead of live picks.', 'err'); return; }
+  if (L.bonus === n) L.bonus = null;
+  else if (L.main.includes(n)) L.main = L.main.filter((x) => x !== n);
+  else if (L.main.length < 6) L.main.push(n);
+  else if (L.bonus == null) L.bonus = n;
+  else { toast('All 7 numbers are in. Tap one to take it back, or Reset.', 'err'); return; }
+  L.at = Date.now();
+  saveLive();
+  renderLive();
+}
+function liveUndo() {
+  const L = liveState();
+  if (L.bonus != null) L.bonus = null; else L.main.pop();
+  L.at = Date.now(); saveLive(); renderLive();
+}
+function liveReset() { const L = liveState(); Object.assign(L, { main: [], bonus: null, at: 0 }); saveLive(); renderLive(); }
+
+/** Our groups for the live draw (the board may already have moved on to next week). */
+function liveBoard(round) {
+  if (S.board.round === round) return S.board;
+  if (_liveBoard?.round === round) return _liveBoard;
+  if (!_liveBoard?.loading) {
+    _liveBoard = { round, loading: true, groups: 0, picks: [] };
+    Promise.all([
+      S.sb.from('pick_plans').select('*').eq('round', round).maybeSingle(),
+      S.sb.from('group_picks').select('*').eq('round', round).order('created_at'),
+    ]).then(([pl, gp]) => {
+      _liveBoard = { round, groups: pl.data?.groups || 0, picks: gp.data || [] };
+      if (S.tab === 'picks' && _picksSec === 'live') renderLive();
+    }).catch(console.error);
+  }
+  return null;
+}
+
+/** The tickets we play for a draw: complete groups (as bought, if a photo matches) plus extra games on photos. */
+function ourTickets(round) {
+  const B = liveBoard(round);
+  if (!B) return null;
+  const groups = Array.from({ length: B.groups }, (_, i) => ({ g: i + 1, nums: B.picks.filter((p) => p.grp === i + 1).map((p) => p.num).sort((a, b) => a - b) }));
+  const { bought, extras } = matchBought(groups, realGames(round));
+  const out = [];
+  for (const x of groups) {
+    const b = bought[x.g];
+    if (b) out.push({ label: `Group ${x.g}`, sub: `🛒 ${memberName(b.by)}`, nums: b.nums });
+    else if (x.nums.length === 6) out.push({ label: `Group ${x.g}`, sub: 'not bought yet', nums: x.nums });
+  }
+  extras.forEach((gm) => out.push({ label: `Photo ${gm.label}`, sub: `🛒 ${memberName(gm.by)} · extra`, nums: gm.nums }));
+  return { list: out, open: groups.filter((x) => x.nums.length && x.nums.length < 6 && !bought[x.g]).length };
+}
+
+function liveRank(nums, main, bonus) {
+  const match = nums.filter((n) => main.includes(n)), k = match.length, b = bonus != null && nums.includes(bonus);
+  const rank = main.length < 6 ? 0 : k === 6 ? 1 : k === 5 && b ? 2 : k === 5 ? 3 : k === 4 ? 4 : k === 3 ? 5 : 0;
+  return { match, k, b, rank };
+}
+
+function liveColumn(list, main, bonus, final) {
+  const rows = list.map((t, i) => ({ ...t, i, ...liveRank(t.nums, main, bonus) }))
+    .sort((a, b) => b.k - a.k || b.b - a.b || a.i - b.i);
+  const ranks = {};
+  rows.forEach((r) => { if (r.rank) ranks[r.rank] = (ranks[r.rank] || 0) + 1; });
+  const fixed = (ranks[4] || 0) * FIXED_RANK_PRIZE[4] + (ranks[5] || 0) * FIXED_RANK_PRIZE[5];
+  const big = (ranks[1] || 0) + (ranks[2] || 0) + (ranks[3] || 0);
+  const best = rows[0]?.k || 0;
+  const head = !main.length ? `${list.length} ticket${list.length === 1 ? '' : 's'} · waiting for the first number`
+    : `${final ? 'Final' : 'So far'}: best ${best} of ${main.length} matched${[1, 2, 3, 4, 5].filter((r) => ranks[r]).map((r) => ` · ${ranks[r]}× ${r}등`).join('')}`
+      + (main.length === 6 ? ` · won ${money(fixed)}${big ? ' + big prize' : ''} for ${money(list.length * TICKET_PRICE)}` : '');
+  return `<p class="live-sum ${big ? 'big' : fixed ? 'won' : ''}">${esc(head)}</p>` + rows.map((r, pos) => `<div class="live-row ${r.rank ? 'r' + r.rank : ''}">
+      <span class="live-pos">${pos + 1}</span>
+      <span class="live-main">
+        <span class="live-balls">${r.nums.map((n) => ball(n, main.includes(n) ? 'hit' : n === bonus ? 'hit-bonus' : '')).join('')}</span>
+        <span class="fhelp">${esc(r.label)}${r.sub ? ` · ${esc(r.sub)}` : ''}</span>
+      </span>
+      <span class="live-k"><strong>${r.k}</strong>${r.b ? '<small>+B</small>' : ''}${r.rank ? `<span class="rs-rank r${r.rank}">${r.rank}등</span>` : ''}</span>
+    </div>`).join('');
+}
+
+function renderLive() {
+  if (!$('live-pad')) return;
+  const L = liveState(), round = L.round, draw = S.draws[round];
+  const main = draw ? draw.numbers : L.main, bonus = draw ? draw.bonus : L.bonus, final = !!draw;
+  $('live-for').textContent = `draw #${round} · ${fmtD(drawDate(round))}`;
+  const left = !draw && L.at && !inDrawTime() ? Math.max(0, LIVE_RESET_MS - (Date.now() - L.at)) : 0;
+  $('live-mode').innerHTML = draw ? `<p class="live-mode official">✓ Official result for #${round}${L.main.length ? ' — it replaced the numbers tapped live' : ''}.</p>`
+    : inDrawTime() ? '<p class="live-mode on">🔴 Draw time: taps are kept until the official result arrives.</p>'
+    : `<p class="live-mode test">🧪 Test mode (not draw time)${left ? ` · clears in <span id="live-left">${mss(left)}</span> without a tap` : ''}.</p>`;
+  const slot = (n, i, cls = '') => (n ? ball(n, cls || 'hit') : `<span class="ball open">${i}</span>`);
+  $('live-drawn').innerHTML = `${[0, 1, 2, 3, 4, 5].map((i) => slot(main[i], i + 1)).join('')}<span class="plus">+</span>${slot(bonus, 'B', 'hit-bonus')}`;
+  $('live-pad').innerHTML = [...Array(45)].map((_, i) => {
+    const n = i + 1, on = main.includes(n), b = n === bonus;
+    return `<button type="button" class="bn ${on ? 'on' : b ? 'on bonus' : ''}" data-act="live-num" data-n="${n}" ${final ? 'disabled' : ''}
+      ${on || b ? `style="--c:${['#fbc400', '#69c8f2', '#ff7272', '#aaaaaa', '#b0d840'][Math.ceil(n / 10) - 1]}"` : ''}>${n}</button>`;
+  }).join('');
+  $('live-official').hidden = final || !resultsOut(drawDate(round));
+  document.querySelectorAll('[data-act=live-undo],[data-act=live-reset]').forEach((b) => { b.disabled = final || (!L.main.length && L.bonus == null); });
+
+  const ours = ourTickets(round);
+  if (!ours) { $('live-ours').innerHTML = '<p class="fhelp">Loading our tickets…</p>'; $('live-sugg').innerHTML = ''; return; }
+  const x = ours.list.length || 5;
+  $('live-ours').innerHTML = (ours.list.length ? liveColumn(ours.list, main, bonus, final)
+    : '<p class="fhelp">No complete groups or ticket photos for this draw yet.</p>')
+    + (ours.open ? `<p class="fhelp" style="margin-top:8px">${ours.open} unfinished group${ours.open > 1 ? 's are' : ' is'} left out.</p>` : '');
+  const hist = pickHistory().filter((d) => d.round < round);
+  if (hist.length < 100) { $('live-sugg').innerHTML = '<p class="fhelp">Loading past winning numbers…</p>'; return; }
+  const key = `${round}-${hist.length}-${x}`;
+  if (key !== _liveSuggKey) { _liveSugg = suggestSets(hist, { seed: round * 7919, count: x }).picks; _liveSuggKey = key; }
+  $('live-sugg').innerHTML = `<p class="fhelp" style="margin-bottom:6px">The system's top ${x}${ours.list.length ? ', as many as our tickets' : ''}.</p>`
+    + liveColumn(_liveSugg.map((p, i) => ({ label: `Suggestion ${i + 1}`, nums: p.nums })), main, bonus, final);
+}
+
+// Countdown and auto-reset of a test run
+setInterval(() => {
+  if (S.tab !== 'picks' || _picksSec !== 'live' || !_live?.at) return;
+  const before = _live.main.length + (_live.bonus != null);
+  liveState();
+  if (before !== _live.main.length + (_live.bonus != null)) { saveLive(); renderLive(); return; }
+  const el = $('live-left');
+  if (el) el.textContent = mss(Math.max(0, LIVE_RESET_MS - (Date.now() - _live.at)));
+}, 1000);
+
+async function liveOfficial() {
+  const btn = $('live-official');
+  btn.disabled = true;
+  try { await checkResults(); await loadAll(); toast(S.draws[liveRound()] ? 'Official result loaded.' : 'Not published yet. Try again in a few minutes.', S.draws[liveRound()] ? 'ok' : 'err'); }
+  catch (e) { fail(e); }
+  btn.disabled = false;
+  renderLive();
 }
 
 // ── Past-week simulation: suggestions made only from draws before that week, then the real result
@@ -2747,6 +3024,14 @@ const ACTIONS = {
   'board-layout': (el) => setGroupLayout(+el.dataset.g, el.dataset.mode),
   'pick-merge': (el) => { el.disabled = true; mergeSuggestion(+el.dataset.i); },
   'picks-section': (el) => setPicksSection(el.dataset.sec),
+  'bsum-focus': (el) => setFocus(el.dataset.key),
+  'live-num': (el) => liveTap(+el.dataset.n),
+  'live-undo': () => liveUndo(),
+  'live-reset': () => liveReset(),
+  'live-official': () => liveOfficial(),
+  'focus-off': () => setFocus(null),
+  'stat-range': (el) => setStatPref({ range: el.dataset.n }),
+  'stat-sort': (el) => setStatPref({ sort: el.dataset.sort }),
   'sim-x': (el) => simSetX(el.dataset.add ? (SIM.x || 0) + +el.dataset.add : +el.dataset.set),
   'sim-qty': (el) => { const i = +el.dataset.i; SIM.qty[i] = Math.max(0, (SIM.qty[i] || 0) + +el.dataset.d); renderSim(); },
   'sim-reveal': () => { SIM.revealed = true; renderSim(); },
@@ -2827,7 +3112,7 @@ document.addEventListener('keydown', (e) => {
     navTicket(e.key === 'ArrowLeft' ? -1 : 1);
     return;
   }
-  if (e.key === 'Escape') document.querySelectorAll('.overlay.open').forEach((o) => o.classList.remove('open'));
+  if (e.key === 'Escape') { document.querySelectorAll('.overlay.open').forEach((o) => o.classList.remove('open')); if (_focusKey) setFocus(null); }
 });
 
 $('form-login').addEventListener('submit', doLogin);
