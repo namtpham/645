@@ -56,9 +56,9 @@ with an invitation key from the admin.
   - **odd vs even draws (회차)**: spent, won, money back per ₩1,000 and how often we win, for
     odd- and even-numbered draws. It also reports how often a gap that big appears when the same
     draws are split into two groups at random, which tells luck from a real pattern.
-- **Picks tab** has four sections: **✍️ Picks** (our own numbers), **🎯 Suggestion** (the
-  engine's ranked sets, number statistics, backtest), **🕰️ Simulation** (a past week) and
-  **📺 Live** (follow the draw). The section you last opened is remembered on that device.
+- **Picks tab** has five sections: **✍️ Picks** (our own numbers), **🎯 Suggestion** (the
+  engine's ranked sets, number statistics, backtest), **🕰️ Simulation** (a past week),
+  **🛒 Buy** (who buys, and QR codes for the shop) and **📺 Live** (follow the draw). The section you last opened is remembered on that device.
 - **Our numbers** (✍️ Picks): we pick the coming draw's numbers together.
   - Choose how many groups of 6 we play (quick buttons 5–30, ±1).
   - Each group shows 45 round buttons: gray = free, coloured = taken. Every member has their
@@ -102,6 +102,23 @@ with an invitation key from the admin.
     dashed **?** circles are the ones you pick yourself. Under **Your own numbers** you can enter
     up to 5 numbers you already like; suggestions are then built around them (gold rings), and
     **All N left** fills the rest. The choice is remembered on that device.
+- **🛒 Buy** (Picks tab): QR codes to show at the shop.
+  - **Who buys:** one row per buyer, e.g. Alice buys groups 1–13, Bob 14–18. **🙋 I buy all**
+    starts the list; **+ Add a buyer** takes the groups left over (or splits the last range).
+    Overlaps and groups nobody buys are flagged. Saved with the week's picks, so everyone sees it.
+  - **QR codes:** each buyer gets codes for their complete groups that aren't bought yet, at most
+    20 games per code (your own first). Tap one to show it full screen; **Numbers and QR text**
+    lists the games and the exact text. Incomplete and already-bought groups are listed, not coded.
+  - **Format:** the mobile-slip text that slip apps such as LottoMate produce:
+    `MSG_ESLIP{10645}{(5,M:081114233145,…)(1,M:…)}{}6B|`. Each game is its 6 numbers sorted, two
+    digits each, after `M:`; games go in slips of up to 5 as `(count,…)`; the last two characters
+    before `|` are a CRC-8 (polynomial 0x07, start 0, no reflection, no final XOR) of everything
+    from `MSG_ESLIP` up to and including `{}`. This reproduces the known samples exactly
+    (`node tools/eslip-check.mjs` checks them); we can't test a real shop terminal, so keep the
+    numbers handy as a backup.
+  - **🧪 Check against another QR maker:** type games (or **🎲 Random games**) to see our code, or
+    upload a screenshot of another site's QR code: its games are read, our code for the same games
+    is made, and the two texts are compared character by character.
 - **📺 Live** (Picks tab): while watching the draw, tap each number as it comes out (the 7th
   is the bonus). The taps are shared: every member sees the same numbers in real time and anyone
   can tap (needs the database update: run `supabase/schema.sql` again, which adds `live_picks`;
@@ -377,12 +394,14 @@ summary page. What it found:
 │   ├── style.css
 │   ├── app.js               ← all app logic (Supabase client, pool maths, UI)
 │   ├── picks.js             ← number suggestion engine (Picks tab, simulation, backtest)
+│   ├── eslip.js             ← mobile-slip QR text for the shop (MSG_ESLIP)
 │   └── config.js            ← Supabase URL + public key  ← edit this
-├── web/vendor/            ← QR code reader (zxing-wasm, MIT)
+├── web/vendor/            ← QR code reader (zxing-wasm, MIT) and maker (qrcode-generator 2.0.4, MIT)
 ├── supabase/
 │   ├── schema.sql           ← tables, security rules, storage, realtime (run once)
 │   └── functions/check-tickets/index.ts ← reads ticket result pages (Edge Function)
 ├── tools/analyze-picks.mjs  ← tests the pick engine on the real draw history
+├── tools/eslip-check.mjs    ← checks the shop QR text against known samples
 └── .github/workflows/
     ├── pages.yml            ← deploy web/ to GitHub Pages on push to main
     ├── keepalive.yml        ← keeps the free Supabase project awake
@@ -409,4 +428,5 @@ python3 -m http.server -d web 8000
 
 `supabase/schema.sql` is safe to run again. It keeps existing data and re-applies
 functions, policies and grants. Run it again after updates that add tables, for example
-**Our numbers** (tables `pick_plans` and `group_picks`) and shared **Live** picks (`live_picks`).
+**Our numbers** (tables `pick_plans` and `group_picks`), shared **Live** picks (`live_picks`) and
+**Who buys** (column `pick_plans.buyers`).

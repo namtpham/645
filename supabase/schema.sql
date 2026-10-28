@@ -151,9 +151,12 @@ create index if not exists audit_log_at_idx on public.audit_log (at desc);
 create table if not exists public.pick_plans (
   round      int primary key,
   groups     int not null check (groups between 1 and 100),
+  buyers     jsonb not null default '[]',   -- who buys which groups: [{"by": member id, "from": 1, "to": 13}, …]
   updated_by uuid references public.profiles (id) on delete set null default auth.uid(),
   updated_at timestamptz not null default now()
 );
+
+alter table public.pick_plans add column if not exists buyers jsonb not null default '[]';
 
 create table if not exists public.group_picks (
   round      int not null,

@@ -967,8 +967,8 @@ function parseLottoQR(text) {
   return { url: u.href, round: m ? +m[1] : null, games, status: 'pending', prize: null, manual: false, checked_at: null, message: null };
 }
 
-/** All lotto QR codes in a photo (several tickets per photo are fine). */
-async function readTicketQRs(source) {
+/** The text of every QR code in a picture. */
+async function readQRTexts(source) {
   const ZX = await loadZXing();
   const bmp = await createImageBitmap(source);
   const scale = Math.min(1, 4000 / Math.max(bmp.width, bmp.height));
@@ -979,9 +979,14 @@ async function readTicketQRs(source) {
   g.drawImage(bmp, 0, 0, c.width, c.height);
   bmp.close?.();
   const found = await ZX.readBarcodes(g.getImageData(0, 0, c.width, c.height), { formats: ['QRCode'], tryHarder: true, maxNumberOfSymbols: 40 });
+  return found.filter((r) => r.isValid).map((r) => r.text);
+}
+
+/** All lotto QR codes in a photo (several tickets per photo are fine). */
+async function readTicketQRs(source) {
   const items = [];
-  for (const r of found) {
-    const it = r.isValid && parseLottoQR(r.text);
+  for (const text of await readQRTexts(source)) {
+    const it = parseLottoQR(text);
     if (it && !items.some((x) => x.url === it.url)) items.push(it);
   }
   return items;
@@ -1453,7 +1458,7 @@ function renderPickControls() {
 const pickHistory = () => Object.values(S.draws).filter((d) => d.numbers?.length === 6).sort((a, b) => a.round - b.round);
 
 // Picks tab sections: our own numbers, the engine's suggestions, past-week simulation
-const PICK_SECTIONS = ['board', 'suggest', 'sim', 'live'];
+const PICK_SECTIONS = ['board', 'suggest', 'sim', 'buy', 'live'];
 let _picksSec = (() => { try { return localStorage.getItem('645-picks-sec'); } catch { return null; } })();
 if (!PICK_SECTIONS.includes(_picksSec)) _picksSec = 'board';
 let _historyErr = '';
@@ -1485,6 +1490,7 @@ function renderPicks() {
   if (_picksSec === 'board') renderBoard();
   else if (_picksSec === 'sim') renderSim();
   else if (_picksSec === 'live') renderLive();
+  else if (_picksSec === 'buy') renderBuy();
   else renderSuggestions(ready);
 }
 
@@ -1642,7 +1648,8 @@ async function loadBoard() {
     S.sb.from('group_picks').select('*').eq('round', round).order('created_at'),
   ]);
   const err = pl.error || gp.error;   // tables not created yet → ask the admin to run the schema
-  S.board = { ...S.board, round, groups: pl.data?.groups || 0, picks: err ? [] : gp.data || [], missing: !!err };
+  S.board = { ...S.board, round, groups: pl.data?.groups || 0, buyers: Array.isArray(pl.data?.buyers) ? pl.data.buyers : [],
+    picks: err ? [] : gp.data || [], missing: !!err };
 }
 
 // Layout of the 45 buttons per group, on this device only: shuffled (default) or 1–45 in order.
@@ -1919,6 +1926,273 @@ async function clearMine(g) {
   renderBoard();
   const { error } = await S.sb.from('group_picks').delete().eq('round', B.round).eq('grp', g).eq('picked_by', S.me.id);
   if (error) { fail(error); await loadBoard(); renderBoard(); }
+}
+
+// ── Buying at the shop: who buys which groups, and a mobile-slip QR code (eslip.js) to scan there
+const { eslipPayload, parseEslip, MAX_GAMES: QR_MAX_GAMES } = window.Eslip;
+
+let _qrLib = null;
+function loadQrLib() {
+  _qrLib ||= new Promise((resolve, reject) => {
+    if (window.qrcode) { resolve(window.qrcode); return; }
+    const s = document.createElement('script');
+    s.src = 'vendor/qrcode-generator.js';
+    s.onload = () => resolve(window.qrcode);
+    s.onerror = () => { _qrLib = null; reject(new Error('Could not load the QR code maker.')); };
+    document.head.appendChild(s);
+  });
+  return _qrLib;
+}
+
+/** A QR code as an SVG: black on white with the standard 4-module quiet zone. */
+function qrSvg(text) {
+  const q = window.qrcode(0, 'M');
+  q.addData(text, 'Byte');
+  q.make();
+  const n = q.getModuleCount(), m = 4;
+  let d = '';
+  for (let r = 0; r < n; r++) {
+    for (let c = 0; c < n; c++) {
+      if (!q.isDark(r, c)) continue;
+      let w = 1;
+      while (c + w < n && q.isDark(r, c + w)) w++;
+      d += `M${c + m} ${r + m}h${w}v1h-${w}z`;
+      c += w - 1;
+    }
+  }
+  return `<svg xmlns="http://www.w3.org/2000/svg" class="qr-svg" viewBox="0 0 ${n + 2 * m} ${n + 2 * m}" shape-rendering="crispEdges" role="img" aria-label="QR code">
+    <rect width="100%" height="100%" fill="#fff"/><path d="${d}" fill="#000"/></svg>`;
+}
+
+/** [1,2,3,5,7,8] → "1–3, 5, 7–8" */
+function rangeText(list) {
+  const out = [];
+  for (let i = 0; i < list.length; i++) {
+    let j = i;
+    while (j + 1 < list.length && list[j + 1] === list[j] + 1) j++;
+    out.push(j > i ? `${list[i]}–${list[j]}` : `${list[i]}`);
+    i = j;
+  }
+  return out.join(', ');
+}
+
+const buyerList = () => (S.board.buyers || []).map((b) => ({ by: b.by, from: +b.from || 1, to: +b.to || 1 }));
+
+/** Overlapping ranges, groups nobody buys, ranges past the last group. */
+function buyerIssues(list, groups) {
+  const issues = [], owner = {};
+  list.forEach((b, i) => {
+    if (b.from > b.to) issues.push(`${memberName(b.by)}: "from" is after "to".`);
+    if (b.to > groups) issues.push(`${memberName(b.by)}: we only have ${groups} groups this week.`);
+    for (let g = b.from; g <= Math.min(b.to, groups); g++) (owner[g] ||= []).push(i);
+  });
+  const twice = Object.keys(owner).filter((g) => owner[g].length > 1).map(Number);
+  if (twice.length) issues.push(`Group${twice.length > 1 ? 's' : ''} ${rangeText(twice)} ${twice.length > 1 ? 'are' : 'is'} in two buyers' ranges.`);
+  const none = Array.from({ length: groups }, (_, i) => i + 1).filter((g) => !owner[g]);
+  if (none.length && list.length) issues.push(`Nobody buys group${none.length > 1 ? 's' : ''} ${rangeText(none)} yet.`);
+  return issues;
+}
+
+async function saveBuyers(list) {
+  const B = S.board;
+  B.buyers = list;
+  renderBuy(true);
+  const { error } = await S.sb.from('pick_plans').update({ buyers: list }).eq('round', B.round);
+  if (error) { fail(error); await loadBoard(); renderBuy(); }
+}
+
+function addBuyer() {
+  const B = S.board, list = buyerList();
+  const members = S.profiles.filter((p) => p.status === 'active'), used = new Set(list.map((b) => b.by));
+  const by = !used.has(S.me.id) ? S.me.id : (members.find((p) => !used.has(p.id)) || members[0]).id;
+  const last = list.at(-1);
+  if (!last) list.push({ by, from: 1, to: B.groups });
+  else if (last.to < B.groups) list.push({ by, from: last.to + 1, to: B.groups });
+  else if (last.to > last.from) {   // everything is taken: split the last range in two
+    const mid = Math.floor((last.from + last.to) / 2);
+    list.push({ by, from: mid + 1, to: last.to });
+    last.to = mid;
+  } else { toast('Every group already has a buyer.', 'err'); return; }
+  saveBuyers(list);
+}
+
+function setBuyer(i, patch) {
+  const list = buyerList();
+  if (!list[i]) return;
+  Object.assign(list[i], patch);
+  for (const k of ['from', 'to']) list[i][k] = Math.max(1, Math.min(100, parseInt(list[i][k], 10) || 1));
+  saveBuyers(list);
+}
+
+function removeBuyer(i) { saveBuyers(buyerList().filter((_, j) => j !== i)); }
+
+/** The games one buyer takes to the shop: complete groups in their range not bought yet, ≤ 20 per QR code. */
+function buyerCodes(b, bought) {
+  const games = [], open = [], done = [];
+  for (let g = b.from; g <= Math.min(b.to, S.board.groups); g++) {
+    const nums = groupPicks(g).map((p) => p.num);
+    if (bought[g]) done.push(g);
+    else if (nums.length === 6) games.push({ g, nums });
+    else open.push(g);
+  }
+  const codes = [];
+  for (let i = 0; i < games.length; i += QR_MAX_GAMES) {
+    const part = games.slice(i, i + QR_MAX_GAMES);
+    codes.push({ games: part, payload: eslipPayload(part.map((x) => x.nums)) });
+  }
+  return { games, open, done, codes };
+}
+
+let _qrFull = null;   // { codes: [{ payload, cap }], i }
+function openQrFull(codes, i) {
+  _qrFull = { codes, i };
+  $('qr-full').hidden = false;
+  document.body.classList.add('qr-open');
+  drawQrFull();
+}
+function drawQrFull() {
+  const { codes, i } = _qrFull, c = codes[i];
+  $('qrf-code').innerHTML = qrSvg(c.payload);
+  $('qrf-cap').textContent = c.cap;
+  $('qrf-pos').textContent = codes.length > 1 ? `${i + 1} / ${codes.length}` : '';
+  document.querySelectorAll('#qr-full [data-act=qr-step]').forEach((b) => { b.hidden = codes.length < 2; });
+}
+function stepQrFull(d) {
+  if (!_qrFull) return;
+  _qrFull.i = (_qrFull.i + d + _qrFull.codes.length) % _qrFull.codes.length;
+  drawQrFull();
+}
+function closeQrFull() { _qrFull = null; $('qr-full').hidden = true; document.body.classList.remove('qr-open'); }
+
+let _buyCodes = [];   // what the QR figures on the page show, for the full-screen view
+/** `own`: re-drawn after this member's own edit (otherwise a live update leaves a field being edited alone). */
+function renderBuy(own = false) {
+  const B = S.board, target = drawNo(currentDraw());
+  if (!$('buy-plan')) return;
+  $('buy-for').textContent = `draw #${target} · ${fmtD(currentDraw())}`;
+  if (B.round !== target) { loadBoard().then(renderBuy).catch(console.error); return; }
+  if (B.missing || !B.groups) {
+    $('buy-plan').innerHTML = `<p class="fhelp">${B.missing ? 'Picking numbers together needs the database update (see ✍️ Picks).'
+      : 'Choose how many groups we play in ✍️ Picks first.'}</p>`;
+    $('buy-qrs').innerHTML = '';
+    return;
+  }
+  const list = buyerList(), members = S.profiles.filter((p) => p.status === 'active' || list.some((b) => b.by === p.id));
+  const groups = Array.from({ length: B.groups }, (_, i) => ({ g: i + 1, nums: groupPicks(i + 1).map((p) => p.num) }));
+  const { bought } = matchBought(groups, realGames(B.round));
+  const issues = buyerIssues(list, B.groups);
+  const editing = !own && $('buy-plan').contains(document.activeElement) && /^(INPUT|SELECT)$/.test(document.activeElement.tagName);
+  if (!editing) $('buy-plan').innerHTML = `${list.map((b, i) => `<div class="buyer-row">
+      <select class="finp" data-on-input="buy-by" data-i="${i}" aria-label="Buyer">
+        ${members.map((p) => `<option value="${esc(p.id)}" ${p.id === b.by ? 'selected' : ''}>${esc(p.display_name)}${p.id === S.me.id ? ' (you)' : ''}</option>`).join('')}
+      </select>
+      <span class="fhelp">buys groups</span>
+      <input type="number" class="finp mono" min="1" max="${B.groups}" value="${b.from}" data-on-input="buy-from" data-i="${i}" aria-label="From group">
+      <span class="fhelp">to</span>
+      <input type="number" class="finp mono" min="1" max="${B.groups}" value="${b.to}" data-on-input="buy-to" data-i="${i}" aria-label="To group">
+      <span class="fhelp buyer-n">${Math.max(0, Math.min(b.to, B.groups) - b.from + 1)} groups</span>
+      <button type="button" class="btn btn-ghost btn-sm" data-act="buy-remove" data-i="${i}" title="Remove this buyer">✕</button>
+    </div>`).join('')}
+    <div class="quick-row" style="margin-top:8px">
+      <button type="button" class="btn btn-secondary btn-sm" data-act="buy-add">${list.length ? '+ Add a buyer' : `🙋 I buy all ${B.groups} groups`}</button>
+      ${list.length ? '' : '<span class="fhelp">Usually one or two of us buy each week. Each buyer gets their own QR codes below.</span>'}
+    </div>
+    ${issues.map((t) => `<p class="buy-issue">⚠️ ${esc(t)}</p>`).join('')}`;
+
+  if (!list.length) { $('buy-qrs').innerHTML = ''; return; }
+  if (!window.qrcode) {
+    $('buy-qrs').innerHTML = '<div class="card"><p class="fhelp">Making QR codes…</p></div>';
+    loadQrLib().then(() => S.tab === 'picks' && _picksSec === 'buy' && renderBuy()).catch((e) => { $('buy-qrs').innerHTML = `<div class="form-error">${esc(e.message)}</div>`; });
+    return;
+  }
+  // my own codes first: that is what I show at the shop
+  const order = list.map((b, i) => ({ b, i })).sort((x, y) => (y.b.by === S.me.id) - (x.b.by === S.me.id) || x.i - y.i);
+  _buyCodes = [];
+  $('buy-qrs').innerHTML = `<p class="fhelp buy-note">These codes use the mobile-slip format (<code>MSG_ESLIP</code>) that slip apps such as LottoMate make; our
+      text and checksum match their samples exactly. We can't test a real shop terminal from here, so keep Our tickets handy as a backup.
+      Tap a code to show it full screen (and turn the screen brightness up).</p>`
+    + order.map(({ b }) => {
+      const r = buyerCodes(b, bought), mine = b.by === S.me.id, who = esc(memberName(b.by));
+      const figs = r.codes.map((c, j) => {
+        const k = _buyCodes.push({ payload: c.payload, cap: `${memberName(b.by)} · QR ${j + 1} of ${r.codes.length} · groups ${rangeText(c.games.map((x) => x.g))} · ${c.games.length} games` }) - 1;
+        return `<figure class="qr-fig">
+          <button type="button" class="qr-btn" data-act="qr-big" data-k="${k}" title="Show full screen">${qrSvg(c.payload)}</button>
+          <figcaption><strong>QR ${j + 1}${r.codes.length > 1 ? ` of ${r.codes.length}` : ''}</strong> · groups ${rangeText(c.games.map((x) => x.g))} · ${c.games.length} game${c.games.length > 1 ? 's' : ''} · ${esc(money(c.games.length * TICKET_PRICE))}</figcaption>
+          <details class="qr-details"><summary>Numbers and QR text</summary>
+            ${c.games.map((x) => `<div class="qr-game"><span class="bsum-n">${x.g}</span>${x.nums.map((n) => ball(n, 'hit')).join('')}</div>`).join('')}
+            <code class="qr-text">${esc(c.payload)}</code>
+            <button type="button" class="btn btn-ghost btn-sm" data-act="copy" data-text="${esc(c.payload)}">Copy QR text</button>
+          </details>
+        </figure>`;
+      }).join('');
+      return `<div class="card buy-card${mine ? ' mine' : ''}">
+        <div class="card-hd"><div class="card-title">🛒 ${who}${mine ? ' (you)' : ''} · groups ${b.from}–${Math.min(b.to, B.groups)}</div>
+          <span class="fhelp">${r.games.length} game${r.games.length === 1 ? '' : 's'} to buy · ${esc(money(r.games.length * TICKET_PRICE))}</span></div>
+        ${r.done.length ? `<p class="buy-done">✓ Already bought: group${r.done.length > 1 ? 's' : ''} ${rangeText(r.done)}</p>` : ''}
+        ${r.open.length ? `<p class="buy-issue">⚠️ Not complete, left out: group${r.open.length > 1 ? 's' : ''} ${rangeText(r.open)}</p>` : ''}
+        ${figs ? `<div class="qr-grid">${figs}</div>` : `<p class="fhelp">${r.done.length ? 'Everything in this range is bought. 🎉' : 'No complete groups in this range yet.'}</p>`}
+      </div>`;
+    }).join('');
+}
+
+// ── Compare our codes with another QR maker's
+function chkGames() {
+  const lines = $('chk-games').value.split('\n').map((l) => l.trim()).filter(Boolean);
+  return lines.map((l, i) => {
+    const nums = (l.match(/\d+/g) || []).map(Number);
+    const sorted = [...nums].sort((a, b) => a - b);
+    const bad = nums.length !== 6 ? `has ${nums.length} numbers` : nums.some((n) => n < 1 || n > 45) ? 'has a number outside 1–45'
+      : new Set(nums).size !== 6 ? 'repeats a number' : '';
+    return { line: i + 1, nums, sorted, bad };
+  });
+}
+function chkShow(html) { $('chk-out').innerHTML = html; }
+async function chkMake() {
+  const games = chkGames();
+  const bad = games.filter((g) => g.bad);
+  if (!games.length) return chkShow('<p class="buy-issue">Type at least one game (6 numbers on a line).</p>');
+  if (bad.length) return chkShow(bad.map((g) => `<p class="buy-issue">Line ${g.line} ${esc(g.bad)}.</p>`).join(''));
+  if (games.length > QR_MAX_GAMES) return chkShow(`<p class="buy-issue">One QR code holds at most ${QR_MAX_GAMES} games (you typed ${games.length}).</p>`);
+  await loadQrLib();
+  const payload = eslipPayload(games.map((g) => g.nums));
+  chkShow(`<div class="chk-res"><div class="qr-fig"><button type="button" class="qr-btn" data-act="qr-chk" title="Show full screen">${qrSvg(payload)}</button></div>
+    <div><div class="flbl">Our QR text (${games.length} game${games.length > 1 ? 's' : ''})</div><code class="qr-text" id="chk-ours">${esc(payload)}</code>
+    <button type="button" class="btn btn-ghost btn-sm" data-act="copy" data-text="${esc(payload)}">Copy</button></div></div>`);
+}
+function chkRandom() {
+  const n = 1 + Math.floor(Math.random() * QR_MAX_GAMES);
+  $('chk-games').value = Array.from({ length: n }, () => {
+    const s = new Set();
+    while (s.size < 6) s.add(1 + Math.floor(Math.random() * 45));
+    return [...s].join(' ');   // unsorted, as people type them
+  }).join('\n');
+  chkMake();
+}
+
+/** Read another maker's QR from a screenshot and check that our code for the same games is identical. */
+async function chkFile(file) {
+  if (!file) return;
+  chkShow('<p class="fhelp">Reading the QR code…</p>');
+  try {
+    const texts = await readQRTexts(file);
+    const theirs = texts.find((t) => t.startsWith('MSG_ESLIP')) || texts[0];
+    if (!theirs) return chkShow('<p class="buy-issue">No QR code found in that picture. Try a sharper, closer screenshot.</p>');
+    const p = parseEslip(theirs);
+    if (!p.games.length) return chkShow(`<p class="buy-issue">That QR code isn't a lotto mobile slip. It says:</p><code class="qr-text">${esc(theirs)}</code>`);
+    const ours = p.games.length <= QR_MAX_GAMES && p.games.every((g) => new Set(g).size === 6 && g.every((n) => n >= 1 && n <= 45)) ? eslipPayload(p.games) : null;
+    const typed = chkGames().filter((g) => !g.bad);
+    const sameTyped = typed.length && typed.length === p.games.length && typed.every((g, i) => g.sorted.join() === [...p.games[i]].sort((a, b) => a - b).join());
+    const diff = ours && ours !== theirs ? [...theirs].findIndex((ch, i) => ch !== ours[i]) : -1;
+    const mark = (t, at) => (at < 0 ? esc(t) : `${esc(t.slice(0, at))}<mark>${esc(t.slice(at, at + 1) || '∅')}</mark>${esc(t.slice(at + 1))}`);
+    chkShow(`<div class="chk-verdict ${ours === theirs ? 'ok' : 'bad'}">${ours === theirs
+        ? `✓ Identical: our code for these ${p.games.length} games is exactly the same text (checksum ${esc(p.checksum)}).`
+        : ours ? `✗ Different from character ${diff + 1}. Please send me both texts.` : '✗ Their code holds games we can\'t encode (more than 20, or invalid numbers).'}</div>
+      ${!p.ok ? `<p class="buy-issue">Their code: ${esc(p.problems.join('; '))}.</p>` : ''}
+      ${typed.length ? `<p class="fhelp">${sameTyped ? '✓ Same games as typed above.' : '⚠️ Not the same games as typed above (or in another order).'}</p>` : ''}
+      <div class="flbl">Their QR text</div><code class="qr-text">${mark(theirs, diff)}</code>
+      ${ours ? `<div class="flbl" style="margin-top:8px">Ours for the same games</div><code class="qr-text">${mark(ours, diff)}</code>` : ''}`);
+    if (!typed.length) $('chk-games').value = p.games.map((g) => g.join(' ')).join('\n');
+  } catch (e) { chkShow(`<p class="buy-issue">${esc(e.message || 'Could not read the picture.')}</p>`); }
 }
 
 // ── Live results: tap the numbers as the draw is streamed, our tickets and the top suggestions re-rank
@@ -3081,6 +3355,14 @@ const ACTIONS = {
   'live-undo': () => liveUndo(),
   'live-reset': () => liveReset(),
   'live-official': () => liveOfficial(),
+  'buy-add': () => addBuyer(),
+  'buy-remove': (el) => removeBuyer(+el.dataset.i),
+  'qr-big': (el) => openQrFull(_buyCodes, +el.dataset.k),
+  'qr-chk': () => { const t = $('chk-ours')?.textContent; if (t) openQrFull([{ payload: t, cap: 'Our QR for the typed games' }], 0); },
+  'qr-close': () => closeQrFull(),
+  'qr-step': (el) => stepQrFull(+el.dataset.d),
+  'chk-make': () => chkMake(),
+  'chk-random': () => chkRandom(),
   'focus-off': () => setFocus(null),
   'stat-range': (el) => setStatPref({ range: el.dataset.n }),
   'stat-sort': (el) => setStatPref({ sort: el.dataset.sort }),
@@ -3137,6 +3419,10 @@ const INPUTS = {
   'sim-date': (el, e) => { if (e.type === 'change' && el.value) simSetRound(drawNo(saturdayOf(el.value))); },
   'sim-x': (el, e) => { if (e.type === 'change') simSetX(parseInt(el.value, 10) || 1); },
   'pick-own': (el, e) => { if (e.type === 'change') setPickOwn(el.value); },
+  'buy-by': (el, e) => { if (e.type === 'change') setBuyer(+el.dataset.i, { by: el.value }); },
+  'buy-from': (el, e) => { if (e.type === 'change') setBuyer(+el.dataset.i, { from: el.value }); },
+  'buy-to': (el, e) => { if (e.type === 'change') setBuyer(+el.dataset.i, { to: el.value }); },
+  'chk-file': (el, e) => { if (e.type === 'change') { chkFile(el.files[0]); el.value = ''; } },
   'board-x': (el, e) => { if (e.type === 'change' && el.value) setBoardGroups(parseInt(el.value, 10) || 1); },
   'up-round': () => { const n = parseInt($('up-round').value, 10); if (n >= 1) $('up-date').value = drawDate(n); upDateInfo(); },
   'money-hint': (el) => moneyHint(el.id, el.dataset.hint),
@@ -3164,6 +3450,8 @@ document.addEventListener('keydown', (e) => {
     navTicket(e.key === 'ArrowLeft' ? -1 : 1);
     return;
   }
+  if (_qrFull && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) { stepQrFull(e.key === 'ArrowLeft' ? -1 : 1); return; }
+  if (e.key === 'Escape' && _qrFull) { closeQrFull(); return; }
   if (e.key === 'Escape') { document.querySelectorAll('.overlay.open').forEach((o) => o.classList.remove('open')); if (_focusKey) setFocus(null); }
 });
 

@@ -22,6 +22,7 @@
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.js"></script>
   <script src="config.js?v=dev"></script>
   <script src="picks.js?v=dev"></script>
+  <script src="eslip.js?v=dev"></script>
   <script src="app.js?v=dev" defer></script>
 </head>
 <body>
@@ -222,6 +223,7 @@
       <button type="button" class="seg-btn" data-act="picks-section" data-sec="board">✍️ Picks</button>
       <button type="button" class="seg-btn" data-act="picks-section" data-sec="suggest">🎯 Suggestion</button>
       <button type="button" class="seg-btn" data-act="picks-section" data-sec="sim">🕰️ Simulation</button>
+      <button type="button" class="seg-btn" data-act="picks-section" data-sec="buy">🛒 Buy</button>
       <button type="button" class="seg-btn" data-act="picks-section" data-sec="live">📺 Live</button>
     </div>
     <section class="picks-sec" id="pk-board">
@@ -307,6 +309,34 @@
       <div class="card">
         <div class="card-hd"><div class="card-title">🧪 Backtest</div></div>
         <div id="picks-backtest"></div>
+      </div>
+    </section>
+    <section class="picks-sec" id="pk-buy" hidden>
+      <div class="card" id="buy-plan-card">
+        <div class="card-hd">
+          <div class="card-title">🛒 Who buys</div>
+          <span class="fhelp" id="buy-for"></span>
+        </div>
+        <div id="buy-plan"></div>
+      </div>
+      <div id="buy-qrs"></div>
+      <div class="card" id="buy-check-card">
+        <div class="card-hd"><div class="card-title">🧪 Check against another QR maker</div></div>
+        <p class="fhelp" style="margin:-6px 0 12px">Make a code on another site (e.g. LottoMate) and compare it with ours: type the same
+          games here, or upload a screenshot of their QR code and we read its games and check that our code for them is identical.</p>
+        <div class="buy-check">
+          <div class="fgrp">
+            <label class="flbl" for="chk-games">Games (one per line, 6 numbers each)</label>
+            <textarea class="finp mono" id="chk-games" rows="6" placeholder="8 11 14 23 31 45&#10;2 12 16 18 33 44"></textarea>
+            <div class="quick-row">
+              <button type="button" class="btn btn-secondary btn-sm" data-act="chk-make">Make our QR</button>
+              <button type="button" class="btn btn-ghost btn-sm" data-act="chk-random">🎲 Random games</button>
+              <label class="btn btn-ghost btn-sm" for="chk-file">📷 Scan their QR</label>
+              <input type="file" id="chk-file" accept="image/*" data-on-input="chk-file" hidden>
+            </div>
+          </div>
+          <div id="chk-out"></div>
+        </div>
       </div>
     </section>
     <section class="picks-sec" id="pk-live" hidden>
@@ -685,6 +715,15 @@
 </div>
 
 <div id="focus-veil" data-act="focus-off" hidden></div>
+<div id="qr-full" hidden>
+  <div class="qrf-top"><span id="qrf-cap"></span><button type="button" class="btn btn-ghost btn-sm" data-act="qr-close">✕ Close</button></div>
+  <div id="qrf-code" data-act="qr-close"></div>
+  <div class="qrf-nav">
+    <button type="button" class="btn btn-secondary" data-act="qr-step" data-d="-1">‹ Previous</button>
+    <span id="qrf-pos"></span>
+    <button type="button" class="btn btn-secondary" data-act="qr-step" data-d="1">Next ›</button>
+  </div>
+</div>
 <div class="toast" id="toast"></div>
 </body>
 </html>
