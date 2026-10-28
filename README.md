@@ -116,9 +116,10 @@ with an invitation key from the admin.
     from `MSG_ESLIP` up to and including `{}`. This reproduces the known samples exactly
     (`node tools/eslip-check.mjs` checks them); we can't test a real shop terminal, so keep the
     numbers handy as a backup.
-  - **🧪 Check against another QR maker:** type games (or **🎲 Random games**) to see our code, or
-    upload a screenshot of another site's QR code: its games are read, our code for the same games
-    is made, and the two texts are compared character by character.
+  - **🧪 Check against another QR maker** (folded away; tap to open, for testing only):
+    **🎲 Random games + copy** makes random games and copies them to paste into the other site;
+    paste the text decoded from its QR code into **Their decoded QR text** (or upload a screenshot
+    of the code) and it is compared character by character with our text for the same games.
 - **📺 Live** (Picks tab): while watching the draw, tap each number as it comes out (the 7th
   is the bonus). The taps are shared: every member sees the same numbers in real time and anyone
   can tap (needs the database update: run `supabase/schema.sql` again, which adds `live_picks`;

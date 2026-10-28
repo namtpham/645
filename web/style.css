@@ -819,6 +819,12 @@ body.focus-mode .board-sum .bsum-row.focused { opacity: 1; background: var(--car
 .qr-game .ball { width: 22px; height: 22px; font-size: 10px; }
 .qr-text { display: block; margin: 6px 0; padding: 8px; background: rgba(255,255,255,.04); border-radius: 6px; font: 11px/1.5 var(--mono); word-break: break-all; color: var(--text); }
 .qr-text mark { background: #ef4444; color: #fff; }
+#buy-check-card > summary { cursor: pointer; list-style: none; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+#buy-check-card > summary::-webkit-details-marker { display: none; }
+#buy-check-card > summary::before { content: '▸'; color: var(--muted); transition: transform .15s; }
+#buy-check-card[open] > summary::before { transform: rotate(90deg); }
+#buy-check-card > summary .fhelp { font-family: 'DM Sans', sans-serif; font-weight: 400; }
+#chk-qr:not(:empty) { margin-bottom: 14px; }
 .buy-check { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr); gap: 18px; }
 .buy-check textarea { resize: vertical; font-size: 12px; }
 .chk-res { display: grid; grid-template-columns: 180px minmax(0, 1fr); gap: 14px; align-items: start; }

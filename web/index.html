@@ -320,24 +320,32 @@
         <div id="buy-plan"></div>
       </div>
       <div id="buy-qrs"></div>
-      <div class="card" id="buy-check-card">
-        <div class="card-hd"><div class="card-title">🧪 Check against another QR maker</div></div>
-        <p class="fhelp" style="margin:-6px 0 12px">Make a code on another site (e.g. LottoMate) and compare it with ours: type the same
-          games here, or upload a screenshot of their QR code and we read its games and check that our code for them is identical.</p>
+      <details class="card" id="buy-check-card">
+        <summary class="card-title">🧪 Check against another QR maker <span class="fhelp">(for testing our codes, hidden by default)</span></summary>
+        <p class="fhelp" style="margin:10px 0 12px">Compare our QR text with another site's (e.g. LottoMate):
+          <strong>1.</strong> press 🎲 Random games (they are copied, paste them into the other site) or type games;
+          <strong>2.</strong> paste the text decoded from their QR code below, or upload a screenshot of it;
+          <strong>3.</strong> we compare it with our text for the same games, character by character.</p>
         <div class="buy-check">
           <div class="fgrp">
             <label class="flbl" for="chk-games">Games (one per line, 6 numbers each)</label>
-            <textarea class="finp mono" id="chk-games" rows="6" placeholder="8 11 14 23 31 45&#10;2 12 16 18 33 44"></textarea>
+            <textarea class="finp mono" id="chk-games" rows="6" placeholder="8 11 14 23 31 45&#10;2 12 16 18 33 44" data-on-input="chk-games"></textarea>
             <div class="quick-row">
-              <button type="button" class="btn btn-secondary btn-sm" data-act="chk-make">Make our QR</button>
-              <button type="button" class="btn btn-ghost btn-sm" data-act="chk-random">🎲 Random games</button>
-              <label class="btn btn-ghost btn-sm" for="chk-file">📷 Scan their QR</label>
+              <button type="button" class="btn btn-secondary btn-sm" data-act="chk-random">🎲 Random games + copy</button>
+              <button type="button" class="btn btn-ghost btn-sm" data-act="chk-copy">📋 Copy games</button>
+              <button type="button" class="btn btn-ghost btn-sm" data-act="chk-make">Make our QR</button>
+            </div>
+            <label class="flbl" for="chk-theirs" style="margin-top:8px">Their decoded QR text</label>
+            <textarea class="finp mono" id="chk-theirs" rows="4" placeholder="MSG_ESLIP{10645}{(…)}{}6B|" data-on-input="chk-theirs" spellcheck="false"></textarea>
+            <div class="quick-row">
+              <button type="button" class="btn btn-secondary btn-sm" data-act="chk-compare">Compare</button>
+              <label class="btn btn-ghost btn-sm" for="chk-file">📷 Or scan their QR</label>
               <input type="file" id="chk-file" accept="image/*" data-on-input="chk-file" hidden>
             </div>
           </div>
-          <div id="chk-out"></div>
+          <div><div id="chk-qr"></div><div id="chk-out"></div></div>
         </div>
-      </div>
+      </details>
     </section>
     <section class="picks-sec" id="pk-live" hidden>
       <div class="card" id="live-card">

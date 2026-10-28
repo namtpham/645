@@ -2147,18 +2147,26 @@ function chkGames() {
   });
 }
 function chkShow(html) { $('chk-out').innerHTML = html; }
+const chkValid = (games) => games.length > 0 && games.length <= QR_MAX_GAMES
+  && games.every((g) => g.length === 6 && new Set(g).size === 6 && g.every((n) => Number.isInteger(n) && n >= 1 && n <= 45));
+
+/** Our QR (and its text) for the typed games. */
 async function chkMake() {
-  const games = chkGames();
-  const bad = games.filter((g) => g.bad);
-  if (!games.length) return chkShow('<p class="buy-issue">Type at least one game (6 numbers on a line).</p>');
-  if (bad.length) return chkShow(bad.map((g) => `<p class="buy-issue">Line ${g.line} ${esc(g.bad)}.</p>`).join(''));
-  if (games.length > QR_MAX_GAMES) return chkShow(`<p class="buy-issue">One QR code holds at most ${QR_MAX_GAMES} games (you typed ${games.length}).</p>`);
+  const games = chkGames(), bad = games.filter((g) => g.bad);
+  const out = (html) => { $('chk-qr').innerHTML = html; };
+  if (!games.length) return out('<p class="buy-issue">Type at least one game (6 numbers on a line).</p>');
+  if (bad.length) return out(bad.map((g) => `<p class="buy-issue">Line ${g.line} ${esc(g.bad)}.</p>`).join(''));
+  if (games.length > QR_MAX_GAMES) return out(`<p class="buy-issue">One QR code holds at most ${QR_MAX_GAMES} games (you typed ${games.length}).</p>`);
   await loadQrLib();
   const payload = eslipPayload(games.map((g) => g.nums));
-  chkShow(`<div class="chk-res"><div class="qr-fig"><button type="button" class="qr-btn" data-act="qr-chk" title="Show full screen">${qrSvg(payload)}</button></div>
+  out(`<div class="chk-res"><div class="qr-fig"><button type="button" class="qr-btn" data-act="qr-chk" title="Show full screen">${qrSvg(payload)}</button></div>
     <div><div class="flbl">Our QR text (${games.length} game${games.length > 1 ? 's' : ''})</div><code class="qr-text" id="chk-ours">${esc(payload)}</code>
     <button type="button" class="btn btn-ghost btn-sm" data-act="copy" data-text="${esc(payload)}">Copy</button></div></div>`);
 }
+
+const chkGamesText = () => chkGames().map((g) => g.nums.join(' ')).join('\n');
+
+/** New random games, copied for pasting into the other QR maker. */
 function chkRandom() {
   const n = 1 + Math.floor(Math.random() * QR_MAX_GAMES);
   $('chk-games').value = Array.from({ length: n }, () => {
@@ -2166,10 +2174,41 @@ function chkRandom() {
     while (s.size < 6) s.add(1 + Math.floor(Math.random() * 45));
     return [...s].join(' ');   // unsorted, as people type them
   }).join('\n');
+  $('chk-theirs').value = '';
+  chkShow('');
+  copyText($('chk-games').value, `${n} random game${n > 1 ? 's' : ''} copied: paste them into the other QR maker.`);
   chkMake();
 }
 
-/** Read another maker's QR from a screenshot and check that our code for the same games is identical. */
+/**
+ * Compare the text decoded from another maker's QR code with ours: for the games typed here
+ * (what was entered on both sites), or for the games in their text when none are typed.
+ */
+function chkCompare() {
+  const theirs = $('chk-theirs').value.trim();
+  if (!theirs) { chkShow('<p class="buy-issue">Paste the text decoded from their QR code first.</p>'); return; }
+  const p = parseEslip(theirs), typed = chkGames().filter((g) => !g.bad);
+  const games = typed.length ? typed.map((g) => g.nums) : p.games;
+  const ours = chkValid(games) ? eslipPayload(games) : null;
+  const sameGames = typed.length && p.games.length
+    ? typed.length === p.games.length && typed.every((g, i) => g.sorted.join() === [...p.games[i]].sort((a, b) => a - b).join()) : null;
+  let diff = -1;
+  if (ours && ours !== theirs) { diff = [...theirs].findIndex((ch, i) => ch !== ours[i]); if (diff < 0) diff = theirs.length; }
+  const mark = (t, at) => (at < 0 ? esc(t) : `${esc(t.slice(0, at))}<mark>${esc(t.slice(at, at + 1) || '∅')}</mark>${esc(t.slice(at + 1))}`);
+  const n = games.length;
+  chkShow(`<div class="chk-verdict ${ours && ours === theirs ? 'ok' : 'bad'}">${!ours
+      ? (p.games.length || typed.length ? '✗ We can\'t make a code for these games (more than 20, or invalid numbers).' : '✗ No games found: type the games, or paste a complete MSG_ESLIP text.')
+      : ours === theirs ? `✓ Identical: our text for ${typed.length ? 'the typed' : 'these'} ${n} game${n > 1 ? 's' : ''} is exactly the same (checksum ${esc(p.checksum)}).`
+      : `✗ Different from character ${diff + 1} (theirs has ${theirs.length} characters, ours ${ours.length}). Please send me both texts.`}</div>
+    ${!p.games.length ? '<p class="buy-issue">Their text isn\'t a complete Lotto 6/45 mobile slip text (MSG_ESLIP{10645}{…}{}XX|).</p>'
+      : !p.ok ? `<p class="buy-issue">Their text: ${esc(p.problems.join('; '))}.</p>` : ''}
+    ${sameGames === null ? '' : `<p class="fhelp">${sameGames ? `✓ Their code holds the same ${n} games as typed here.` : `⚠️ Their code holds ${p.games.length} game${p.games.length === 1 ? '' : 's'} that are not the same as typed here (or in another order).`}</p>`}
+    <div class="flbl">Their QR text</div><code class="qr-text">${mark(theirs, diff)}</code>
+    ${ours ? `<div class="flbl" style="margin-top:8px">Ours for the ${typed.length ? 'typed' : 'same'} games</div><code class="qr-text">${mark(ours, diff)}</code>` : ''}`);
+  if (!typed.length && p.games.length) { $('chk-games').value = p.games.map((g) => g.join(' ')).join('\n'); chkMake(); }
+}
+
+/** Read another maker's QR from a screenshot into the text box, then compare. */
 async function chkFile(file) {
   if (!file) return;
   chkShow('<p class="fhelp">Reading the QR code…</p>');
@@ -2177,21 +2216,8 @@ async function chkFile(file) {
     const texts = await readQRTexts(file);
     const theirs = texts.find((t) => t.startsWith('MSG_ESLIP')) || texts[0];
     if (!theirs) return chkShow('<p class="buy-issue">No QR code found in that picture. Try a sharper, closer screenshot.</p>');
-    const p = parseEslip(theirs);
-    if (!p.games.length) return chkShow(`<p class="buy-issue">That QR code isn't a lotto mobile slip. It says:</p><code class="qr-text">${esc(theirs)}</code>`);
-    const ours = p.games.length <= QR_MAX_GAMES && p.games.every((g) => new Set(g).size === 6 && g.every((n) => n >= 1 && n <= 45)) ? eslipPayload(p.games) : null;
-    const typed = chkGames().filter((g) => !g.bad);
-    const sameTyped = typed.length && typed.length === p.games.length && typed.every((g, i) => g.sorted.join() === [...p.games[i]].sort((a, b) => a - b).join());
-    const diff = ours && ours !== theirs ? [...theirs].findIndex((ch, i) => ch !== ours[i]) : -1;
-    const mark = (t, at) => (at < 0 ? esc(t) : `${esc(t.slice(0, at))}<mark>${esc(t.slice(at, at + 1) || '∅')}</mark>${esc(t.slice(at + 1))}`);
-    chkShow(`<div class="chk-verdict ${ours === theirs ? 'ok' : 'bad'}">${ours === theirs
-        ? `✓ Identical: our code for these ${p.games.length} games is exactly the same text (checksum ${esc(p.checksum)}).`
-        : ours ? `✗ Different from character ${diff + 1}. Please send me both texts.` : '✗ Their code holds games we can\'t encode (more than 20, or invalid numbers).'}</div>
-      ${!p.ok ? `<p class="buy-issue">Their code: ${esc(p.problems.join('; '))}.</p>` : ''}
-      ${typed.length ? `<p class="fhelp">${sameTyped ? '✓ Same games as typed above.' : '⚠️ Not the same games as typed above (or in another order).'}</p>` : ''}
-      <div class="flbl">Their QR text</div><code class="qr-text">${mark(theirs, diff)}</code>
-      ${ours ? `<div class="flbl" style="margin-top:8px">Ours for the same games</div><code class="qr-text">${mark(ours, diff)}</code>` : ''}`);
-    if (!typed.length) $('chk-games').value = p.games.map((g) => g.join(' ')).join('\n');
+    $('chk-theirs').value = theirs;
+    chkCompare();
   } catch (e) { chkShow(`<p class="buy-issue">${esc(e.message || 'Could not read the picture.')}</p>`); }
 }
 
@@ -3363,6 +3389,8 @@ const ACTIONS = {
   'qr-step': (el) => stepQrFull(+el.dataset.d),
   'chk-make': () => chkMake(),
   'chk-random': () => chkRandom(),
+  'chk-copy': () => (chkGames().length ? copyText(chkGamesText(), 'Games copied.') : toast('Type or make some games first.', 'err')),
+  'chk-compare': () => chkCompare(),
   'focus-off': () => setFocus(null),
   'stat-range': (el) => setStatPref({ range: el.dataset.n }),
   'stat-sort': (el) => setStatPref({ sort: el.dataset.sort }),
@@ -3423,6 +3451,8 @@ const INPUTS = {
   'buy-from': (el, e) => { if (e.type === 'change') setBuyer(+el.dataset.i, { from: el.value }); },
   'buy-to': (el, e) => { if (e.type === 'change') setBuyer(+el.dataset.i, { to: el.value }); },
   'chk-file': (el, e) => { if (e.type === 'change') { chkFile(el.files[0]); el.value = ''; } },
+  'chk-theirs': (el, e) => { if (e.type === 'input' && el.value.trim()) chkCompare(); },
+  'chk-games': (el, e) => { if (e.type === 'change' && $('chk-theirs').value.trim()) chkCompare(); },
   'board-x': (el, e) => { if (e.type === 'change' && el.value) setBoardGroups(parseInt(el.value, 10) || 1); },
   'up-round': () => { const n = parseInt($('up-round').value, 10); if (n >= 1) $('up-date').value = drawDate(n); upDateInfo(); },
   'money-hint': (el) => moneyHint(el.id, el.dataset.hint),
