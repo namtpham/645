@@ -430,9 +430,24 @@ begin
   values (auth.uid(), tg_table_name,
           coalesce(to_jsonb(new) ->> 'id', to_jsonb(old) ->> 'id'),
           tg_op,
-          case when tg_op <> 'INSERT' then to_jsonb(old) end,
+          -- a deletion keeps the reason given for it (set by delete_ticket)
+          case when tg_op <> 'INSERT' then to_jsonb(old)
+            || case when tg_op = 'DELETE' and coalesce(current_setting('app.delete_reason', true), '') <> ''
+                    then jsonb_build_object('delete_reason', current_setting('app.delete_reason', true)) else '{}'::jsonb end end,
           case when tg_op <> 'DELETE' then to_jsonb(new) end);
   return null;
+end $$;
+
+-- Ticket photos are deleted only through here, by an admin, with a reason that goes into the audit log.
+create or replace function public.delete_ticket(p_ticket uuid, p_reason text)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  if not is_admin() then raise exception 'Only an admin can delete ticket photos'; end if;
+  if length(trim(coalesce(p_reason, ''))) = 0 then raise exception 'Give a reason for deleting this photo'; end if;
+  perform set_config('app.delete_reason', left(trim(p_reason), 200), true);
+  delete from tickets where id = p_ticket;
+  if not found then raise exception 'That photo was not found'; end if;
+  perform set_config('app.delete_reason', '', true);
 end $$;
 
 do $$
@@ -528,7 +543,7 @@ create policy "edit live picks" on public.live_picks for update to authenticated
 
 revoke all on all tables in schema public from anon, authenticated;
 grant select, insert, update, delete on public.investors, public.weeks to authenticated;
-grant select, insert, delete         on public.tickets   to authenticated;
+grant select, insert                 on public.tickets   to authenticated;   -- delete: delete_ticket()
 grant update (qr_data, result)       on public.tickets   to authenticated;
 grant select, update                 on public.settings  to authenticated;
 grant select, update, delete         on public.invites   to authenticated;
@@ -546,6 +561,7 @@ grant execute on function public.is_member(), public.is_admin(), public.normaliz
                           public.admin_set_password(uuid, text)
   to authenticated;
 grant execute on function public.move_ticket_to_qr_draw(uuid) to authenticated;
+grant execute on function public.delete_ticket(uuid, text) to authenticated;
 grant execute on function public.check_invite(text), public.username_available(text, text),
                           public.ping()
   to anon, authenticated;

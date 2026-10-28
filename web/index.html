@@ -221,9 +221,9 @@
     </div>
     <div class="seg picks-sections" id="picks-sections">
       <button type="button" class="seg-btn" data-act="picks-section" data-sec="board">✍️ Picks</button>
+      <button type="button" class="seg-btn" data-act="picks-section" data-sec="buy">🛒 Buy</button>
       <button type="button" class="seg-btn" data-act="picks-section" data-sec="suggest">🎯 Suggestion</button>
       <button type="button" class="seg-btn" data-act="picks-section" data-sec="sim">🕰️ Simulation</button>
-      <button type="button" class="seg-btn" data-act="picks-section" data-sec="buy">🛒 Buy</button>
       <button type="button" class="seg-btn" data-act="picks-section" data-sec="live">📺 Live</button>
     </div>
     <section class="picks-sec" id="pk-board">
@@ -320,6 +320,7 @@
         <div id="buy-plan"></div>
       </div>
       <div id="buy-qrs"></div>
+      <!-- QR check against another maker: tested and no longer needed; kept for later (see app.js "Compare our codes").
       <details class="card" id="buy-check-card">
         <summary class="card-title">🧪 Check against another QR maker <span class="fhelp">(for testing our codes, hidden by default)</span></summary>
         <p class="fhelp" style="margin:10px 0 12px">Compare our QR text with another site's (e.g. LottoMate):
@@ -346,6 +347,7 @@
           <div><div id="chk-qr"></div><div id="chk-out"></div></div>
         </div>
       </details>
+      -->
     </section>
     <section class="picks-sec" id="pk-live" hidden>
       <div class="card" id="live-card">
@@ -685,6 +687,33 @@
       </div>
     </div>
     <div class="modal-body" id="invd-body"></div>
+  </div>
+</div>
+
+<!-- ═══ DELETE TICKET PHOTO (reason goes into the activity log) ═══════════ -->
+<div class="overlay" id="del-overlay">
+  <div class="modal modal-sm">
+    <div class="modal-hd">
+      <div class="modal-title">🗑️ Delete ticket photo</div>
+      <button class="modal-close" data-act="close-modal" data-id="del-overlay">✕</button>
+    </div>
+    <div class="modal-body">
+      <p class="fhelp" style="margin-bottom:10px">The photo is deleted for good. Everyone sees who deleted it and why in the activity log.</p>
+      <div class="del-reasons" id="del-reasons">
+        <label><input type="radio" name="del-reason" data-on-input="del-reason" value="Duplicate (uploaded twice)"> Duplicate (uploaded twice)</label>
+        <label><input type="radio" name="del-reason" data-on-input="del-reason" value="QR code not detected"> QR code not detected</label>
+        <label><input type="radio" name="del-reason" data-on-input="del-reason" value="Wrong image (not our ticket)"> Wrong image (not our ticket)</label>
+        <label><input type="radio" name="del-reason" data-on-input="del-reason" value="Wrong draw (will upload again)"> Wrong draw (will upload again)</label>
+        <label><input type="radio" name="del-reason" data-on-input="del-reason" value="Blurry or cut off"> Blurry or cut off</label>
+        <label><input type="radio" name="del-reason" data-on-input="del-reason" value="custom"> Other reason…</label>
+      </div>
+      <input type="text" class="finp" id="del-custom" maxlength="200" placeholder="Write the reason" hidden>
+      <p class="form-error" id="del-err" hidden></p>
+    </div>
+    <div class="modal-ft">
+      <button class="btn btn-secondary" data-act="close-modal" data-id="del-overlay">Cancel</button>
+      <button class="btn btn-danger" data-act="ticket-del-confirm" id="del-btn">Delete photo</button>
+    </div>
   </div>
 </div>
 

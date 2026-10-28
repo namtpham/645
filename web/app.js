@@ -967,25 +967,47 @@ function parseLottoQR(text) {
   return { url: u.href, round: m ? +m[1] : null, games, status: 'pending', prize: null, manual: false, checked_at: null, message: null };
 }
 
-/** The text of every QR code in a picture. */
-async function readQRTexts(source) {
+// Ways to look at a photo. A blurry or sideways ticket is often found in one turn of the picture and
+// missed in another, so the photo is always read straight and turned both ways (all codes found are
+// kept); the slower ways only run when that finds nothing, or on a re-scan (`thorough`).
+const QR_PASSES = [
+  { side: 4000, turn: 0 }, { side: 4000, turn: 90 }, { side: 4000, turn: 270 },
+  { side: 2400, turn: 0, denoise: true, extra: true }, { side: 2400, turn: 90, denoise: true, extra: true },
+  { side: 4000, turn: 180, extra: true },
+  { side: 1600, turn: 0, binarizer: 'GlobalHistogram', extra: true }, { side: 1600, turn: 90, binarizer: 'GlobalHistogram', extra: true },
+];
+
+/** The text of every QR code in a picture (see QR_PASSES). */
+async function readQRTexts(source, { thorough = false } = {}) {
   const ZX = await loadZXing();
-  const bmp = await createImageBitmap(source);
-  const scale = Math.min(1, 4000 / Math.max(bmp.width, bmp.height));
-  const c = document.createElement('canvas');
-  c.width = Math.round(bmp.width * scale);
-  c.height = Math.round(bmp.height * scale);
-  const g = c.getContext('2d', { willReadFrequently: true });
-  g.drawImage(bmp, 0, 0, c.width, c.height);
-  bmp.close?.();
-  const found = await ZX.readBarcodes(g.getImageData(0, 0, c.width, c.height), { formats: ['QRCode'], tryHarder: true, maxNumberOfSymbols: 40 });
-  return found.filter((r) => r.isValid).map((r) => r.text);
+  const bmp = await createImageBitmap(source, { imageOrientation: 'from-image' });
+  const texts = new Set();
+  try {
+    for (const pass of QR_PASSES) {
+      if (pass.extra && texts.size && !thorough) break;
+      const scale = Math.min(1, pass.side / Math.max(bmp.width, bmp.height));
+      const w = Math.round(bmp.width * scale), h = Math.round(bmp.height * scale), side = pass.turn % 180 !== 0;
+      const c = document.createElement('canvas');
+      c.width = side ? h : w;
+      c.height = side ? w : h;
+      const g = c.getContext('2d', { willReadFrequently: true });
+      g.translate(c.width / 2, c.height / 2);
+      g.rotate((pass.turn * Math.PI) / 180);
+      g.drawImage(bmp, -w / 2, -h / 2, w, h);
+      const found = await ZX.readBarcodes(g.getImageData(0, 0, c.width, c.height), {
+        formats: ['QRCode'], tryHarder: true, tryRotate: true, tryInvert: true, maxNumberOfSymbols: 40,
+        ...(pass.denoise ? { tryDenoise: true } : {}), ...(pass.binarizer ? { binarizer: pass.binarizer } : {}),
+      });
+      found.filter((r) => r.isValid).forEach((r) => texts.add(r.text));
+    }
+  } finally { bmp.close?.(); }
+  return [...texts];
 }
 
 /** All lotto QR codes in a photo (several tickets per photo are fine). */
-async function readTicketQRs(source) {
+async function readTicketQRs(source, opts) {
   const items = [];
-  for (const text of await readQRTexts(source)) {
+  for (const text of await readQRTexts(source, opts)) {
     const it = parseLottoQR(text);
     if (it && !items.some((x) => x.url === it.url)) items.push(it);
   }
@@ -1164,7 +1186,7 @@ async function scanLbPhoto() {
   $('lb-qr').querySelector('[data-act=qr-scan]').textContent = 'Scanning…';
   try {
     const url = (await signedUrls([t.storage_path]))[t.storage_path];
-    const found = await readTicketQRs(await (await fetch(url)).blob());
+    const found = await readTicketQRs(await (await fetch(url)).blob(), { thorough: true });
     const items = [...qrItems(t)];
     for (const f of found) if (!items.some((i) => i.url === f.url)) items.push(f);
     await saveQr(items, `${found.length} QR code${found.length === 1 ? '' : 's'} found.`);
@@ -1390,16 +1412,40 @@ async function openTicket(id) {
   } catch (e) { fail(e, 'Could not load the image.'); }
 }
 
-async function deleteTicket() {
-  const t = S.lbTicket;
-  if (!t || !confirm('Delete this ticket photo permanently? (Admin only — the deletion is kept in the activity log.)')) return;
-  const { error: e1 } = await S.sb.storage.from(BUCKET).remove([t.storage_path, t.thumb_path].filter(Boolean));
-  if (e1) return fail(e1);
-  const { error: e2 } = await S.sb.from('tickets').delete().eq('id', t.id);
-  if (e2) return fail(e2);
-  closeModal('lb-overlay');
-  toast('Photo deleted.', 'ok');
-  await loadAll();
+/** Deleting a photo asks why; the reason is kept with the deletion in the activity log. */
+function deleteTicket() {
+  if (!S.lbTicket) return;
+  document.querySelectorAll('#del-reasons input').forEach((r) => { r.checked = false; });
+  $('del-custom').value = '';
+  $('del-custom').hidden = true;
+  $('del-err').hidden = true;
+  $('del-overlay').classList.add('open');
+}
+
+function delReason() {
+  const r = document.querySelector('#del-reasons input:checked')?.value;
+  return r === 'custom' ? $('del-custom').value.trim() : r || '';
+}
+
+async function confirmDeleteTicket() {
+  const t = S.lbTicket, reason = delReason();
+  const err = (m) => { $('del-err').textContent = m; $('del-err').hidden = false; };
+  if (!t) return;
+  if (!reason) return err(document.querySelector('#del-reasons input:checked') ? 'Write the reason.' : 'Choose why the photo is deleted.');
+  $('del-btn').disabled = true;
+  try {
+    const { error } = await S.sb.rpc('delete_ticket', { p_ticket: t.id, p_reason: reason });
+    if (error) {
+      return err(/delete_ticket|schema cache|function/i.test(error.message) && !/admin|reason|not found/i.test(error.message)
+        ? 'The database needs an update first: run supabase/schema.sql again in the Supabase SQL editor.' : error.message);
+    }
+    const { error: e2 } = await S.sb.storage.from(BUCKET).remove([t.storage_path, t.thumb_path].filter(Boolean));
+    if (e2) console.warn('photo file not removed', e2);
+    closeModal('del-overlay');
+    closeModal('lb-overlay');
+    toast('Photo deleted.', 'ok');
+    await loadAll();
+  } finally { $('del-btn').disabled = false; }
 }
 
 // ─── Number suggestions ───────────────────────────────────────────────────────
@@ -1458,7 +1504,7 @@ function renderPickControls() {
 const pickHistory = () => Object.values(S.draws).filter((d) => d.numbers?.length === 6).sort((a, b) => a.round - b.round);
 
 // Picks tab sections: our own numbers, the engine's suggestions, past-week simulation
-const PICK_SECTIONS = ['board', 'suggest', 'sim', 'buy', 'live'];
+const PICK_SECTIONS = ['board', 'buy', 'suggest', 'sim', 'live'];
 let _picksSec = (() => { try { return localStorage.getItem('645-picks-sec'); } catch { return null; } })();
 if (!PICK_SECTIONS.includes(_picksSec)) _picksSec = 'board';
 let _historyErr = '';
@@ -1976,55 +2022,85 @@ function rangeText(list) {
   return out.join(', ');
 }
 
-const buyerList = () => (S.board.buyers || []).map((b) => ({ by: b.by, from: +b.from || 1, to: +b.to || 1 }));
-
-/** Overlapping ranges, groups nobody buys, ranges past the last group. */
-function buyerIssues(list, groups) {
-  const issues = [], owner = {};
-  list.forEach((b, i) => {
-    if (b.from > b.to) issues.push(`${memberName(b.by)}: "from" is after "to".`);
-    if (b.to > groups) issues.push(`${memberName(b.by)}: we only have ${groups} groups this week.`);
-    for (let g = b.from; g <= Math.min(b.to, groups); g++) (owner[g] ||= []).push(i);
-  });
-  const twice = Object.keys(owner).filter((g) => owner[g].length > 1).map(Number);
-  if (twice.length) issues.push(`Group${twice.length > 1 ? 's' : ''} ${rangeText(twice)} ${twice.length > 1 ? 'are' : 'is'} in two buyers' ranges.`);
-  const none = Array.from({ length: groups }, (_, i) => i + 1).filter((g) => !owner[g]);
-  if (none.length && list.length) issues.push(`Nobody buys group${none.length > 1 ? 's' : ''} ${rangeText(none)} yet.`);
-  return issues;
+/**
+ * Buyers split groups 1–m into back-to-back ranges: each starts right after the one before and the
+ * last ends at m, so ranges can never overlap or leave a gap. Only each buyer's last group matters;
+ * this also fits a saved plan to a changed number of groups.
+ */
+function normBuyers(list, m) {
+  const out = [];
+  let from = 1;
+  for (const b of list || []) {
+    if (from > m) break;
+    const to = Math.max(from, Math.min(m, parseInt(b.to, 10) || m));
+    out.push({ by: b.by || null, from, to });
+    from = to + 1;
+  }
+  if (out.length) out[out.length - 1].to = m;
+  return out;
 }
+const buyerList = () => normBuyers(S.board.buyers, S.board.groups);
 
 async function saveBuyers(list) {
   const B = S.board;
-  B.buyers = list;
+  B.buyers = normBuyers(list, B.groups);
   renderBuy(true);
-  const { error } = await S.sb.from('pick_plans').update({ buyers: list }).eq('round', B.round);
+  const { error } = await S.sb.from('pick_plans').update({ buyers: B.buyers }).eq('round', B.round);
   if (error) { fail(error); await loadBoard(); renderBuy(); }
 }
 
-function addBuyer() {
-  const B = S.board, list = buyerList();
-  const members = S.profiles.filter((p) => p.status === 'active'), used = new Set(list.map((b) => b.by));
-  const by = !used.has(S.me.id) ? S.me.id : (members.find((p) => !used.has(p.id)) || members[0]).id;
-  const last = list.at(-1);
-  if (!last) list.push({ by, from: 1, to: B.groups });
-  else if (last.to < B.groups) list.push({ by, from: last.to + 1, to: B.groups });
-  else if (last.to > last.from) {   // everything is taken: split the last range in two
-    const mid = Math.floor((last.from + last.to) / 2);
-    list.push({ by, from: mid + 1, to: last.to });
-    last.to = mid;
-  } else { toast('Every group already has a buyer.', 'err'); return; }
-  saveBuyers(list);
+/** Someone not buying yet (or nobody: the row then asks who). */
+function nextBuyer(list) {
+  const used = new Set(list.map((b) => b.by));
+  return S.profiles.find((p) => p.status === 'active' && !used.has(p.id))?.id || null;
 }
 
-function setBuyer(i, patch) {
+/** "I buy": one slider over all groups, mine. */
+function startBuying() { saveBuyers([{ by: S.me.id, to: S.board.groups }]); }
+
+/** Buyer i now buys up to group n: later buyers start after n, and what is left goes to a new buyer. */
+function setBuyerEnd(i, n) {
+  const m = S.board.groups, list = buyerList();
+  if (!list[i]) return;
+  n = Math.max(list[i].from, Math.min(m, n | 0));
+  list[i].to = n;
+  const later = n === m ? [] : list.slice(i + 1).filter((b) => b.to > n);
+  const next = list.slice(0, i + 1).concat(later);
+  if (n < m && !later.length) next.push({ by: nextBuyer(next), to: m });
+  saveBuyers(next);
+}
+
+function setBuyer(i, by) {
   const list = buyerList();
   if (!list[i]) return;
-  Object.assign(list[i], patch);
-  for (const k of ['from', 'to']) list[i][k] = Math.max(1, Math.min(100, parseInt(list[i][k], 10) || 1));
+  list[i].by = by || null;
   saveBuyers(list);
 }
 
-function removeBuyer(i) { saveBuyers(buyerList().filter((_, j) => j !== i)); }
+/** Remove a buyer: their groups go to the buyer before (or, for the first, the one after). */
+function removeBuyer(i) {
+  const list = buyerList();
+  if (i > 0) list[i - 1].to = list[i].to;
+  list.splice(i, 1);
+  saveBuyers(list);
+}
+
+const buyerColor = (b) => (b.by ? memberColor(b.by) : '#64748b');
+/** Where group g sits along a slider of groups 1–m, in % (the thumb's centre at that value). */
+const sliderPct = (g, m) => (m > 1 ? ((g - 1) / (m - 1)) * 100 : 100);
+const buyerRangeHtml = (b) => {
+  const n = b.to - b.from + 1;
+  return `groups <strong>${b.from === b.to ? b.from : `${b.from}–${b.to}`}</strong> · ${n} group${n > 1 ? 's' : ''} · ${esc(money(n * TICKET_PRICE))}`;
+};
+
+/** While dragging: keep the thumb inside this buyer's part and update its label; saved on release. */
+function previewBuyerEnd(el) {
+  const b = buyerList()[+el.dataset.i];
+  if (!b) return;
+  if (+el.value < b.from) el.value = b.from;
+  el.style.setProperty('--b', `${sliderPct(+el.value, S.board.groups)}%`);
+  el.closest('.buyer-row').querySelector('.buyer-range').innerHTML = buyerRangeHtml({ ...b, to: +el.value });
+}
 
 /** The games one buyer takes to the shop: complete groups in their range not bought yet, ≤ 20 per QR code. */
 function buyerCodes(b, bought) {
@@ -2080,24 +2156,37 @@ function renderBuy(own = false) {
   const list = buyerList(), members = S.profiles.filter((p) => p.status === 'active' || list.some((b) => b.by === p.id));
   const groups = Array.from({ length: B.groups }, (_, i) => ({ g: i + 1, nums: groupPicks(i + 1).map((p) => p.num) }));
   const { bought } = matchBought(groups, realGames(B.round));
-  const issues = buyerIssues(list, B.groups);
-  const editing = !own && $('buy-plan').contains(document.activeElement) && /^(INPUT|SELECT)$/.test(document.activeElement.tagName);
-  if (!editing) $('buy-plan').innerHTML = `${list.map((b, i) => `<div class="buyer-row">
-      <select class="finp" data-on-input="buy-by" data-i="${i}" aria-label="Buyer">
-        ${members.map((p) => `<option value="${esc(p.id)}" ${p.id === b.by ? 'selected' : ''}>${esc(p.display_name)}${p.id === S.me.id ? ' (you)' : ''}</option>`).join('')}
-      </select>
-      <span class="fhelp">buys groups</span>
-      <input type="number" class="finp mono" min="1" max="${B.groups}" value="${b.from}" data-on-input="buy-from" data-i="${i}" aria-label="From group">
-      <span class="fhelp">to</span>
-      <input type="number" class="finp mono" min="1" max="${B.groups}" value="${b.to}" data-on-input="buy-to" data-i="${i}" aria-label="To group">
-      <span class="fhelp buyer-n">${Math.max(0, Math.min(b.to, B.groups) - b.from + 1)} groups</span>
-      <button type="button" class="btn btn-ghost btn-sm" data-act="buy-remove" data-i="${i}" title="Remove this buyer">✕</button>
-    </div>`).join('')}
-    <div class="quick-row" style="margin-top:8px">
-      <button type="button" class="btn btn-secondary btn-sm" data-act="buy-add">${list.length ? '+ Add a buyer' : `🙋 I buy all ${B.groups} groups`}</button>
-      ${list.length ? '' : '<span class="fhelp">Usually one or two of us buy each week. Each buyer gets their own QR codes below.</span>'}
-    </div>
-    ${issues.map((t) => `<p class="buy-issue">⚠️ ${esc(t)}</p>`).join('')}`;
+  const m = B.groups, nobody = list.filter((b) => !b.by);
+  // a live update from someone else leaves a menu being opened or a slider being dragged alone
+  const editing = !own && $('buy-plan').contains(document.activeElement) && document.activeElement.matches('select, .buy-slider:active');
+  if (!editing) {
+    $('buy-plan').innerHTML = !list.length
+      ? `<div class="buy-start">
+          <button type="button" class="btn btn-primary" data-act="buy-start">🙋 I buy</button>
+          <span class="fhelp">You get a slider over all ${m} groups. Slide it down to the last group you buy, and the rest goes to a new
+            buyer with their own slider; keep sliding to split further. Usually one or two of us buy each week.</span>
+        </div>`
+      : `<div class="buy-bar" title="Who buys which groups">${list.map((b) => `<div class="buy-seg" style="--c:${buyerColor(b)};flex:${b.to - b.from + 1}">
+          <strong>${esc(b.by ? memberName(b.by) : '?')}</strong><span>${b.from === b.to ? b.from : `${b.from}–${b.to}`}</span></div>`).join('')}</div>
+        <div class="buy-ticks"><span>1</span><span>${m}</span></div>
+        ${list.map((b, i) => `<div class="buyer-row" style="--c:${buyerColor(b)}">
+          <div class="buyer-head">
+            <span class="buyer-dot"></span>
+            <select class="finp" data-on-input="buy-by" data-i="${i}" aria-label="Who buys">
+              ${b.by ? '' : '<option value="" selected>Choose who…</option>'}
+              ${members.map((p) => `<option value="${esc(p.id)}" ${p.id === b.by ? 'selected' : ''}>${esc(p.display_name)}${p.id === S.me.id ? ' (you)' : ''}</option>`).join('')}
+            </select>
+            <span class="buyer-range">${buyerRangeHtml(b)}</span>
+            <button type="button" class="btn btn-ghost btn-sm" data-act="buy-remove" data-i="${i}" title="Remove this buyer: their groups go to the buyer above">✕</button>
+          </div>
+          <input type="range" class="buy-slider" min="1" max="${m}" step="1" value="${b.to}" data-on-input="buy-end" data-i="${i}"
+            style="--a:${sliderPct(b.from, m)}%;--b:${sliderPct(b.to, m)}%" aria-label="Last group ${esc(b.by ? memberName(b.by) : 'this buyer')} buys"
+            ${b.from === m ? 'disabled' : ''}>
+        </div>`).join('')}
+        <p class="fhelp" style="margin-top:6px">Drag a slider to the last group that person buys; the groups after it move to the next buyer
+          (a new one is added when needed). Ranges never overlap.</p>
+        ${nobody.length ? `<p class="buy-issue">⚠️ Choose who buys group${nobody.length > 1 || nobody[0].from !== nobody[0].to ? 's' : ''} ${nobody.map((b) => (b.from === b.to ? b.from : `${b.from}–${b.to}`)).join(', ')}.</p>` : ''}`;
+  }
 
   if (!list.length) { $('buy-qrs').innerHTML = ''; return; }
   if (!window.qrcode) {
@@ -2112,7 +2201,7 @@ function renderBuy(own = false) {
       text and checksum match their samples exactly. We can't test a real shop terminal from here, so keep Our tickets handy as a backup.
       Tap a code to show it full screen (and turn the screen brightness up).</p>`
     + order.map(({ b }) => {
-      const r = buyerCodes(b, bought), mine = b.by === S.me.id, who = esc(memberName(b.by));
+      const r = buyerCodes(b, bought), mine = b.by === S.me.id, who = b.by ? esc(memberName(b.by)) : 'Nobody yet';
       const figs = r.codes.map((c, j) => {
         const k = _buyCodes.push({ payload: c.payload, cap: `${memberName(b.by)} · QR ${j + 1} of ${r.codes.length} · groups ${rangeText(c.games.map((x) => x.g))} · ${c.games.length} games` }) - 1;
         return `<figure class="qr-fig">
@@ -2135,91 +2224,93 @@ function renderBuy(own = false) {
     }).join('');
 }
 
-// ── Compare our codes with another QR maker's
-function chkGames() {
-  const lines = $('chk-games').value.split('\n').map((l) => l.trim()).filter(Boolean);
-  return lines.map((l, i) => {
-    const nums = (l.match(/\d+/g) || []).map(Number);
-    const sorted = [...nums].sort((a, b) => a - b);
-    const bad = nums.length !== 6 ? `has ${nums.length} numbers` : nums.some((n) => n < 1 || n > 45) ? 'has a number outside 1–45'
-      : new Set(nums).size !== 6 ? 'repeats a number' : '';
-    return { line: i + 1, nums, sorted, bad };
-  });
-}
-function chkShow(html) { $('chk-out').innerHTML = html; }
-const chkValid = (games) => games.length > 0 && games.length <= QR_MAX_GAMES
-  && games.every((g) => g.length === 6 && new Set(g).size === 6 && g.every((n) => Number.isInteger(n) && n >= 1 && n <= 45));
-
-/** Our QR (and its text) for the typed games. */
-async function chkMake() {
-  const games = chkGames(), bad = games.filter((g) => g.bad);
-  const out = (html) => { $('chk-qr').innerHTML = html; };
-  if (!games.length) return out('<p class="buy-issue">Type at least one game (6 numbers on a line).</p>');
-  if (bad.length) return out(bad.map((g) => `<p class="buy-issue">Line ${g.line} ${esc(g.bad)}.</p>`).join(''));
-  if (games.length > QR_MAX_GAMES) return out(`<p class="buy-issue">One QR code holds at most ${QR_MAX_GAMES} games (you typed ${games.length}).</p>`);
-  await loadQrLib();
-  const payload = eslipPayload(games.map((g) => g.nums));
-  out(`<div class="chk-res"><div class="qr-fig"><button type="button" class="qr-btn" data-act="qr-chk" title="Show full screen">${qrSvg(payload)}</button></div>
-    <div><div class="flbl">Our QR text (${games.length} game${games.length > 1 ? 's' : ''})</div><code class="qr-text" id="chk-ours">${esc(payload)}</code>
-    <button type="button" class="btn btn-ghost btn-sm" data-act="copy" data-text="${esc(payload)}">Copy</button></div></div>`);
-}
-
-const chkGamesText = () => chkGames().map((g) => g.nums.join(' ')).join('\n');
-
-/** New random games, copied for pasting into the other QR maker. */
-function chkRandom() {
-  const n = 1 + Math.floor(Math.random() * QR_MAX_GAMES);
-  $('chk-games').value = Array.from({ length: n }, () => {
-    const s = new Set();
-    while (s.size < 6) s.add(1 + Math.floor(Math.random() * 45));
-    return [...s].join(' ');   // unsorted, as people type them
-  }).join('\n');
-  $('chk-theirs').value = '';
-  chkShow('');
-  copyText($('chk-games').value, `${n} random game${n > 1 ? 's' : ''} copied: paste them into the other QR maker.`);
-  chkMake();
-}
-
-/**
- * Compare the text decoded from another maker's QR code with ours: for the games typed here
- * (what was entered on both sites), or for the games in their text when none are typed.
- */
-function chkCompare() {
-  const theirs = $('chk-theirs').value.trim();
-  if (!theirs) { chkShow('<p class="buy-issue">Paste the text decoded from their QR code first.</p>'); return; }
-  const p = parseEslip(theirs), typed = chkGames().filter((g) => !g.bad);
-  const games = typed.length ? typed.map((g) => g.nums) : p.games;
-  const ours = chkValid(games) ? eslipPayload(games) : null;
-  const sameGames = typed.length && p.games.length
-    ? typed.length === p.games.length && typed.every((g, i) => g.sorted.join() === [...p.games[i]].sort((a, b) => a - b).join()) : null;
-  let diff = -1;
-  if (ours && ours !== theirs) { diff = [...theirs].findIndex((ch, i) => ch !== ours[i]); if (diff < 0) diff = theirs.length; }
-  const mark = (t, at) => (at < 0 ? esc(t) : `${esc(t.slice(0, at))}<mark>${esc(t.slice(at, at + 1) || '∅')}</mark>${esc(t.slice(at + 1))}`);
-  const n = games.length;
-  chkShow(`<div class="chk-verdict ${ours && ours === theirs ? 'ok' : 'bad'}">${!ours
-      ? (p.games.length || typed.length ? '✗ We can\'t make a code for these games (more than 20, or invalid numbers).' : '✗ No games found: type the games, or paste a complete MSG_ESLIP text.')
-      : ours === theirs ? `✓ Identical: our text for ${typed.length ? 'the typed' : 'these'} ${n} game${n > 1 ? 's' : ''} is exactly the same (checksum ${esc(p.checksum)}).`
-      : `✗ Different from character ${diff + 1} (theirs has ${theirs.length} characters, ours ${ours.length}). Please send me both texts.`}</div>
-    ${!p.games.length ? '<p class="buy-issue">Their text isn\'t a complete Lotto 6/45 mobile slip text (MSG_ESLIP{10645}{…}{}XX|).</p>'
-      : !p.ok ? `<p class="buy-issue">Their text: ${esc(p.problems.join('; '))}.</p>` : ''}
-    ${sameGames === null ? '' : `<p class="fhelp">${sameGames ? `✓ Their code holds the same ${n} games as typed here.` : `⚠️ Their code holds ${p.games.length} game${p.games.length === 1 ? '' : 's'} that are not the same as typed here (or in another order).`}</p>`}
-    <div class="flbl">Their QR text</div><code class="qr-text">${mark(theirs, diff)}</code>
-    ${ours ? `<div class="flbl" style="margin-top:8px">Ours for the ${typed.length ? 'typed' : 'same'} games</div><code class="qr-text">${mark(ours, diff)}</code>` : ''}`);
-  if (!typed.length && p.games.length) { $('chk-games').value = p.games.map((g) => g.join(' ')).join('\n'); chkMake(); }
-}
-
-/** Read another maker's QR from a screenshot into the text box, then compare. */
-async function chkFile(file) {
-  if (!file) return;
-  chkShow('<p class="fhelp">Reading the QR code…</p>');
-  try {
-    const texts = await readQRTexts(file);
-    const theirs = texts.find((t) => t.startsWith('MSG_ESLIP')) || texts[0];
-    if (!theirs) return chkShow('<p class="buy-issue">No QR code found in that picture. Try a sharper, closer screenshot.</p>');
-    $('chk-theirs').value = theirs;
-    chkCompare();
-  } catch (e) { chkShow(`<p class="buy-issue">${esc(e.message || 'Could not read the picture.')}</p>`); }
-}
+// The check against another QR maker (LottoMate) did its job: our codes match theirs. It is switched off
+// but kept, with its markup in index.html and styles in style.css, in case we need it again.
+// // ── Compare our codes with another QR maker's
+// function chkGames() {
+//   const lines = $('chk-games').value.split('\n').map((l) => l.trim()).filter(Boolean);
+//   return lines.map((l, i) => {
+//     const nums = (l.match(/\d+/g) || []).map(Number);
+//     const sorted = [...nums].sort((a, b) => a - b);
+//     const bad = nums.length !== 6 ? `has ${nums.length} numbers` : nums.some((n) => n < 1 || n > 45) ? 'has a number outside 1–45'
+//       : new Set(nums).size !== 6 ? 'repeats a number' : '';
+//     return { line: i + 1, nums, sorted, bad };
+//   });
+// }
+// function chkShow(html) { $('chk-out').innerHTML = html; }
+// const chkValid = (games) => games.length > 0 && games.length <= QR_MAX_GAMES
+//   && games.every((g) => g.length === 6 && new Set(g).size === 6 && g.every((n) => Number.isInteger(n) && n >= 1 && n <= 45));
+//
+// /** Our QR (and its text) for the typed games. */
+// async function chkMake() {
+//   const games = chkGames(), bad = games.filter((g) => g.bad);
+//   const out = (html) => { $('chk-qr').innerHTML = html; };
+//   if (!games.length) return out('<p class="buy-issue">Type at least one game (6 numbers on a line).</p>');
+//   if (bad.length) return out(bad.map((g) => `<p class="buy-issue">Line ${g.line} ${esc(g.bad)}.</p>`).join(''));
+//   if (games.length > QR_MAX_GAMES) return out(`<p class="buy-issue">One QR code holds at most ${QR_MAX_GAMES} games (you typed ${games.length}).</p>`);
+//   await loadQrLib();
+//   const payload = eslipPayload(games.map((g) => g.nums));
+//   out(`<div class="chk-res"><div class="qr-fig"><button type="button" class="qr-btn" data-act="qr-chk" title="Show full screen">${qrSvg(payload)}</button></div>
+//     <div><div class="flbl">Our QR text (${games.length} game${games.length > 1 ? 's' : ''})</div><code class="qr-text" id="chk-ours">${esc(payload)}</code>
+//     <button type="button" class="btn btn-ghost btn-sm" data-act="copy" data-text="${esc(payload)}">Copy</button></div></div>`);
+// }
+//
+// const chkGamesText = () => chkGames().map((g) => g.nums.join(' ')).join('\n');
+//
+// /** New random games, copied for pasting into the other QR maker. */
+// function chkRandom() {
+//   const n = 1 + Math.floor(Math.random() * QR_MAX_GAMES);
+//   $('chk-games').value = Array.from({ length: n }, () => {
+//     const s = new Set();
+//     while (s.size < 6) s.add(1 + Math.floor(Math.random() * 45));
+//     return [...s].join(' ');   // unsorted, as people type them
+//   }).join('\n');
+//   $('chk-theirs').value = '';
+//   chkShow('');
+//   copyText($('chk-games').value, `${n} random game${n > 1 ? 's' : ''} copied: paste them into the other QR maker.`);
+//   chkMake();
+// }
+//
+// /**
+//  * Compare the text decoded from another maker's QR code with ours: for the games typed here
+//  * (what was entered on both sites), or for the games in their text when none are typed.
+//  */
+// function chkCompare() {
+//   const theirs = $('chk-theirs').value.trim();
+//   if (!theirs) { chkShow('<p class="buy-issue">Paste the text decoded from their QR code first.</p>'); return; }
+//   const p = parseEslip(theirs), typed = chkGames().filter((g) => !g.bad);
+//   const games = typed.length ? typed.map((g) => g.nums) : p.games;
+//   const ours = chkValid(games) ? eslipPayload(games) : null;
+//   const sameGames = typed.length && p.games.length
+//     ? typed.length === p.games.length && typed.every((g, i) => g.sorted.join() === [...p.games[i]].sort((a, b) => a - b).join()) : null;
+//   let diff = -1;
+//   if (ours && ours !== theirs) { diff = [...theirs].findIndex((ch, i) => ch !== ours[i]); if (diff < 0) diff = theirs.length; }
+//   const mark = (t, at) => (at < 0 ? esc(t) : `${esc(t.slice(0, at))}<mark>${esc(t.slice(at, at + 1) || '∅')}</mark>${esc(t.slice(at + 1))}`);
+//   const n = games.length;
+//   chkShow(`<div class="chk-verdict ${ours && ours === theirs ? 'ok' : 'bad'}">${!ours
+//       ? (p.games.length || typed.length ? '✗ We can\'t make a code for these games (more than 20, or invalid numbers).' : '✗ No games found: type the games, or paste a complete MSG_ESLIP text.')
+//       : ours === theirs ? `✓ Identical: our text for ${typed.length ? 'the typed' : 'these'} ${n} game${n > 1 ? 's' : ''} is exactly the same (checksum ${esc(p.checksum)}).`
+//       : `✗ Different from character ${diff + 1} (theirs has ${theirs.length} characters, ours ${ours.length}). Please send me both texts.`}</div>
+//     ${!p.games.length ? '<p class="buy-issue">Their text isn\'t a complete Lotto 6/45 mobile slip text (MSG_ESLIP{10645}{…}{}XX|).</p>'
+//       : !p.ok ? `<p class="buy-issue">Their text: ${esc(p.problems.join('; '))}.</p>` : ''}
+//     ${sameGames === null ? '' : `<p class="fhelp">${sameGames ? `✓ Their code holds the same ${n} games as typed here.` : `⚠️ Their code holds ${p.games.length} game${p.games.length === 1 ? '' : 's'} that are not the same as typed here (or in another order).`}</p>`}
+//     <div class="flbl">Their QR text</div><code class="qr-text">${mark(theirs, diff)}</code>
+//     ${ours ? `<div class="flbl" style="margin-top:8px">Ours for the ${typed.length ? 'typed' : 'same'} games</div><code class="qr-text">${mark(ours, diff)}</code>` : ''}`);
+//   if (!typed.length && p.games.length) { $('chk-games').value = p.games.map((g) => g.join(' ')).join('\n'); chkMake(); }
+// }
+//
+// /** Read another maker's QR from a screenshot into the text box, then compare. */
+// async function chkFile(file) {
+//   if (!file) return;
+//   chkShow('<p class="fhelp">Reading the QR code…</p>');
+//   try {
+//     const texts = await readQRTexts(file);
+//     const theirs = texts.find((t) => t.startsWith('MSG_ESLIP')) || texts[0];
+//     if (!theirs) return chkShow('<p class="buy-issue">No QR code found in that picture. Try a sharper, closer screenshot.</p>');
+//     $('chk-theirs').value = theirs;
+//     chkCompare();
+//   } catch (e) { chkShow(`<p class="buy-issue">${esc(e.message || 'Could not read the picture.')}</p>`); }
+// }
 
 // ── Live results: tap the numbers as the draw is streamed, our tickets and the top suggestions re-rank
 // Shared by all members through the live_picks table (realtime); on this device only until that table exists.
@@ -3083,6 +3174,8 @@ function describeChange(r) {
         details.push(`${k.replace(/_/g, ' ')}: ${o[k] ?? '—'} → ${n[k] ?? '—'}`);
       }
     }
+  } else if (r.action === 'DELETE' && r.table_name === 'tickets' && o.delete_reason) {
+    details.push(`reason: ${o.delete_reason}`);
   } else if (r.table_name === 'weeks') {
     details.push(`fresh ${money(sum(Object.values(row.investments || {})))}, from pool ${money(row.pool_used)}, prize ${money(row.prize_won)}`);
   }
@@ -3381,16 +3474,16 @@ const ACTIONS = {
   'live-undo': () => liveUndo(),
   'live-reset': () => liveReset(),
   'live-official': () => liveOfficial(),
-  'buy-add': () => addBuyer(),
+  'buy-start': () => startBuying(),
   'buy-remove': (el) => removeBuyer(+el.dataset.i),
   'qr-big': (el) => openQrFull(_buyCodes, +el.dataset.k),
-  'qr-chk': () => { const t = $('chk-ours')?.textContent; if (t) openQrFull([{ payload: t, cap: 'Our QR for the typed games' }], 0); },
+  // 'qr-chk': () => { const t = $('chk-ours')?.textContent; if (t) openQrFull([{ payload: t, cap: 'Our QR for the typed games' }], 0); },
   'qr-close': () => closeQrFull(),
   'qr-step': (el) => stepQrFull(+el.dataset.d),
-  'chk-make': () => chkMake(),
-  'chk-random': () => chkRandom(),
-  'chk-copy': () => (chkGames().length ? copyText(chkGamesText(), 'Games copied.') : toast('Type or make some games first.', 'err')),
-  'chk-compare': () => chkCompare(),
+  // 'chk-make': () => chkMake(),
+  // 'chk-random': () => chkRandom(),
+  // 'chk-copy': () => (chkGames().length ? copyText(chkGamesText(), 'Games copied.') : toast('Type or make some games first.', 'err')),
+  // 'chk-compare': () => chkCompare(),
   'focus-off': () => setFocus(null),
   'stat-range': (el) => setStatPref({ range: el.dataset.n }),
   'stat-sort': (el) => setStatPref({ sort: el.dataset.sort }),
@@ -3411,6 +3504,7 @@ const ACTIONS = {
   'up-remove': (el, e) => { e.preventDefault(); const [u] = S.uploads.splice(+el.dataset.id, 1); if (u) URL.revokeObjectURL(u.url); renderUploadPreview(); },
   'ticket-open': (el, e) => { e.stopPropagation(); openTicket(el.dataset.id); },
   'ticket-del': () => deleteTicket(),
+  'ticket-del-confirm': () => confirmDeleteTicket(),
   'qr-scan': () => scanLbPhoto(),
   'qr-check': () => checkLb(),
   'qr-add': () => addLbLink(),
@@ -3446,13 +3540,18 @@ const INPUTS = {
   'sim-round': (el, e) => { if (e.type === 'change') simSetRound(parseInt(el.value, 10) || 0); },
   'sim-date': (el, e) => { if (e.type === 'change' && el.value) simSetRound(drawNo(saturdayOf(el.value))); },
   'sim-x': (el, e) => { if (e.type === 'change') simSetX(parseInt(el.value, 10) || 1); },
+  'del-reason': (el, e) => {
+    if (e.type !== 'change') return;
+    $('del-custom').hidden = el.value !== 'custom';
+    $('del-err').hidden = true;
+    if (el.value === 'custom') $('del-custom').focus();
+  },
   'pick-own': (el, e) => { if (e.type === 'change') setPickOwn(el.value); },
-  'buy-by': (el, e) => { if (e.type === 'change') setBuyer(+el.dataset.i, { by: el.value }); },
-  'buy-from': (el, e) => { if (e.type === 'change') setBuyer(+el.dataset.i, { from: el.value }); },
-  'buy-to': (el, e) => { if (e.type === 'change') setBuyer(+el.dataset.i, { to: el.value }); },
-  'chk-file': (el, e) => { if (e.type === 'change') { chkFile(el.files[0]); el.value = ''; } },
-  'chk-theirs': (el, e) => { if (e.type === 'input' && el.value.trim()) chkCompare(); },
-  'chk-games': (el, e) => { if (e.type === 'change' && $('chk-theirs').value.trim()) chkCompare(); },
+  'buy-by': (el, e) => { if (e.type === 'change') setBuyer(+el.dataset.i, el.value); },
+  'buy-end': (el, e) => (e.type === 'change' ? setBuyerEnd(+el.dataset.i, +el.value) : previewBuyerEnd(el)),
+  // 'chk-file': (el, e) => { if (e.type === 'change') { chkFile(el.files[0]); el.value = ''; } },
+  // 'chk-theirs': (el, e) => { if (e.type === 'input' && el.value.trim()) chkCompare(); },
+  // 'chk-games': (el, e) => { if (e.type === 'change' && $('chk-theirs').value.trim()) chkCompare(); },
   'board-x': (el, e) => { if (e.type === 'change' && el.value) setBoardGroups(parseInt(el.value, 10) || 1); },
   'up-round': () => { const n = parseInt($('up-round').value, 10); if (n >= 1) $('up-date').value = drawDate(n); upDateInfo(); },
   'money-hint': (el) => moneyHint(el.id, el.dataset.hint),

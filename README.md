@@ -56,9 +56,9 @@ with an invitation key from the admin.
   - **odd vs even draws (회차)**: spent, won, money back per ₩1,000 and how often we win, for
     odd- and even-numbered draws. It also reports how often a gap that big appears when the same
     draws are split into two groups at random, which tells luck from a real pattern.
-- **Picks tab** has five sections: **✍️ Picks** (our own numbers), **🎯 Suggestion** (the
-  engine's ranked sets, number statistics, backtest), **🕰️ Simulation** (a past week),
-  **🛒 Buy** (who buys, and QR codes for the shop) and **📺 Live** (follow the draw). The section you last opened is remembered on that device.
+- **Picks tab** has five sections: **✍️ Picks** (our own numbers), **🛒 Buy** (who buys, and QR
+  codes for the shop), **🎯 Suggestion** (the engine's ranked sets, number statistics, backtest),
+  **🕰️ Simulation** (a past week) and **📺 Live** (follow the draw). The section you last opened is remembered on that device.
 - **Our numbers** (✍️ Picks): we pick the coming draw's numbers together.
   - Choose how many groups of 6 we play (quick buttons 5–30, ±1).
   - Each group shows 45 round buttons: gray = free, coloured = taken. Every member has their
@@ -103,9 +103,12 @@ with an invitation key from the admin.
     up to 5 numbers you already like; suggestions are then built around them (gold rings), and
     **All N left** fills the rest. The choice is remembered on that device.
 - **🛒 Buy** (Picks tab): QR codes to show at the shop.
-  - **Who buys:** one row per buyer, e.g. Alice buys groups 1–13, Bob 14–18. **🙋 I buy all**
-    starts the list; **+ Add a buyer** takes the groups left over (or splits the last range).
-    Overlaps and groups nobody buys are flagged. Saved with the week's picks, so everyone sees it.
+  - **Who buys:** **🙋 I buy** gives you a slider over all groups 1–m. Slide it to the last group
+    you buy (say 13) and a new buyer gets 14–m with their own slider; slide that one and the rest
+    goes to another new buyer, and so on. Each buyer's part starts right after the one above, so
+    ranges never overlap or leave a gap; a coloured bar on top shows the split. Pick who each buyer
+    is from the menu (a new one is someone not buying yet, or "Choose who…"); ✕ hands a buyer's
+    groups to the one above. Saved with the week's picks, so everyone sees it.
   - **QR codes:** each buyer gets codes for their complete groups that aren't bought yet, at most
     20 games per code (your own first). Tap one to show it full screen; **Numbers and QR text**
     lists the games and the exact text. Incomplete and already-bought groups are listed, not coded.
@@ -116,10 +119,8 @@ with an invitation key from the admin.
     from `MSG_ESLIP` up to and including `{}`. This reproduces the known samples exactly
     (`node tools/eslip-check.mjs` checks them); we can't test a real shop terminal, so keep the
     numbers handy as a backup.
-  - **🧪 Check against another QR maker** (folded away; tap to open, for testing only):
-    **🎲 Random games + copy** makes random games and copies them to paste into the other site;
-    paste the text decoded from its QR code into **Their decoded QR text** (or upload a screenshot
-    of the code) and it is compared character by character with our text for the same games.
+  - A tool that compared our codes with another QR maker's (LottoMate) confirmed they match; it is
+    switched off but kept, commented out, in `index.html`, `app.js` and `style.css`.
 - **📺 Live** (Picks tab): while watching the draw, tap each number as it comes out (the 7th
   is the bonus). The taps are shared: every member sees the same numbers in real time and anyone
   can tap (needs the database update: run `supabase/schema.sql` again, which adds `live_picks`;
@@ -137,6 +138,8 @@ with an invitation key from the admin.
     the profit. 4등/5등 are fixed amounts. 1등–3등 use that draw's real prize when dhlottery's
     data has it; otherwise a typical amount marked ≈ is used.
 - **Activity log**: every add/edit/delete by every member, with old → new values. It can't be edited.
+  Deleting a ticket photo (admins only) asks why: duplicate, QR code not detected, wrong image,
+  wrong draw, blurry, or a reason you write; the reason is shown with the deletion.
 - **Currency**: KRW by default. Pick from popular currencies (₩ $ ₫ ¥ ฿ € …) or any ISO
   currency, and choose how it is displayed (₩12,000 / KRW 12,000 / 12,000 South Korean won).
 - **Live sync**: every open browser updates instantly when someone changes something.
@@ -309,6 +312,10 @@ link to that ticket's result page on dhlottery.co.kr.
    name a different draw, the photo is filed under the QR's draw. An older photo filed under
    the wrong week shows **"QR says #N"** and gets a **Move photo to draw #N** button in the
    viewer. The move is only allowed to the draw the QR names, and it is logged.
+   Each photo is read straight and turned 90° both ways (a blurry ticket photographed sideways
+   is often found in one turn and missed in another); if that finds nothing, it is also read
+   smaller with noise removal, upside down and with another contrast method. **Scan photo
+   again** in the viewer always tries every way.
 2. **After 20:50 KST on draw day**, the `check-tickets` Edge Function opens each link and
    reads the page:
    - "축하합니다! 총 5,000원 당첨" means **won ₩5,000**
@@ -430,4 +437,4 @@ python3 -m http.server -d web 8000
 `supabase/schema.sql` is safe to run again. It keeps existing data and re-applies
 functions, policies and grants. Run it again after updates that add tables, for example
 **Our numbers** (tables `pick_plans` and `group_picks`), shared **Live** picks (`live_picks`) and
-**Who buys** (column `pick_plans.buyers`).
+**Who buys** (column `pick_plans.buyers`), and photo deletion with a reason (`delete_ticket`).
