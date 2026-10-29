@@ -5,6 +5,8 @@ name: Check ticket results
 # is only a safety net for weeks when nobody looks.
 on:
   schedule:
+    - cron: '17 11 * * 6'   # Sat 20:17 KST: "the draw starts in x minutes" (GitHub may start it late,
+    - cron: '27 11 * * 6'   # Sat 20:27 KST   so twice; each device is reminded once)
     - cron: '57 11 * * 6'   # Sat 20:57 KST (results and notifications as soon as they are out)
     - cron: '7 12 * * 6'    # Sat 21:07 KST
     - cron: '27 12 * * 6'   # Sat 21:27 KST
@@ -25,5 +27,9 @@ jobs:
           URL=$(grep -oP "supabaseUrl:\s*'\K[^']+" web/config.js)
           KEY=$(grep -oP "supabaseKey:\s*'\K[^']+" web/config.js)
           case "$URL" in *YOUR-PROJECT*) echo "web/config.js not filled in yet — skipping"; exit 0;; esac
+          # 20:10–20:35 KST on Saturday: the reminder before the live draw; otherwise check results
+          NOW=$(TZ=Asia/Seoul date +%u%H%M)
+          BODY='{}'
+          if [ "$NOW" -ge 62010 ] && [ "$NOW" -lt 62035 ]; then BODY='{"push":"remind"}'; fi
           curl -fsS -X POST "$URL/functions/v1/check-tickets" \
-            -H "apikey: $KEY" -H "x-region: ap-northeast-2" -H "Content-Type: application/json" -d '{}'
+            -H "apikey: $KEY" -H "x-region: ap-northeast-2" -H "Content-Type: application/json" -d "$BODY"

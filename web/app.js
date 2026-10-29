@@ -285,7 +285,88 @@ function showView(name) {
   for (const v of ['boot', 'setup', 'auth', 'revoked', 'app']) show('view-' + v, v === name);
 }
 
+// ─── App lock: Face ID / Touch ID / fingerprint (WebAuthn with the device's own authenticator) ─────
+// A lock on this device only: the phone must recognise its owner before 645 shows anything. It keeps
+// people who pick up an unlocked phone out of the app; the sign-in itself stays as it is.
+let _lock = (() => { try { return JSON.parse(localStorage.getItem('645-lock')); } catch { return null; } })();
+let _hiddenAt = 0;
+const saveLock = () => { try { if (_lock) localStorage.setItem('645-lock', JSON.stringify(_lock)); else localStorage.removeItem('645-lock'); } catch { /* private mode */ } };
+const lockBytes = (s) => new TextEncoder().encode(s);
+const b64u = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+
+async function canLock() {
+  try { return !!(window.PublicKeyCredential && await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable()); }
+  catch { return false; }
+}
+function showLock(on) {
+  document.body.classList.toggle('locked', on);
+  $('lock-view').hidden = !on;
+  $('lock-err').hidden = true;
+}
+/** Ask the phone to recognise its owner; true when it did. */
+async function verifyOwner() {
+  const cred = await navigator.credentials.get({ publicKey: {
+    challenge: crypto.getRandomValues(new Uint8Array(32)),
+    allowCredentials: [{ type: 'public-key', id: unb64url(_lock.cred), transports: ['internal'] }],
+    userVerification: 'required', timeout: 60000,
+  } });
+  return !!cred;
+}
+async function unlock() {
+  $('lock-btn').disabled = true;
+  try {
+    if (await verifyOwner()) showLock(false);
+  } catch {
+    $('lock-err').textContent = 'Not recognised, or cancelled. Try again.';
+    $('lock-err').hidden = false;
+  } finally { $('lock-btn').disabled = false; }
+}
+async function turnLockOn() {
+  if (!(await canLock())) { toast('This device has no Face ID / fingerprint unlock the browser can use.', 'err'); return renderLock(); }
+  try {
+    const cred = await navigator.credentials.create({ publicKey: {
+      challenge: crypto.getRandomValues(new Uint8Array(32)),
+      rp: { name: '645' },
+      user: { id: lockBytes(S.me.id), name: S.me.username, displayName: S.me.display_name },
+      pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }],
+      authenticatorSelection: { authenticatorAttachment: 'platform', userVerification: 'required', residentKey: 'discouraged' },
+      timeout: 60000,
+    } });
+    _lock = { cred: b64u(cred.rawId), user: S.me.id, after: +$('lock-after').value || 60 };
+    saveLock();
+    toast('App lock is on: 645 asks for Face ID / your fingerprint on this device.', 'ok');
+  } catch { toast('App lock was not turned on (cancelled or not allowed).', 'err'); }
+  renderLock();
+}
+async function turnLockOff() {
+  try { if (!(await verifyOwner())) throw new Error(); }
+  catch { toast('Confirm with Face ID / your fingerprint to turn the lock off.', 'err'); return renderLock(); }
+  _lock = null;
+  saveLock();
+  toast('App lock is off on this device.', 'ok');
+  renderLock();
+}
+async function renderLock() {
+  if (!$('lock-on')) return;
+  const ok = await canLock();
+  $('lock-on').checked = !!_lock;
+  $('lock-on').disabled = !ok && !_lock;
+  $('lock-after').value = String(_lock?.after ?? 60);
+  $('lock-after').disabled = !_lock;
+  $('lock-what').textContent = /iPhone|iPad|Mac/.test(navigator.userAgent) ? 'Face ID or Touch ID' : 'Fingerprint, face unlock or the screen lock';
+  $('lock-status').textContent = !ok && !_lock ? 'This browser or device has no Face ID / fingerprint unlock that websites can use.'
+    : _lock ? 'On: you are asked when 645 opens, and when you come back after being away.' : 'Off on this device.';
+}
+/** Coming back to the app after being away long enough locks it again. */
+function shouldRelock(hiddenAt, now, after) { return !!hiddenAt && now - hiddenAt >= after * 1000; }
+document.addEventListener('visibilitychange', () => {
+  if (!_lock || !S.user) return;
+  if (document.visibilityState === 'hidden') _hiddenAt = Date.now();
+  else if (shouldRelock(_hiddenAt, Date.now(), _lock.after)) showLock(true);
+});
+
 async function boot() {
+  if (_lock) showLock(true);   // nothing shows until the owner is recognised
   if (!CFG.supabaseUrl || !CFG.supabaseKey || CFG.supabaseUrl.includes('YOUR-PROJECT') || !window.supabase) {
     showView('setup');
     return;
@@ -304,6 +385,7 @@ async function boot() {
     if (event === 'INITIAL_SESSION') return;
     if (event === 'SIGNED_OUT') {
       S.user = null; S.drawsLoaded = false;
+      _lock = null; saveLock(); showLock(false);
       _urls.clear();
       try { localStorage.removeItem('645-urls'); } catch { /* private mode */ }
       stopRealtime();
@@ -390,6 +472,7 @@ async function doJoin(e) {
 }
 
 async function enterApp() {
+  if (_lock && _lock.user !== S.user?.id) { _lock = null; saveLock(); showLock(false); }   // someone else signed in here
   showView('boot');
   try {
     await loadAll();
@@ -403,6 +486,7 @@ async function enterApp() {
   navigator.storage?.persist?.().catch(() => {});   // keep the login even when storage is tight
   startRealtime();
   goTab(S.tab);
+  openFromHash();
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -549,7 +633,7 @@ function renderTimebar() {
   } else $('tb-update').textContent = '';
   $('tb-update').title = S.loadedAt ? `Data loaded ${S.loadedAt.toLocaleTimeString(LOCALE, { hour12: false })}` : '';
 }
-setInterval(renderTimebar, 1000);
+setInterval(() => { renderTimebar(); if (S.me) maybeRemind(); }, 1000);
 
 function renderAll() {
   document.body.classList.toggle('is-admin', isAdmin());
@@ -578,7 +662,7 @@ function goTab(name) {
   if (name === 'tickets') hydrateImages($('tickets-list'));
   if (name === 'activity') loadActivity();
   if (name === 'settings' && isAdmin()) loadInvites();
-  if (name === 'settings') renderPush();
+  if (name === 'settings') { renderPush(); renderLock(); }
 }
 
 // ─── Dashboard ────────────────────────────────────────────────────────────────
@@ -1421,7 +1505,7 @@ async function uploadTickets() {
   const btn = $('up-btn'), status = $('up-status');
   btn.disabled = true;
   let done = 0, qrFound = 0;
-  const movedTo = [];
+  const movedTo = [], uploaded = [];
   const total = S.uploads.length;
   try {
     while (S.uploads.length) {
@@ -1452,6 +1536,7 @@ async function uploadTickets() {
         width: img.w || null, height: img.h || null, bytes: img.main.size, qr_data,
       });
       if (e3) throw e3;
+      uploaded.push(id);
       URL.revokeObjectURL(u.url);
       S.uploads.shift();
       done++;
@@ -1466,6 +1551,8 @@ async function uploadTickets() {
     status.textContent = done ? `${done} uploaded, then an error occurred.` : '';
     fail(e, 'Upload failed.');
   } finally {
+    // members who asked for it hear about new ticket photos (the function sends each photo once)
+    if (uploaded.length) S.sb.functions.invoke('check-tickets', { body: { push: 'tickets', ticket_ids: uploaded }, region: 'ap-northeast-2' }).catch(() => {});
     renderUploadPreview();
   }
 }
@@ -3229,7 +3316,13 @@ const PUSH_HELP = {
   all: 'Every Saturday result comes to this device.',
   win: 'You hear from us on this device when we win anything.',
   big: 'You hear from us on this device when we win 4등 or better.',
+  none: 'No results on this device.',
 };
+/** What this device wants, as chosen on the settings page. */
+const pushChoice = () => ({
+  mode: document.querySelector('#push-modes input:checked')?.value === 'off' ? 'none' : document.querySelector('#push-modes input:checked')?.value || 'none',
+  remind: $('push-remind').checked, tickets: $('push-tickets').checked,
+});
 
 function unb64url(text) {
   const s = atob(text.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - (text.length % 4)) % 4));
@@ -3248,7 +3341,7 @@ async function devicePush() {
 
 async function renderPush() {
   if (!$('push-modes')) return;
-  const radios = document.querySelectorAll('#push-modes input');
+  const radios = document.querySelectorAll('#push-modes input, #push-extra input');
   const status = (t, warn = false) => { $('push-status').textContent = t; $('push-status').classList.toggle('warn', warn); };
   if (!pushSupported()) {
     radios.forEach((r) => { r.disabled = true; r.checked = r.value === 'off'; });
@@ -3256,11 +3349,17 @@ async function renderPush() {
     return status(isIos() ? 'On iPhone and iPad: first add 645 to the Home Screen (Share → Add to Home Screen), open it from there, then turn notifications on.'
       : 'This browser cannot show notifications.', true);
   }
-  const cur = await devicePush().catch(() => null), mode = cur?.row?.mode || 'off';
-  radios.forEach((r) => { r.disabled = false; r.checked = r.value === mode; });
-  $('push-test').hidden = mode === 'off';
+  const cur = await devicePush().catch(() => null), row = cur?.row;
+  const mode = !row || row.mode === 'none' ? 'off' : row.mode;
+  radios.forEach((r) => { r.disabled = false; if (r.type === 'radio') r.checked = r.value === mode; });
+  $('push-remind').checked = !!row?.remind;
+  $('push-tickets').checked = !!row?.tickets;
+  $('push-test').hidden = !row;
+  if (row && row.lang !== LANG) S.sb.from('push_subs').update({ lang: LANG }).eq('endpoint', row.endpoint).then(() => {});
   if (Notification.permission === 'denied') return status('Notifications are blocked for this site: allow them in the browser\'s site settings, then choose again.', true);
-  status(mode === 'off' ? 'Off on this device. Choose when you want to hear from us.' : `On: ${PUSH_HELP[mode]}`);
+  if (!row) return status('Off on this device. Choose when you want to hear from us.');
+  const extra = [row.remind && 'before the draw', row.tickets && 'new ticket photos'].filter(Boolean);
+  status(`On: ${PUSH_HELP[row.mode]}${extra.length ? ` Also: ${extra.join(' and ')}.` : ''}`);
 }
 
 async function pushOff(quiet = false) {
@@ -3272,8 +3371,10 @@ async function pushOff(quiet = false) {
   if (!quiet) { toast('Notifications are off on this device.', 'ok'); renderPush(); }
 }
 
-async function setPushMode(mode) {
-  if (mode === 'off') return pushOff();
+/** Save this device's choice; nothing chosen at all turns notifications off here. */
+async function setPushMode() {
+  const want = pushChoice();
+  if (want.mode === 'none' && !want.remind && !want.tickets) return pushOff();
   try {
     if (await Notification.requestPermission() !== 'granted') { toast('Allow notifications when the browser asks, then choose again.', 'err'); return renderPush(); }
     const reg = await navigator.serviceWorker.register('sw.js');
@@ -3286,14 +3387,39 @@ async function setPushMode(mode) {
     }
     const j = sub.toJSON();
     const { error } = await S.sb.from('push_subs').upsert({
-      endpoint: j.endpoint, p256dh: j.keys.p256dh, auth: j.keys.auth, mode, lang: LANG,
+      endpoint: j.endpoint, p256dh: j.keys.p256dh, auth: j.keys.auth, ...want, lang: LANG,
       last_round: drawNo(addDays(currentDraw(), -7)),   // start with the next draw, not one already out
     }, { onConflict: 'endpoint' });
     if (error) throw new Error(/push_subs|schema cache/.test(error.message) ? 'The database needs an update: run supabase/schema.sql again.' : error.message);
-    toast(`Notifications on: ${PUSH_HELP[mode]}`, 'ok');
+    toast(want.mode === 'none' ? 'Notifications saved.' : `Notifications on: ${PUSH_HELP[want.mode]}`, 'ok');
   } catch (e) { fail(e, 'Could not turn notifications on.'); }
   renderPush();
 }
+
+// Before Saturday's draw, any member's open app asks the function to send the "starts in x minutes"
+// reminder too (the scheduled run may start late); each device still gets it only once.
+let _remindAsked = 0;
+function maybeRemind() {
+  const now = Date.now(), d = kstToday();
+  if (weekday(d) !== 6 || _remindAsked === drawNo(d)) return;
+  const at = kstAt(d, DRAW_TIME).getTime();
+  if (now < at - 25 * 60e3 || now >= at) return;
+  _remindAsked = drawNo(d);
+  S.sb.functions.invoke('check-tickets', { body: { push: 'remind' }, region: 'ap-northeast-2' }).catch(() => {});
+}
+
+/** A notification (or a link) can open a place in the app: #dashboard, #tickets, #picks-live, … */
+function openFromHash(hash = location.hash) {
+  const h = String(hash || '').replace(/^#/, '');
+  if (!h || h.startsWith('invite=') || !S.me) return;
+  const [tab, sec] = h.split('-');
+  if (!['dashboard', 'weeks', 'tickets', 'picks', 'investors', 'charts', 'activity', 'settings'].includes(tab)) return;
+  goTab(tab);
+  if (tab === 'picks' && sec) setPicksSection(sec);
+  history.replaceState(null, '', location.pathname + location.search);
+}
+window.addEventListener('hashchange', () => openFromHash());
+navigator.serviceWorker?.addEventListener('message', (e) => { if (e.data?.open) openFromHash(new URL(e.data.open, location.href).hash); });
 
 async function pushTest() {
   const { data, error } = await S.sb.functions.invoke('check-tickets', { body: { push: 'test' }, region: 'ap-northeast-2' });
@@ -3629,6 +3755,8 @@ const ACTIONS = {
   'auth-tab': (el) => setAuthTab(el.dataset.tab),
   logout: async () => { await pushOff(true).catch(() => {}); S.sb?.auth.signOut(); },   // the next person on this phone gets no notifications of ours
   'push-test': () => pushTest(),
+  'lock-unlock': () => unlock(),
+  'lock-signout': async () => { _lock = null; saveLock(); showLock(false); await pushOff(true).catch(() => {}); S.sb?.auth.signOut(); },
   tab: (el) => goTab(el.dataset.tab),
   'close-modal': (el) => closeModal(el.dataset.id),
   'week-new': () => openWeekModal(null),
@@ -3729,7 +3857,10 @@ const INPUTS = {
   'sim-round': (el, e) => { if (e.type === 'change') simSetRound(parseInt(el.value, 10) || 0); },
   'sim-date': (el, e) => { if (e.type === 'change' && el.value) simSetRound(drawNo(saturdayOf(el.value))); },
   'sim-x': (el, e) => { if (e.type === 'change') simSetX(parseInt(el.value, 10) || 1); },
-  'push-mode': (el, e) => { if (e.type === 'change') setPushMode(el.value); },
+  'push-mode': (el, e) => { if (e.type === 'change') setPushMode(); },
+  'push-extra': (el, e) => { if (e.type === 'change') setPushMode(); },
+  'lock-on': (el, e) => { if (e.type === 'change') (el.checked ? turnLockOn() : turnLockOff()); },
+  'lock-after': (el, e) => { if (e.type === 'change' && _lock) { _lock.after = +el.value; saveLock(); renderLock(); } },
   lang: (el, e) => { if (e.type === 'change') window.I18N?.setLang(el.value); },
   'del-reason': (el, e) => {
     if (e.type !== 'change') return;

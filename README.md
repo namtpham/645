@@ -152,6 +152,16 @@ with an invitation key from the admin.
   Edge, Firefox. iPhone/iPad (iOS 16.4+): add 645 to the Home Screen first and turn it on from
   there. Signing out turns notifications off on that device. No keys to set up: the function makes
   its own key pair on first use and keeps the private half in the `push_keys` table.
+  Two more, each on or off per device: **📺 Before the draw** (Saturday about 20:30 KST: "the
+  draw starts in x minutes", time to watch it live; sent by the scheduled workflow at 20:17 and
+  20:27 KST and by any member's open app from 20:10, each device once) and **🎟️ New ticket
+  photos** (when someone uploads tickets; the uploader isn't told about their own). Tapping a
+  notification opens the right place (Picks → Live, Tickets, Dashboard).
+- **App lock** (Settings → 🔐 App lock, per device): 645 asks for Face ID / Touch ID on iPhone, or
+  the fingerprint / face unlock / screen lock on Android, when it opens and when you come back
+  after being away (every time, 1, 5 or 30 minutes). It uses the phone's own passkey support
+  (WebAuthn); nothing leaves the phone. It keeps people who pick up your unlocked phone out of
+  645; turning it off needs the owner too, and **Sign out instead** is always there.
 - **Screen stays on** while a QR code is shown full screen and while 📺 Live is open.
 - **Light on data**: a live update reloads only the table that changed, the draw history is
   downloaded once per visit, and photo links are kept for a day so the browser shows photos

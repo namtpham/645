@@ -481,6 +481,16 @@ td .btn-row { justify-content: flex-end; }
 #invd-overlay .modal { max-width: 760px; }
 #inv-overlay { z-index: 310; }
 #del-overlay { z-index: 320; }
+#lock-view { position: fixed; inset: 0; z-index: 900; background: var(--bg, #07090f); display: flex; align-items: center; justify-content: center; padding: 24px; }
+#lock-view[hidden] { display: none; }
+.lock-box { text-align: center; display: flex; flex-direction: column; align-items: center; gap: 14px; max-width: 340px; }
+.lock-box h2 { font-family: 'Playfair Display', serif; font-size: 22px; }
+.lock-box .btn-lg { min-width: 200px; justify-content: center; text-align: center; }
+body.locked #view-app { visibility: hidden; }
+.lock-toggle { display: flex; align-items: flex-start; gap: 10px; padding: 9px 10px; border: 1px solid var(--border); border-radius: 8px; cursor: pointer; }
+.lock-toggle:has(input:checked) { border-color: rgba(245,158,11,.55); background: var(--gold-bg); }
+.lock-toggle span { display: flex; flex-direction: column; gap: 2px; font-size: 13px; }
+.lock-toggle small { font-size: 11px; color: var(--muted); }
 .push-modes { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
 .push-modes label { display: flex; align-items: flex-start; gap: 10px; padding: 9px 10px; border: 1px solid var(--border); border-radius: 8px; cursor: pointer; }
 .push-modes label:has(input:checked) { border-color: rgba(245,158,11,.55); background: var(--gold-bg); }

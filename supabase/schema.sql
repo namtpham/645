@@ -133,6 +133,7 @@ create table if not exists public.draws (
   fetched_at timestamptz not null default now()
 );
 alter table public.draws add column if not exists prizes jsonb;
+alter table public.tickets add column if not exists notified_at timestamptz;   -- "new ticket photos" sent
 alter table public.draws add column if not exists raw jsonb;
 
 create table if not exists public.audit_log (
@@ -174,12 +175,21 @@ create table if not exists public.push_subs (
   member     uuid not null references public.profiles (id) on delete cascade default auth.uid(),
   p256dh     text not null,
   auth       text not null,
-  mode       text not null default 'all' check (mode in ('all', 'win', 'big')),   -- every result · any win · 4등+
+  mode       text not null default 'all',      -- results: all (every one) · win (any prize) · big (4등+) · none
+  remind     boolean not null default false,   -- "the draw starts in a few minutes" on Saturday 20:30 KST
+  tickets    boolean not null default false,   -- someone uploaded ticket photos
   lang       text not null default 'en' check (lang in ('en', 'ko', 'vi')),
-  last_round int,                              -- last draw this device was told about
+  last_round int,                              -- last draw this device was told the result of
+  last_remind int,                             -- last draw this device was reminded of
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+alter table public.push_subs add column if not exists remind boolean not null default false;
+alter table public.push_subs add column if not exists tickets boolean not null default false;
+alter table public.push_subs add column if not exists last_remind int;
+alter table public.push_subs drop constraint if exists push_subs_mode_check;
+alter table public.push_subs add constraint push_subs_mode_check check (mode in ('all', 'win', 'big', 'none'));
 
 -- The server's VAPID key pair, made by check-tickets on first use. No grants: only the service role reads it.
 create table if not exists public.push_keys (

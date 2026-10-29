@@ -16,6 +16,8 @@ self.addEventListener('notificationclick', (e) => {
   const url = new URL(e.notification.data?.url || './', self.registration.scope).href;
   e.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((wins) => {
     const open = wins.find((w) => w.url.startsWith(self.registration.scope));
-    return open ? open.focus() : self.clients.openWindow(url);
+    if (!open) return self.clients.openWindow(url);
+    open.postMessage({ open: url });   // the open app goes to the right place (e.g. Picks → Live)
+    return open.focus();
   }));
 });

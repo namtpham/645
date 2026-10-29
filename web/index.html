@@ -501,6 +501,21 @@
           <button class="btn btn-secondary" data-act="save-name">Save name</button>
         </div>
       </div>
+      <div class="card" id="lock-card">
+        <div class="card-hd"><div class="card-title">🔐 App lock</div></div>
+        <p class="fhelp" style="margin:-6px 0 12px">Ask for Face ID, Touch ID or your fingerprint (or the phone's screen lock) before 645 opens on this device.</p>
+        <label class="lock-toggle"><input type="checkbox" id="lock-on" data-on-input="lock-on"> <span><strong>Lock 645 on this device</strong><small id="lock-what">Face ID / fingerprint</small></span></label>
+        <div class="fgrp" style="margin-top:10px">
+          <label class="flbl" for="lock-after">Lock again after being away for</label>
+          <select class="finp" id="lock-after" data-on-input="lock-after">
+            <option value="0">Every time</option>
+            <option value="60">1 minute</option>
+            <option value="300">5 minutes</option>
+            <option value="1800">30 minutes</option>
+          </select>
+        </div>
+        <p class="fhelp" id="lock-status" style="margin-top:8px"></p>
+      </div>
       <div class="card" id="push-card">
         <div class="card-hd"><div class="card-title">🔔 Notifications</div></div>
         <p class="fhelp" style="margin:-6px 0 12px">Get the result on this phone or computer on Saturday evening, as soon as it is out.</p>
@@ -508,7 +523,11 @@
           <label><input type="radio" name="push-mode" value="all" data-on-input="push-mode"> <span><strong>Every result</strong><small>The winning numbers and how we did, every week</small></span></label>
           <label><input type="radio" name="push-mode" value="win" data-on-input="push-mode"> <span><strong>When we win</strong><small>Any prize, 5등 included</small></span></label>
           <label><input type="radio" name="push-mode" value="big" data-on-input="push-mode"> <span><strong>Big wins only</strong><small>4등, 3등, 2등 or 1등</small></span></label>
-          <label><input type="radio" name="push-mode" value="off" data-on-input="push-mode"> <span><strong>Off</strong><small>No notifications on this device</small></span></label>
+          <label><input type="radio" name="push-mode" value="off" data-on-input="push-mode"> <span><strong>No results</strong><small>No result notifications on this device</small></span></label>
+        </div>
+        <div class="push-modes push-extra" id="push-extra">
+          <label><input type="checkbox" id="push-remind" data-on-input="push-extra"> <span><strong>📺 Before the draw</strong><small>Saturday about 20:30 KST: the draw starts in a few minutes, time to watch it live</small></span></label>
+          <label><input type="checkbox" id="push-tickets" data-on-input="push-extra"> <span><strong>🎟️ New ticket photos</strong><small>When someone uploads the tickets they bought</small></span></label>
         </div>
         <p class="fhelp" id="push-status"></p>
         <div class="btn-row" style="margin-top:8px">
@@ -775,6 +794,16 @@
   </div>
 </div>
 
+<div id="lock-view" hidden>
+  <div class="lock-box">
+    <div class="logo-ball">645</div>
+    <h2>🔒 645 is locked</h2>
+    <p class="fhelp">Unlock with Face ID, Touch ID or your fingerprint.</p>
+    <button class="btn btn-primary btn-lg" data-act="lock-unlock" id="lock-btn">Unlock</button>
+    <p class="form-error" id="lock-err" hidden></p>
+    <button class="btn btn-ghost btn-sm" data-act="lock-signout">Sign out instead (use your password next time)</button>
+  </div>
+</div>
 <div id="focus-veil" data-act="focus-off" hidden></div>
 <div id="qr-full" hidden>
   <div class="qrf-top"><span id="qrf-cap"></span><button type="button" class="btn btn-ghost btn-sm" data-act="qr-close">✕ Close</button></div>

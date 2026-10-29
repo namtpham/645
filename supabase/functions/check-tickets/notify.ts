@@ -1,6 +1,6 @@
 // What the Saturday-evening notification says, and who gets one (pure functions, tested in Node).
 
-export type Mode = 'all' | 'win' | 'big';     // every result · any win · 4등 or better
+export type Mode = 'all' | 'win' | 'big' | 'none';     // every result · any win · 4등 or better · no results
 export type Lang = 'en' | 'ko' | 'vi';
 export type DrawLite = { round: number; numbers: number[]; bonus: number; prizes?: Record<string, number> | null };
 export type Summary = { round: number; games: number; ranks: Record<number, number>; best: number; won: number; estimated: boolean };
@@ -29,6 +29,7 @@ export function summarize(games: number[][], d: DrawLite): Summary {
 }
 
 export function shouldNotify(mode: Mode, s: Summary): boolean {
+  if (mode === 'none') return false;
   if (mode === 'all') return true;
   if (mode === 'win') return s.best > 0;
   return s.best > 0 && s.best <= 4;
@@ -72,7 +73,32 @@ export function message(s: Summary, d: DrawLite, lang: Lang) {
     : !s.best ? T.none(s.games)
     : s.estimated ? T.wonBig(list, s.games)
     : T.won(money(s.won, lang), list, s.games);
-  return { title: T.title(s.round), body: `${nums}\n${line}`, tag: `draw-${s.round}`, url: './#tab=dashboard' };
+  return { title: T.title(s.round), body: `${nums}\n${line}`, tag: `draw-${s.round}`, url: './#dashboard' };
+}
+
+/** Saturday before the draw: time to watch it live. */
+export function reminderMessage(round: number, minutes: number, lang: Lang) {
+  const m = Math.max(1, Math.round(minutes));
+  const t = {
+    en: { title: `📺 Draw #${round} in ${m} minute${m === 1 ? '' : 's'}`, body: 'This week\'s draw takes place soon. Watch it live and tap the numbers in 645 → Picks → Live.' },
+    ko: { title: `📺 제${round}회 추첨 ${m}분 전`, body: '이번 주 추첨이 곧 시작됩니다. 생방송을 보면서 645 → 번호 → 라이브에서 번호를 눌러 보세요.' },
+    vi: { title: `📺 Kỳ #${round} quay sau ${m} phút`, body: 'Kỳ quay tuần này sắp bắt đầu. Xem trực tiếp và chạm các số trong 645 → Chọn số → Trực tiếp.' },
+  }[lang] ?? null;
+  return { ...(t ?? { title: `📺 Draw #${round} in ${m} minutes`, body: '' }), tag: `remind-${round}`, url: './#picks-live' };
+}
+
+/** Someone uploaded ticket photos. */
+export function ticketsMessage(name: string, photos: number, games: number, round: number | null, lang: Lang) {
+  const r = round ? `#${round}` : '';
+  const t = {
+    en: { title: `🎟️ ${name} uploaded ${photos} ticket photo${photos === 1 ? '' : 's'}`,
+      body: `${round ? `Draw ${r}` : 'This week'}${games ? ` · ${games} game${games === 1 ? '' : 's'}` : ''}. Tap to see them.` },
+    ko: { title: `🎟️ ${name} 님이 복권 사진 ${photos}장을 올렸습니다`,
+      body: `${round ? `제${round}회` : '이번 주'}${games ? ` · ${games}게임` : ''}. 눌러서 확인하세요.` },
+    vi: { title: `🎟️ ${name} đã tải lên ${photos} ảnh vé`,
+      body: `${round ? `Kỳ ${r}` : 'Tuần này'}${games ? ` · ${games} vé` : ''}. Chạm để xem.` },
+  }[lang] ?? { title: `🎟️ ${name}: ${photos}`, body: '' };
+  return { ...t, tag: `tickets-${Date.now()}`, url: './#tickets' };
 }
 
 /** Test message from the settings page. */

@@ -19,13 +19,15 @@
 //   • Without a member login, only pending QR codes whose results are already out are checked,
 //     so the scheduled GitHub Action can call it with the public key.
 //   • { "push": "key" } → the public key browsers subscribe to notifications with;
-//     { "push": "test" } (member) → a test notification to that member's devices.
+//     { "push": "test" } (member) → a test notification to that member's devices;
+//     { "push": "remind" } → before Saturday's draw (20:10–20:35 KST): "the draw starts in x minutes", once per device;
+//     { "push": "tickets", "ticket_ids": [...] } (the member who just uploaded them) → "new ticket photos" to the others.
 // After every check, members who turned notifications on get the latest draw's result once
 // (every result, any win, or 4등 and better: their choice, in their language).
 
 import { createClient } from 'npm:@supabase/supabase-js@2.117.2';
 import { newVapidKeys, sendPush, type Vapid } from './push.ts';
-import { message, shouldNotify, summarize, testMessage, type Lang, type Mode } from './notify.ts';
+import { message, reminderMessage, shouldNotify, summarize, testMessage, ticketsMessage, type Lang, type Mode } from './notify.ts';
 
 // The service key is provided to every Edge Function automatically (legacy or new key format).
 function serviceKey(): string | undefined {
@@ -290,6 +292,11 @@ async function handle(req: Request): Promise<Response> {
     }
     return json({ ok: true, sent, devices: subs?.length ?? 0 });
   }
+  if (body.push === 'remind') return json(await sendReminders());
+  if (body.push === 'tickets') {
+    if (!memberId) return json({ error: 'Sign in first.' }, 401);
+    return json(await sendTicketNews(memberId, Array.isArray(body.ticket_ids) ? body.ticket_ids.slice(0, 50).map(String) : []));
+  }
   const force = member && typeof body.ticket_id === 'string';
 
   let q = db.from('tickets').select('id, draw_date, qr_data').not('qr_data', 'is', null);
@@ -376,13 +383,67 @@ async function gamesFor(round: number): Promise<number[][]> {
   return [...byGroup.values()].filter((g) => g.length === 6);
 }
 
+const DRAW_TIME = '20:35';   // KST, the live draw
+
+/** Saturday 20:10–20:35 KST: tell the devices that asked for it that the draw is about to start (once per draw). */
+async function sendReminders() {
+  const kst = new Date(Date.now() + 9 * 3600e3), day = kst.toISOString().slice(0, 10);
+  const drawAt = new Date(`${day}T${DRAW_TIME}:00+09:00`).getTime(), minutes = (drawAt - Date.now()) / 60e3;
+  if (kst.getUTCDay() !== 6 || minutes <= 0 || minutes > 25) return { sent: 0, note: 'only on Saturday between 20:10 and 20:35 KST' };
+  const round = roundOf(day);
+  const { data: subs, error } = await db.from('push_subs').select('*').eq('remind', true).or(`last_remind.is.null,last_remind.lt.${round}`);
+  if (error) return { error: error.message };
+  const v = subs?.length ? await vapid() : null;
+  let sent = 0;
+  for (const sub of subs ?? []) {
+    const { data: claimed } = await db.from('push_subs').update({ last_remind: round })
+      .eq('endpoint', sub.endpoint).or(`last_remind.is.null,last_remind.lt.${round}`).select('endpoint');
+    if (!claimed?.length) continue;
+    const r = await sendPush(sub, reminderMessage(round, minutes, sub.lang as Lang), v!, 30 * 60).catch(() => null);
+    if (r?.gone) await db.from('push_subs').delete().eq('endpoint', sub.endpoint);
+    else if (r?.ok) sent++;
+  }
+  return { round, minutes: Math.round(minutes), sent };
+}
+
+/** "New ticket photos": photos this member uploaded in the last half hour, each announced once. */
+async function sendTicketNews(memberId: string, ids: string[]) {
+  if (!ids.length) return { sent: 0 };
+  const since = new Date(Date.now() - 30 * 60e3).toISOString();
+  // claim the photos first, so a second call can't announce them again
+  const { data: photos, error } = await db.from('tickets').update({ notified_at: new Date().toISOString() })
+    .in('id', ids).eq('uploaded_by', memberId).is('notified_at', null).gte('created_at', since)
+    .select('id, draw_date, game_count, qr_data');
+  if (error) return { error: error.message };
+  if (!photos?.length) return { sent: 0 };
+  let games = 0;
+  const rounds = new Set<number>();
+  for (const p of photos) {
+    const qr = (Array.isArray(p.qr_data) ? p.qr_data : []) as QrItem[];
+    const n = qr.reduce((a, it) => a + (it.games?.length ?? 0), 0);
+    games += n || (p.game_count ?? 0);
+    rounds.add(qr.find((it) => it.round)?.round ?? roundOf(p.draw_date));
+  }
+  const round = rounds.size === 1 ? [...rounds][0] : null;
+  const { data: who } = await db.from('profiles').select('display_name').eq('id', memberId).maybeSingle();
+  const { data: subs } = await db.from('push_subs').select('*').eq('tickets', true).neq('member', memberId);
+  const v = subs?.length ? await vapid() : null;
+  let sent = 0;
+  for (const sub of subs ?? []) {
+    const r = await sendPush(sub, ticketsMessage(who?.display_name ?? '?', photos.length, games, round, sub.lang as Lang), v!).catch(() => null);
+    if (r?.gone) await db.from('push_subs').delete().eq('endpoint', sub.endpoint);
+    else if (r?.ok) sent++;
+  }
+  return { photos: photos.length, sent };
+}
+
 /** Once per draw and device: the result of the latest finished draw, if the member wants it. */
 async function notifyResults(cache: Map<number, Draw | null>) {
   const kst = new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10);
   let sat = new Date(Date.parse(kst) - ((new Date(kst).getUTCDay() + 1) % 7) * 864e5).toISOString().slice(0, 10);
   if (!resultsOut(sat)) sat = new Date(Date.parse(sat) - 7 * 864e5).toISOString().slice(0, 10);
   const round = roundOf(sat);
-  const { data: subs, error } = await db.from('push_subs').select('*').or(`last_round.is.null,last_round.lt.${round}`);
+  const { data: subs, error } = await db.from('push_subs').select('*').neq('mode', 'none').or(`last_round.is.null,last_round.lt.${round}`);
   if (error) return { round, error: error.message };
   if (!subs?.length) return { round, sent: 0 };
   const draw = cache.get(round) ?? await getDraw(round, cache);
