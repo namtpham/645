@@ -290,7 +290,15 @@ async function boot() {
 
   S.sb.auth.onAuthStateChange((event, session) => {
     if (event === 'INITIAL_SESSION') return;
-    if (event === 'SIGNED_OUT') { S.user = null; stopRealtime(); showAuth(); }
+    if (event === 'SIGNED_OUT') {
+      S.user = null; S.drawsLoaded = false;
+      stopRealtime();
+      closeQrFull();
+      if (_focusKey) setFocus(null);
+      for (const id of ['jn-code', 'jn-user', 'jn-name', 'jn-pw', 'jn-pw2']) if ($(id)) $(id).value = '';
+      document.querySelectorAll('#view-auth input[type=password]').forEach((el) => { el.value = ''; });
+      showAuth();
+    }
     else if (session?.user && session.user.id !== S.user?.id) { S.user = session.user; setTimeout(enterApp, 0); }
   });
 
@@ -386,7 +394,8 @@ async function enterApp() {
 // ═════════════════════════════════════════════════════════════════════════════
 //  Data loading & realtime
 // ═════════════════════════════════════════════════════════════════════════════
-async function loadAll() {
+/** `draws: false` keeps the saved winning numbers (1,000+ rows) when only other tables changed. */
+async function loadAll({ draws = true } = {}) {
   const sb = S.sb;
   const { data: me, error: meErr } = await sb.from('profiles').select('*').eq('id', S.user.id).maybeSingle();
   if (meErr) throw meErr;
@@ -404,10 +413,10 @@ async function loadAll() {
   if (err) throw err;
   const [st, pr, iv, wk, tk] = res.map((r) => r.data);
   const [drawRows, lc] = await Promise.all([
-    loadDraws(),
+    draws || !S.drawsLoaded ? loadDraws() : null,
     sb.from('audit_log').select('*').order('at', { ascending: false }).limit(1),
   ]);
-  S.draws = Object.fromEntries(drawRows.map((d) => [d.round, d]));   // missing table → {}
+  if (drawRows) { S.draws = Object.fromEntries(drawRows.map((d) => [d.round, d])); S.drawsLoaded = true; }   // missing table → {}
   S.lastChange = lc.data?.[0] || null;
   S.loadedAt = new Date();
   if (st) S.settings = { ...S.settings, ...st, big_win_threshold: +st.big_win_threshold };
@@ -442,17 +451,20 @@ async function loadDraws() {
   return out;
 }
 
-let _reloadT = null, _boardT = null, _channel = null;
+let _reloadT = null, _boardT = null, _channel = null, _reloadTables = new Set();
 function scheduleBoardReload() {
   clearTimeout(_boardT);
-  _boardT = setTimeout(() => loadBoard().then(() => S.tab === 'picks' && renderPicks()).catch(console.error), 250);
+  _boardT = setTimeout(() => loadBoard().then(() => { if (S.tab === 'picks') renderPicks(); else if (S.tab === 'dashboard') renderDuty(); }).catch(console.error), 250);
 }
-function scheduleReload() {
+function scheduleReload(table) {
   clearTimeout(_reloadT);
+  _reloadTables.add(table || '*');
   _reloadT = setTimeout(async () => {
     if (!S.user) return;
+    const tables = _reloadTables;
+    _reloadTables = new Set();
     try {
-      await loadAll();
+      await loadAll({ draws: tables.has('draws') || tables.has('*') });
       if (!S.me || S.me.status !== 'active') { stopRealtime(); showView('revoked'); return; }
       if (S.tab === 'activity') loadActivity();
     } catch (e) { console.error(e); }
@@ -463,7 +475,7 @@ function startRealtime() {
   if (_channel) return;
   _channel = S.sb.channel('db-changes')
     .on('postgres_changes', { event: '*', schema: 'public' },
-      (p) => (p?.table === 'live_picks' ? scheduleLiveReload() : BOARD_TABLES.includes(p?.table) ? scheduleBoardReload() : scheduleReload()))
+      (p) => (p?.table === 'live_picks' ? scheduleLiveReload() : BOARD_TABLES.includes(p?.table) ? scheduleBoardReload() : scheduleReload(p?.table)))
     .subscribe((status) => $('syncDot').classList.toggle('off', status !== 'SUBSCRIBED'));
 }
 function stopRealtime() {
@@ -517,7 +529,7 @@ function goTab(name) {
   document.querySelectorAll('.tab-pane').forEach((el) => el.classList.toggle('active', el.id === 'tab-' + name));
   document.querySelectorAll('.nav-tab').forEach((el) => el.classList.toggle('active', el.dataset.tab === name));
   if (name === 'charts') setTimeout(renderCharts, 60);
-  if (name === 'dashboard') setTimeout(renderDashChart, 60);
+  if (name === 'dashboard') { renderDuty(); setTimeout(renderDashChart, 60); }
   if (name === 'picks') setTimeout(renderPicks, 30);
   if (name === 'tickets') hydrateImages($('tickets-list'));
   if (name === 'activity') loadActivity();
@@ -595,6 +607,32 @@ function renderLastCard() {
 
 const lastDraw = () => S.draws[Math.max(0, ...Object.keys(S.draws).map(Number))] || null;
 
+/** Dashboard reminder: what I still have to buy this week (or that nobody is set to buy yet). */
+function renderDuty() {
+  const el = $('dash-duty'), B = S.board, d = currentDraw();
+  if (!el) return;
+  const close = kstAt(d, SALES_CLOSE).getTime();
+  if (B.missing || B.round !== drawNo(d) || !B.groups || Date.now() >= close) { el.innerHTML = ''; return; }
+  const groups = Array.from({ length: B.groups }, (_, i) => ({ g: i + 1, nums: groupPicks(i + 1).map((p) => p.num) }));
+  const { bought } = matchBought(groups, realGames(B.round));
+  const list = buyerList(), mine = list.filter((b) => b.by === S.me.id);
+  const when = `sales close Sat ${SALES_CLOSE} KST (in ${countdown(close - Date.now())})`;
+  const btn = (t) => `<button class="btn btn-primary btn-sm" data-act="goto-buy">${t}</button>`;
+  if (mine.length) {
+    const r = mine.map((b) => buyerCodes(b, bought)), games = sum(r.map((x) => x.games.length)), open = r.flatMap((x) => x.open);
+    const ranges = mine.map((b) => (b.from === b.to ? b.from : `${b.from}–${b.to}`)).join(', ');
+    el.innerHTML = games
+      ? `<div class="duty todo"><span>🛒 <strong>Your turn to buy</strong>: groups ${ranges} · ${games} game${games > 1 ? 's' : ''} (${esc(money(games * TICKET_PRICE))})
+          · ${when}${open.length ? ` · ⚠️ group${open.length > 1 ? 's' : ''} ${rangeText(open)} not complete yet` : ''}</span>${btn('Show my QR codes')}</div>`
+      : `<div class="duty done"><span>✓ Your groups for #${B.round} (${ranges}) are bought${open.length ? `, except unfinished group${open.length > 1 ? 's' : ''} ${rangeText(open)}` : ''}. Thanks!</span></div>`;
+    return;
+  }
+  const ready = groups.filter((x) => x.nums.length === 6 && !bought[x.g]).length;
+  el.innerHTML = !list.length && ready
+    ? `<div class="duty none"><span>🛒 Nobody is set to buy #${B.round}'s ${ready} complete group${ready > 1 ? 's' : ''} yet · ${when}</span>${btn('Choose who buys')}</div>`
+    : '';
+}
+
 function renderDashboard() {
   const weeks = S.weeks, pool = S.ledger.pool;
   let totalInv = 0, paidOut = 0, allPrizes = 0;
@@ -605,6 +643,7 @@ function renderDashboard() {
   }
   renderDrawCard();
   renderLastCard();
+  renderDuty();
 
   const timeline = weekTimeline().filter((r) => r.date < currentDraw());
   const played = timeline.filter((r) => r.weeks.length).length;
@@ -2119,9 +2158,16 @@ function buyerCodes(b, bought) {
   return { games, open, done, codes };
 }
 
-let _qrFull = null;   // { codes: [{ payload, cap }], i }
+let _qrFull = null, _wakeLock = null;   // { codes: [{ payload, cap }], i }
+async function keepScreenOn(on) {
+  try {
+    if (on && !_wakeLock && navigator.wakeLock) _wakeLock = await navigator.wakeLock.request('screen');
+    else if (!on && _wakeLock) { await _wakeLock.release(); _wakeLock = null; }
+  } catch { _wakeLock = null; /* not supported, or the page is hidden */ }
+}
 function openQrFull(codes, i) {
   _qrFull = { codes, i };
+  keepScreenOn(true);
   $('qr-full').hidden = false;
   document.body.classList.add('qr-open');
   drawQrFull();
@@ -2138,7 +2184,10 @@ function stepQrFull(d) {
   _qrFull.i = (_qrFull.i + d + _qrFull.codes.length) % _qrFull.codes.length;
   drawQrFull();
 }
-function closeQrFull() { _qrFull = null; $('qr-full').hidden = true; document.body.classList.remove('qr-open'); }
+document.addEventListener('visibilitychange', () => {   // the lock is dropped when the phone switches apps
+  if (document.visibilityState === 'visible' && _qrFull) { _wakeLock = null; keepScreenOn(true); }
+});
+function closeQrFull() { _qrFull = null; $('qr-full').hidden = true; document.body.classList.remove('qr-open'); keepScreenOn(false); }
 
 let _buyCodes = [];   // what the QR figures on the page show, for the full-screen view
 /** `own`: re-drawn after this member's own edit (otherwise a live update leaves a field being edited alone). */
@@ -3475,6 +3524,7 @@ const ACTIONS = {
   'live-reset': () => liveReset(),
   'live-official': () => liveOfficial(),
   'buy-start': () => startBuying(),
+  'goto-buy': () => { goTab('picks'); setPicksSection('buy'); },
   'buy-remove': (el) => removeBuyer(+el.dataset.i),
   'qr-big': (el) => openQrFull(_buyCodes, +el.dataset.k),
   // 'qr-chk': () => { const t = $('chk-ours')?.textContent; if (t) openQrFull([{ payload: t, cap: 'Our QR for the typed games' }], 0); },

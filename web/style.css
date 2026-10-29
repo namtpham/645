@@ -802,6 +802,12 @@ body.focus-mode .board-sum .bsum-row.focused { opacity: 1; background: var(--car
 .bg-bought .warn { color: #fcd34d; }
 .bg-badge.bought { background: #60a5fa; color: #0b1220; }
 
+/* Dashboard reminder for this week's buyers */
+.duty { display: flex; align-items: center; justify-content: space-between; gap: 10px 16px; flex-wrap: wrap; padding: 12px 16px; border-radius: 12px; margin-bottom: 16px; font-size: 13px; }
+.duty.todo { background: rgba(245,158,11,.12); border: 1px solid rgba(245,158,11,.45); color: #fde68a; }
+.duty.done { background: rgba(16,185,129,.1); border: 1px solid rgba(52,211,153,.4); color: #6ee7b7; }
+.duty.none { background: rgba(96,165,250,.1); border: 1px solid rgba(96,165,250,.4); color: #bfdbfe; }
+
 /* Buying at the shop: buyers and QR codes */
 .buy-start { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .buy-start .fhelp { flex: 1; min-width: 220px; }

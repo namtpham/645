@@ -109,8 +109,11 @@ with an invitation key from the admin.
     ranges never overlap or leave a gap; a coloured bar on top shows the split. Pick who each buyer
     is from the menu (a new one is someone not buying yet, or "Choose who…"); ✕ hands a buyer's
     groups to the one above. Saved with the week's picks, so everyone sees it.
+  - **Reminder:** until sales close, the Dashboard tells each buyer what they still have to buy
+    (games, amount, time left) with a button to their QR codes, and tells everyone when nobody
+    is set to buy yet.
   - **QR codes:** each buyer gets codes for their complete groups that aren't bought yet, at most
-    20 games per code (your own first). Tap one to show it full screen; **Numbers and QR text**
+    20 games per code (your own first). Tap one to show it full screen (the screen stays on while it is shown); **Numbers and QR text**
     lists the games and the exact text. Incomplete and already-bought groups are listed, not coded.
   - **Format:** the mobile-slip text that slip apps such as LottoMate produce:
     `MSG_ESLIP{10645}{(5,M:081114233145,…)(1,M:…)}{}6B|`. Each game is its 6 numbers sorted, two
