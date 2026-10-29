@@ -140,6 +140,22 @@ with an invitation key from the admin.
   - **Reveal results:** shows the winning numbers, each set's 등수 and prize, the total won and
     the profit. 4등/5등 are fixed amounts. 1등–3등 use that draw's real prize when dhlottery's
     data has it; otherwise a typical amount marked ≈ is used.
+- **Languages**: English, 한국어 and Tiếng Việt (Settings → Language, or the 🌐 menu on the sign-in
+  page; first visit follows the phone's language). Dates follow the language too. The app is
+  written in English and `web/i18n.js` translates the page as it is drawn, using the table in
+  `web/i18n-dict.js` (add a row there to translate something new; anything missing stays English).
+- **Notifications** (Settings → 🔔 Notifications, per device): the Saturday result as soon as it
+  is out: **every result**, **when we win** (any prize) or **big wins only** (4등 or better), in
+  the member's language. Sent by the `check-tickets` function, which runs from 20:57 KST on
+  Saturdays (scheduled workflow) and whenever a member opens the site after the draw; each device
+  is told about each draw once. **Send a test** checks it works. Android and computers: Chrome,
+  Edge, Firefox. iPhone/iPad (iOS 16.4+): add 645 to the Home Screen first and turn it on from
+  there. Signing out turns notifications off on that device. No keys to set up: the function makes
+  its own key pair on first use and keeps the private half in the `push_keys` table.
+- **Screen stays on** while a QR code is shown full screen and while 📺 Live is open.
+- **Light on data**: a live update reloads only the table that changed, the draw history is
+  downloaded once per visit, and photo links are kept for a day so the browser shows photos
+  from its cache.
 - **Activity log**: every add/edit/delete by every member, with old → new values. It can't be edited.
   Deleting a ticket photo (admins only) asks why: duplicate, QR code not detected, wrong image,
   wrong draw, blurry, or a reason you write; the reason is shown with the deletion.
@@ -406,11 +422,13 @@ summary page. What it found:
 │   ├── app.js               ← all app logic (Supabase client, pool maths, UI)
 │   ├── picks.js             ← number suggestion engine (Picks tab, simulation, backtest)
 │   ├── eslip.js             ← mobile-slip QR text for the shop (MSG_ESLIP)
+│   ├── i18n.js, i18n-dict.js ← Korean and Vietnamese
+│   ├── sw.js                ← service worker: shows result notifications
 │   └── config.js            ← Supabase URL + public key  ← edit this
 ├── web/vendor/            ← QR code reader (zxing-wasm, MIT) and maker (qrcode-generator 2.0.4, MIT)
 ├── supabase/
 │   ├── schema.sql           ← tables, security rules, storage, realtime (run once)
-│   └── functions/check-tickets/index.ts ← reads ticket result pages (Edge Function)
+│   └── functions/check-tickets/ ← reads ticket result pages, sends notifications (Edge Function)
 ├── tools/analyze-picks.mjs  ← tests the pick engine on the real draw history
 ├── tools/eslip-check.mjs    ← checks the shop QR text against known samples
 └── .github/workflows/
@@ -440,4 +458,5 @@ python3 -m http.server -d web 8000
 `supabase/schema.sql` is safe to run again. It keeps existing data and re-applies
 functions, policies and grants. Run it again after updates that add tables, for example
 **Our numbers** (tables `pick_plans` and `group_picks`), shared **Live** picks (`live_picks`) and
-**Who buys** (column `pick_plans.buyers`), and photo deletion with a reason (`delete_ticket`).
+**Who buys** (column `pick_plans.buyers`), photo deletion with a reason (`delete_ticket`), and
+notifications (tables `push_subs` and `push_keys`).

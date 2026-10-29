@@ -21,6 +21,8 @@
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.2/dist/umd/supabase.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.js"></script>
   <script src="config.js?v=dev"></script>
+  <script src="i18n-dict.js?v=dev"></script>
+  <script src="i18n.js?v=dev"></script>
   <script src="picks.js?v=dev"></script>
   <script src="eslip.js?v=dev"></script>
   <script src="app.js?v=dev" defer></script>
@@ -54,6 +56,9 @@
   <div class="orb orb1"></div>
   <div class="orb orb2"></div>
   <div class="auth-card">
+    <select class="lang-pick" data-on-input="lang" aria-label="Language" data-no-i18n>
+      <option value="en">🌐 English</option><option value="ko">🌐 한국어</option><option value="vi">🌐 Tiếng Việt</option>
+    </select>
     <div class="logo">
       <div class="logo-ball">645</div>
       <div class="logo-sub">Group Lotto Tracker</div>
@@ -260,7 +265,7 @@
       <div class="card picks-note">
         <strong>How to read this.</strong> Every set of 6 numbers has exactly the same chance: 1 in 8,145,060, every week.
         We tested more than 1,200 real draws: the machine is fair, and hot, cold or overdue numbers predict nothing.
-        What past results <em>do</em> show is which numbers people over-pick. When those numbers come up, more people win
+        What past results do show is which numbers people over-pick. When those numbers come up, more people win
         and the 1등–3등 prizes are split more ways. So the suggestions lean toward less-picked numbers, keep the usual shape of
         real winning draws (sum, odd/even, low/high, spread), and still give a small weight to how often each number came up.
         <strong>Score</strong> = how well the set fits all of that: 100 = this week's best set, 0 = a typical random set.
@@ -489,7 +494,25 @@
         <div class="stack">
           <div class="fgrp"><label class="flbl">Username</label><input class="finp" id="me-username" disabled></div>
           <div class="fgrp"><label class="flbl" for="me-name">Display name</label><input class="finp" id="me-name" maxlength="40"></div>
+          <div class="fgrp"><label class="flbl" for="me-lang">Language</label>
+            <select class="finp" id="me-lang" data-on-input="lang" data-no-i18n>
+              <option value="en">English</option><option value="ko">한국어 (Korean)</option><option value="vi">Tiếng Việt (Vietnamese)</option>
+            </select></div>
           <button class="btn btn-secondary" data-act="save-name">Save name</button>
+        </div>
+      </div>
+      <div class="card" id="push-card">
+        <div class="card-hd"><div class="card-title">🔔 Notifications</div></div>
+        <p class="fhelp" style="margin:-6px 0 12px">Get the result on this phone or computer on Saturday evening, as soon as it is out.</p>
+        <div class="push-modes" id="push-modes">
+          <label><input type="radio" name="push-mode" value="all" data-on-input="push-mode"> <span><strong>Every result</strong><small>The winning numbers and how we did, every week</small></span></label>
+          <label><input type="radio" name="push-mode" value="win" data-on-input="push-mode"> <span><strong>When we win</strong><small>Any prize, 5등 included</small></span></label>
+          <label><input type="radio" name="push-mode" value="big" data-on-input="push-mode"> <span><strong>Big wins only</strong><small>4등, 3등, 2등 or 1등</small></span></label>
+          <label><input type="radio" name="push-mode" value="off" data-on-input="push-mode"> <span><strong>Off</strong><small>No notifications on this device</small></span></label>
+        </div>
+        <p class="fhelp" id="push-status"></p>
+        <div class="btn-row" style="margin-top:8px">
+          <button class="btn btn-secondary btn-sm" data-act="push-test" id="push-test" hidden>Send a test</button>
         </div>
       </div>
       <div class="card">

@@ -91,9 +91,12 @@ function drawNo(d) {
 }
 
 const drawDate = (n) => addDays(FIRST_DRAW, (n - 1) * 7);
-const fmtShort = (d) => new Date(d + 'T12:00:00Z').toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: '2-digit', timeZone: 'UTC' });
-const fmtD = (d) => d ? new Date(d + 'T12:00:00Z').toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', timeZone: 'UTC' }) : '—';
-const fmtKST = (ts) => ts ? new Date(ts).toLocaleString('en-GB', { timeZone: TZ, day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false }) + ' KST' : '—';
+// Dates, times and currency names in the chosen language (i18n.js)
+const LANG = window.I18N?.lang || 'en', LOCALE = window.I18N?.locale || 'en-GB', tr = window.I18N?.t || ((s) => s);
+document.addEventListener('DOMContentLoaded', () => document.querySelectorAll('[data-on-input=lang]').forEach((el) => { el.value = LANG; }));
+const fmtShort = (d) => new Date(d + 'T12:00:00Z').toLocaleDateString(LOCALE, { day: '2-digit', month: 'short', year: '2-digit', timeZone: 'UTC' });
+const fmtD = (d) => d ? new Date(d + 'T12:00:00Z').toLocaleDateString(LOCALE, { day: '2-digit', month: 'short', year: 'numeric', timeZone: 'UTC' }) : '—';
+const fmtKST = (ts) => ts ? new Date(ts).toLocaleString(LOCALE, { timeZone: TZ, day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false }) + ' KST' : '—';
 const drawLabel = (d) => { const n = drawNo(d); return n ? `#${n}` : ''; };
 
 function countdown(ms) {
@@ -118,7 +121,7 @@ const money = (n, cur, disp) => (n == null || isNaN(n)) ? '—' : moneyFormatter
 const fmtP = (n) => `${(+n || 0).toFixed(1)}%`;
 
 function currencyName(code) {
-  try { return new Intl.DisplayNames(['en'], { type: 'currency' }).of(code); } catch { return code; }
+  try { return new Intl.DisplayNames([LANG, 'en'], { type: 'currency' }).of(code); } catch { return code; }
 }
 function currencySymbol(code) {
   try {
@@ -233,14 +236,23 @@ function outOfPeriod(w) {
 }
 
 // ─── Signed image URLs (bucket is private) ────────────────────────────────────
-const _urls = new Map();
+// Photo links are signed for a day and remembered on this device: the same link means the browser
+// can show the photo from its cache (photos never change) instead of downloading it again.
+const URL_DAYS = 1;
+const _urls = (() => { try { return new Map(JSON.parse(localStorage.getItem('645-urls')) || []); } catch { return new Map(); } })();
+function saveUrls() {
+  const now = Date.now();
+  for (const [k, v] of _urls) if (v.exp < now) _urls.delete(k);
+  try { localStorage.setItem('645-urls', JSON.stringify([..._urls])); } catch { /* full or private mode */ }
+}
 async function signedUrls(paths) {
   const now = Date.now();
-  const need = [...new Set(paths)].filter((p) => p && !(_urls.get(p)?.exp > now + 60e3));
+  const need = [...new Set(paths)].filter((p) => p && !(_urls.get(p)?.exp > now + 3600e3));
   if (need.length) {
-    const { data, error } = await S.sb.storage.from(BUCKET).createSignedUrls(need, 3600);
+    const { data, error } = await S.sb.storage.from(BUCKET).createSignedUrls(need, URL_DAYS * 86400);
     if (error) throw error;
-    for (const r of data || []) if (r.signedUrl) _urls.set(r.path, { url: r.signedUrl, exp: now + 3600e3 });
+    for (const r of data || []) if (r.signedUrl) _urls.set(r.path, { url: r.signedUrl, exp: now + URL_DAYS * 86400e3 });
+    saveUrls();
   }
   const out = {};
   for (const p of paths) out[p] = _urls.get(p)?.url;
@@ -292,6 +304,8 @@ async function boot() {
     if (event === 'INITIAL_SESSION') return;
     if (event === 'SIGNED_OUT') {
       S.user = null; S.drawsLoaded = false;
+      _urls.clear();
+      try { localStorage.removeItem('645-urls'); } catch { /* private mode */ }
       stopRealtime();
       closeQrFull();
       if (_focusKey) setFocus(null);
@@ -394,6 +408,35 @@ async function enterApp() {
 // ═════════════════════════════════════════════════════════════════════════════
 //  Data loading & realtime
 // ═════════════════════════════════════════════════════════════════════════════
+// What each table's live update reloads; anything else (or '*') reloads everything.
+const TABLE_LOADERS = {
+  investors: async () => { S.investors = must(await S.sb.from('investors').select('*').order('created_at')) || []; },
+  weeks: async () => {
+    const rows = must(await S.sb.from('weeks').select('*').order('result_date').order('created_at')) || [];
+    S.weeks = rows.map((w) => ({ ...w, pool_used: +w.pool_used, prize_won: +w.prize_won }));
+    S.ledger = replay(S.weeks);
+  },
+  tickets: async () => { S.tickets = sortTickets(must(await S.sb.from('tickets').select('*').order('draw_date', { ascending: false }).order('created_at')) || []); },
+  draws: async () => { S.draws = Object.fromEntries((await loadDraws()).map((d) => [d.round, d])); S.drawsLoaded = true; },
+};
+function must(r) { if (r.error) throw r.error; return r.data; }
+
+/** After a live update: reload only the tables that changed (less data on phones), then redraw. */
+async function loadSome(tables) {
+  if (tables.has('*') || [...tables].some((t) => !TABLE_LOADERS[t])) return loadAll({ draws: tables.has('draws') || tables.has('*') });
+  const [, lc] = await Promise.all([
+    Promise.all([...tables].map((t) => TABLE_LOADERS[t]())),
+    S.sb.from('audit_log').select('*').order('at', { ascending: false }).limit(1),
+  ]);
+  S.lastChange = lc.data?.[0] || S.lastChange;
+  S.loadedAt = new Date();
+  if (S.lbTicket && tables.has('tickets')) {
+    S.lbTicket = S.tickets.find((t) => t.id === S.lbTicket.id) || S.lbTicket;
+    if ($('lb-overlay').classList.contains('open')) renderLbQr();
+  }
+  renderAll();
+}
+
 /** `draws: false` keeps the saved winning numbers (1,000+ rows) when only other tables changed. */
 async function loadAll({ draws = true } = {}) {
   const sb = S.sb;
@@ -464,7 +507,7 @@ function scheduleReload(table) {
     const tables = _reloadTables;
     _reloadTables = new Set();
     try {
-      await loadAll({ draws: tables.has('draws') || tables.has('*') });
+      await loadSome(tables);
       if (!S.me || S.me.status !== 'active') { stopRealtime(); showView('revoked'); return; }
       if (S.tab === 'activity') loadActivity();
     } catch (e) { console.error(e); }
@@ -495,16 +538,16 @@ function ago(ts) {
 function renderTimebar() {
   if (!$('tb-clock')) return;
   const now = new Date();
-  const local = now.toLocaleString('en-GB', { weekday: 'short', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
-  const kst = LOCAL_TZ === TZ ? '' : ` · Korea ${now.toLocaleTimeString('en-GB', { timeZone: TZ, hour: '2-digit', minute: '2-digit', hour12: false })}`;
+  const local = now.toLocaleString(LOCALE, { weekday: 'short', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+  const kst = LOCAL_TZ === TZ ? '' : ` · Korea ${now.toLocaleTimeString(LOCALE, { timeZone: TZ, hour: '2-digit', minute: '2-digit', hour12: false })}`;
   $('tb-clock').textContent = `🕒 ${local} (${LOCAL_TZ.replace('_', ' ')})${kst}`;
   const c = S.lastChange;
   if (c) {
     const d = describeChange(c);
-    const at = new Date(c.at).toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false });
+    const at = new Date(c.at).toLocaleString(LOCALE, { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false });
     $('tb-update').innerHTML = `🔄 Last update <strong>${esc(at)}</strong> (${ago(c.at)}) · ${esc(d.self ? userName(d.self) : d.auto || userName(c.actor))} ${esc(d.head)} ${esc(d.subject || '')}`;
   } else $('tb-update').textContent = '';
-  $('tb-update').title = S.loadedAt ? `Data loaded ${S.loadedAt.toLocaleTimeString('en-GB', { hour12: false })}` : '';
+  $('tb-update').title = S.loadedAt ? `Data loaded ${S.loadedAt.toLocaleTimeString(LOCALE, { hour12: false })}` : '';
 }
 setInterval(renderTimebar, 1000);
 
@@ -525,6 +568,7 @@ function renderAll() {
 
 function goTab(name) {
   S.tab = name;
+  updateWakeLock();
   if (_focusKey) setFocus(null);
   document.querySelectorAll('.tab-pane').forEach((el) => el.classList.toggle('active', el.id === 'tab-' + name));
   document.querySelectorAll('.nav-tab').forEach((el) => el.classList.toggle('active', el.dataset.tab === name));
@@ -534,6 +578,7 @@ function goTab(name) {
   if (name === 'tickets') hydrateImages($('tickets-list'));
   if (name === 'activity') loadActivity();
   if (name === 'settings' && isAdmin()) loadInvites();
+  if (name === 'settings') renderPush();
 }
 
 // ─── Dashboard ────────────────────────────────────────────────────────────────
@@ -1568,6 +1613,7 @@ function historyReady() {
 }
 
 function renderPicks() {
+  updateWakeLock();
   document.querySelectorAll('#picks-sections .seg-btn').forEach((b) => b.classList.toggle('active', b.dataset.sec === _picksSec));
   for (const sec of PICK_SECTIONS) $('pk-' + sec).hidden = sec !== _picksSec;
   $('picks-for').textContent = `for draw #${drawNo(currentDraw())} · ${fmtD(currentDraw())}`;
@@ -2159,6 +2205,8 @@ function buyerCodes(b, bought) {
 }
 
 let _qrFull = null, _wakeLock = null;   // { codes: [{ payload, cap }], i }
+/** The screen stays on while a QR code is shown full screen or the 📺 Live section is open. */
+function updateWakeLock() { keepScreenOn(!!_qrFull || (S.tab === 'picks' && _picksSec === 'live')); }
 async function keepScreenOn(on) {
   try {
     if (on && !_wakeLock && navigator.wakeLock) _wakeLock = await navigator.wakeLock.request('screen');
@@ -2167,7 +2215,7 @@ async function keepScreenOn(on) {
 }
 function openQrFull(codes, i) {
   _qrFull = { codes, i };
-  keepScreenOn(true);
+  updateWakeLock();
   $('qr-full').hidden = false;
   document.body.classList.add('qr-open');
   drawQrFull();
@@ -2185,9 +2233,9 @@ function stepQrFull(d) {
   drawQrFull();
 }
 document.addEventListener('visibilitychange', () => {   // the lock is dropped when the phone switches apps
-  if (document.visibilityState === 'visible' && _qrFull) { _wakeLock = null; keepScreenOn(true); }
+  if (document.visibilityState === 'visible') { _wakeLock = null; updateWakeLock(); }
 });
-function closeQrFull() { _qrFull = null; $('qr-full').hidden = true; document.body.classList.remove('qr-open'); keepScreenOn(false); }
+function closeQrFull() { _qrFull = null; $('qr-full').hidden = true; document.body.classList.remove('qr-open'); updateWakeLock(); }
 
 let _buyCodes = [];   // what the QR figures on the page show, for the full-screen view
 /** `own`: re-drawn after this member's own edit (otherwise a live update leaves a field being edited alone). */
@@ -2872,6 +2920,15 @@ const invColor = (inv) => { const i = S.investors.indexOf(inv); return i >= 0 &&
 
 function killChart(id) { if (S.charts[id]) { S.charts[id].destroy(); delete S.charts[id]; } }
 
+// Charts draw their own text on a canvas, out of reach of the page translation: translate labels here
+const chartI18n = {
+  id: 'i18n',
+  beforeUpdate(chart) {
+    chart.data.datasets.forEach((d) => { if (d.label) d.label = tr(d.label); });
+    if (chart.data.labels) chart.data.labels = chart.data.labels.map((l) => (Array.isArray(l) ? l.map(tr) : tr(l)));
+  },
+};
+
 /** Shared Chart.js options: hairline grid, money ticks & tooltips, hover by column. */
 function chartOpts({ stacked = false, horizontal = false, legend = true, endLabels = false, pct = false, hideZero = false, timeline = false } = {}) {
   const phone = window.innerWidth < 640;
@@ -3078,6 +3135,7 @@ function renderParity(mk) {
 function renderCharts() {
   if (!window.Chart) return;
   if (!Chart.registry.plugins.get('endLabels')) Chart.register(endLabelsPlugin);
+  if (!Chart.registry.plugins.get('i18n')) Chart.register(chartI18n);
   const d = chartData(), { weeks, labels, stats } = d, investors = S.investors;
   const tl = (opts, titles = d.titles) => { opts.plugins.tooltip.callbacks.title = (items) => titles[items[0].dataIndex]; return opts; };
   renderKpis(d);
@@ -3122,7 +3180,7 @@ function renderCharts() {
     options: tl(chartOpts({ legend: false, timeline: true })) });
 
   const monthKeys = Object.keys(d.months).sort();
-  const monthLabel = (k) => new Date(k + '-15T00:00:00Z').toLocaleDateString('en-GB', { month: 'short', year: '2-digit', timeZone: 'UTC' });
+  const monthLabel = (k) => new Date(k + '-15T00:00:00Z').toLocaleDateString(LOCALE, { month: 'short', year: '2-digit', timeZone: 'UTC' });
   mk('monthly', { type: 'bar', data: { labels: monthKeys.map(monthLabel), datasets: [
     { label: 'Invested', data: monthKeys.map((k) => d.months[k].invested), ...barStyle(SERIES.invested) },
     { label: 'Prizes won', data: monthKeys.map((k) => d.months[k].won), ...barStyle(SERIES.won) },
@@ -3162,6 +3220,85 @@ function renderCharts() {
   mk('wkly', { type: 'bar', data: { labels, datasets: payers.map((inv) => ({
     label: inv.nickname, data: weeks.map((w) => +w.investments?.[inv.id] || null), ...barStyle(invColor(inv), true), maxBarThickness: 22,
   })) }, options: tl(chartOpts({ stacked: true, hideZero: true, timeline: true })) });
+}
+
+// ─── Notifications (Web Push; sent by the check-tickets function after the draw) ─────────────────
+const pushSupported = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+const isIos = () => /iPhone|iPad|iPod/.test(navigator.userAgent);
+const PUSH_HELP = {
+  all: 'Every Saturday result comes to this device.',
+  win: 'You hear from us on this device when we win anything.',
+  big: 'You hear from us on this device when we win 4등 or better.',
+};
+
+function unb64url(text) {
+  const s = atob(text.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - (text.length % 4)) % 4));
+  return Uint8Array.from(s, (c) => c.charCodeAt(0));
+}
+
+/** This device's push subscription and its saved choice, if any. */
+async function devicePush() {
+  if (!pushSupported()) return null;
+  const reg = await navigator.serviceWorker.getRegistration();
+  const sub = await reg?.pushManager.getSubscription();
+  if (!sub) return null;
+  const { data, error } = await S.sb.from('push_subs').select('*').eq('endpoint', sub.endpoint).maybeSingle();
+  return { sub, row: data, missing: !!error };
+}
+
+async function renderPush() {
+  if (!$('push-modes')) return;
+  const radios = document.querySelectorAll('#push-modes input');
+  const status = (t, warn = false) => { $('push-status').textContent = t; $('push-status').classList.toggle('warn', warn); };
+  if (!pushSupported()) {
+    radios.forEach((r) => { r.disabled = true; r.checked = r.value === 'off'; });
+    $('push-test').hidden = true;
+    return status(isIos() ? 'On iPhone and iPad: first add 645 to the Home Screen (Share → Add to Home Screen), open it from there, then turn notifications on.'
+      : 'This browser cannot show notifications.', true);
+  }
+  const cur = await devicePush().catch(() => null), mode = cur?.row?.mode || 'off';
+  radios.forEach((r) => { r.disabled = false; r.checked = r.value === mode; });
+  $('push-test').hidden = mode === 'off';
+  if (Notification.permission === 'denied') return status('Notifications are blocked for this site: allow them in the browser\'s site settings, then choose again.', true);
+  status(mode === 'off' ? 'Off on this device. Choose when you want to hear from us.' : `On: ${PUSH_HELP[mode]}`);
+}
+
+async function pushOff(quiet = false) {
+  const cur = await devicePush().catch(() => null);
+  if (cur) {
+    await S.sb.from('push_subs').delete().eq('endpoint', cur.sub.endpoint);
+    await cur.sub.unsubscribe().catch(() => {});
+  }
+  if (!quiet) { toast('Notifications are off on this device.', 'ok'); renderPush(); }
+}
+
+async function setPushMode(mode) {
+  if (mode === 'off') return pushOff();
+  try {
+    if (await Notification.requestPermission() !== 'granted') { toast('Allow notifications when the browser asks, then choose again.', 'err'); return renderPush(); }
+    const reg = await navigator.serviceWorker.register('sw.js');
+    await navigator.serviceWorker.ready;
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) {
+      const { data, error } = await S.sb.functions.invoke('check-tickets', { body: { push: 'key' }, region: 'ap-northeast-2' });
+      if (error || !data?.publicKey) throw new Error('Could not reach the result checker for the notification key. Is check-tickets deployed?');
+      sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: unb64url(data.publicKey) });
+    }
+    const j = sub.toJSON();
+    const { error } = await S.sb.from('push_subs').upsert({
+      endpoint: j.endpoint, p256dh: j.keys.p256dh, auth: j.keys.auth, mode, lang: LANG,
+      last_round: drawNo(addDays(currentDraw(), -7)),   // start with the next draw, not one already out
+    }, { onConflict: 'endpoint' });
+    if (error) throw new Error(/push_subs|schema cache/.test(error.message) ? 'The database needs an update: run supabase/schema.sql again.' : error.message);
+    toast(`Notifications on: ${PUSH_HELP[mode]}`, 'ok');
+  } catch (e) { fail(e, 'Could not turn notifications on.'); }
+  renderPush();
+}
+
+async function pushTest() {
+  const { data, error } = await S.sb.functions.invoke('check-tickets', { body: { push: 'test' }, region: 'ap-northeast-2' });
+  if (error || !data?.ok) return toast('Could not send a test notification.', 'err');
+  toast(data.sent ? `Test sent to ${data.sent} device${data.sent > 1 ? 's' : ''}.` : 'No device of yours is signed up yet.', data.sent ? 'ok' : 'err');
 }
 
 // ─── Activity log ─────────────────────────────────────────────────────────────
@@ -3256,6 +3393,7 @@ let _curDraft = null;
 
 function renderSettings() {
   $('me-username').value = '@' + S.me.username;
+  if (S.tab === 'settings') renderPush();
   if (document.activeElement !== $('me-name')) $('me-name').value = S.me.display_name;
 
   const st = S.settings, admin = isAdmin();
@@ -3489,7 +3627,8 @@ function closeModal(id) { $(id).classList.remove('open'); }
 // ═════════════════════════════════════════════════════════════════════════════
 const ACTIONS = {
   'auth-tab': (el) => setAuthTab(el.dataset.tab),
-  logout: () => S.sb?.auth.signOut(),
+  logout: async () => { await pushOff(true).catch(() => {}); S.sb?.auth.signOut(); },   // the next person on this phone gets no notifications of ours
+  'push-test': () => pushTest(),
   tab: (el) => goTab(el.dataset.tab),
   'close-modal': (el) => closeModal(el.dataset.id),
   'week-new': () => openWeekModal(null),
@@ -3590,6 +3729,8 @@ const INPUTS = {
   'sim-round': (el, e) => { if (e.type === 'change') simSetRound(parseInt(el.value, 10) || 0); },
   'sim-date': (el, e) => { if (e.type === 'change' && el.value) simSetRound(drawNo(saturdayOf(el.value))); },
   'sim-x': (el, e) => { if (e.type === 'change') simSetX(parseInt(el.value, 10) || 1); },
+  'push-mode': (el, e) => { if (e.type === 'change') setPushMode(el.value); },
+  lang: (el, e) => { if (e.type === 'change') window.I18N?.setLang(el.value); },
   'del-reason': (el, e) => {
     if (e.type !== 'change') return;
     $('del-custom').hidden = el.value !== 'custom';

@@ -18,8 +18,14 @@
 //   • An active member may re-check one ticket now (manual results are never overwritten).
 //   • Without a member login, only pending QR codes whose results are already out are checked,
 //     so the scheduled GitHub Action can call it with the public key.
+//   • { "push": "key" } → the public key browsers subscribe to notifications with;
+//     { "push": "test" } (member) → a test notification to that member's devices.
+// After every check, members who turned notifications on get the latest draw's result once
+// (every result, any win, or 4등 and better: their choice, in their language).
 
 import { createClient } from 'npm:@supabase/supabase-js@2.117.2';
+import { newVapidKeys, sendPush, type Vapid } from './push.ts';
+import { message, shouldNotify, summarize, testMessage, type Lang, type Mode } from './notify.ts';
 
 // The service key is provided to every Edge Function automatically (legacy or new key format).
 function serviceKey(): string | undefined {
@@ -60,13 +66,14 @@ const json = (body: unknown, status = 200) =>
 const resultsOut = (drawDate: string) => Date.now() >= new Date(`${drawDate}T${RESULTS_TIME}:00+09:00`).getTime();
 const okHost = (h: string) => /(^|\.)dhlottery\.co\.kr$/i.test(h);
 
-async function callerIsMember(req: Request): Promise<boolean> {
+/** The signed-in active member calling, if any. */
+async function callerMember(req: Request): Promise<string | null> {
   const token = (req.headers.get('authorization') ?? '').replace(/^Bearer\s+/i, '');
-  if (token.split('.').length !== 3) return false;
+  if (token.split('.').length !== 3) return null;
   const { data } = await db.auth.getUser(token);
-  if (!data?.user) return false;
+  if (!data?.user) return null;
   const { data: p } = await db.from('profiles').select('status').eq('id', data.user.id).maybeSingle();
-  return p?.status === 'active';
+  return p?.status === 'active' ? data.user.id : null;
 }
 
 function decode(buf: ArrayBuffer, contentType: string): string {
@@ -270,7 +277,19 @@ async function handle(req: Request): Promise<Response> {
     const data = await res.json();
     return json({ list: data?.data?.list ?? data?.list ?? [] });
   }
-  const member = await callerIsMember(req);
+  const memberId = await callerMember(req), member = !!memberId;
+  if (body.push === 'key') return json({ publicKey: (await vapid()).publicKey });
+  if (body.push === 'test') {
+    if (!memberId) return json({ error: 'Sign in first.' }, 401);
+    const { data: subs } = await db.from('push_subs').select('*').eq('member', memberId);
+    let sent = 0;
+    for (const sub of subs ?? []) {
+      const r = await sendPush(sub, { ...testMessage(sub.lang as Lang), tag: 'test', url: './' }, await vapid()).catch(() => null);
+      if (r?.gone) await db.from('push_subs').delete().eq('endpoint', sub.endpoint);
+      else if (r?.ok) sent++;
+    }
+    return json({ ok: true, sent, devices: subs?.length ?? 0 });
+  }
   const force = member && typeof body.ticket_id === 'string';
 
   let q = db.from('tickets').select('id, draw_date, qr_data').not('qr_data', 'is', null);
@@ -313,5 +332,73 @@ async function handle(req: Request): Promise<Response> {
   }
   let history = 0, historyError: string | undefined;
   try { history = await backfillHistory(body.prizes === true); } catch (e) { historyError = (e as Error).message; }
-  return json({ ok: true, checked, draws: [...cache.values()].filter(Boolean).map((d) => d!.round), history, historyError, updated });
+  let notified: unknown;
+  try { notified = await notifyResults(cache); } catch (e) { notified = { error: (e as Error).message }; }
+  return json({ ok: true, checked, draws: [...cache.values()].filter(Boolean).map((d) => d!.round), history, historyError, updated, notified });
+}
+
+// ─── Notifications ──────────────────────────────────────────────────────────────
+
+const drawDateOf = (round: number) => new Date(FIRST_DRAW + (round - 1) * 7 * 864e5).toISOString().slice(0, 10);
+let _vapid: Vapid | null = null;
+
+/** The VAPID key pair, made once and kept in push_keys (only the service role can read it). */
+async function vapid(): Promise<Vapid> {
+  if (_vapid) return _vapid;
+  let { data } = await db.from('push_keys').select('*').eq('id', 1).maybeSingle();
+  if (!data) {
+    const k = await newVapidKeys();
+    await db.from('push_keys').upsert({ id: 1, public_key: k.publicKey, private_jwk: k.privateJwk }, { onConflict: 'id', ignoreDuplicates: true });
+    ({ data } = await db.from('push_keys').select('*').eq('id', 1).maybeSingle());
+  }
+  if (!data) throw new Error('Run supabase/schema.sql again: the push_keys table is missing.');
+  _vapid = { publicKey: data.public_key, privateJwk: data.private_jwk, subject: 'https://namtpham.github.io/645/' };
+  return _vapid;
+}
+
+/** The games we played in a draw: QR codes of its ticket photos, or else our complete groups for it. */
+async function gamesFor(round: number): Promise<number[][]> {
+  const date = drawDateOf(round), seen = new Set<string>(), games: number[][] = [];
+  const day = 864e5, around = (n: number) => new Date(Date.parse(date) + n * day).toISOString().slice(0, 10);
+  const { data: tickets } = await db.from('tickets').select('draw_date, qr_data').gte('draw_date', around(-14)).lte('draw_date', around(14));
+  for (const t of tickets ?? []) {
+    for (const it of (Array.isArray(t.qr_data) ? t.qr_data : []) as QrItem[]) {
+      const r = it.round ?? (t.draw_date === date ? round : null);
+      if (r !== round || seen.has(it.url) || it.status === 'invalid') continue;
+      seen.add(it.url);
+      for (const g of it.games ?? []) games.push(g.nums);
+    }
+  }
+  if (games.length) return games;
+  const { data: picks } = await db.from('group_picks').select('grp, num').eq('round', round);
+  const byGroup = new Map<number, number[]>();
+  for (const p of picks ?? []) byGroup.set(p.grp, [...(byGroup.get(p.grp) ?? []), p.num]);
+  return [...byGroup.values()].filter((g) => g.length === 6);
+}
+
+/** Once per draw and device: the result of the latest finished draw, if the member wants it. */
+async function notifyResults(cache: Map<number, Draw | null>) {
+  const kst = new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10);
+  let sat = new Date(Date.parse(kst) - ((new Date(kst).getUTCDay() + 1) % 7) * 864e5).toISOString().slice(0, 10);
+  if (!resultsOut(sat)) sat = new Date(Date.parse(sat) - 7 * 864e5).toISOString().slice(0, 10);
+  const round = roundOf(sat);
+  const { data: subs, error } = await db.from('push_subs').select('*').or(`last_round.is.null,last_round.lt.${round}`);
+  if (error) return { round, error: error.message };
+  if (!subs?.length) return { round, sent: 0 };
+  const draw = cache.get(round) ?? await getDraw(round, cache);
+  if (!draw) return { round, sent: 0, waiting: 'winning numbers not published yet' };
+  const s = summarize(await gamesFor(round), draw);
+  const v = await vapid();
+  let sent = 0, skipped = 0, removed = 0;
+  for (const sub of subs) {
+    // claim this draw for the device first, so two runs at the same time never both send
+    const { data: claimed } = await db.from('push_subs').update({ last_round: round })
+      .eq('endpoint', sub.endpoint).or(`last_round.is.null,last_round.lt.${round}`).select('endpoint');
+    if (!claimed?.length) continue;
+    if (!shouldNotify(sub.mode as Mode, s)) { skipped++; continue; }
+    const r = await sendPush(sub, message(s, draw, sub.lang as Lang), v).catch(() => null);
+    if (r?.gone) { await db.from('push_subs').delete().eq('endpoint', sub.endpoint); removed++; }
+    else if (r?.ok) sent++;
+  }
+  return { round, games: s.games, best: s.best, sent, skipped, removed };
 }

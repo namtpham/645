@@ -168,6 +168,27 @@ create table if not exists public.group_picks (
   primary key (round, grp, num)
 );
 
+-- Push notifications: one row per device that turned them on (Settings → Notifications).
+create table if not exists public.push_subs (
+  endpoint   text primary key,                 -- the browser's push address
+  member     uuid not null references public.profiles (id) on delete cascade default auth.uid(),
+  p256dh     text not null,
+  auth       text not null,
+  mode       text not null default 'all' check (mode in ('all', 'win', 'big')),   -- every result · any win · 4등+
+  lang       text not null default 'en' check (lang in ('en', 'ko', 'vi')),
+  last_round int,                              -- last draw this device was told about
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+-- The server's VAPID key pair, made by check-tickets on first use. No grants: only the service role reads it.
+create table if not exists public.push_keys (
+  id          int primary key check (id = 1),
+  public_key  text not null,
+  private_jwk jsonb not null,
+  created_at  timestamptz not null default now()
+);
+
 -- Live results (Picks → Live): the numbers members tap while watching the draw, shared by everyone.
 create table if not exists public.live_picks (
   round      int primary key,
@@ -421,6 +442,18 @@ drop trigger if exists check_live_picks on public.live_picks;
 create trigger check_live_picks before insert or update on public.live_picks
   for each row execute function public.check_live_picks();
 
+create or replace function public.touch_push_sub()
+returns trigger language plpgsql as $$
+begin
+  if auth.uid() is not null then new.member := auth.uid(); end if;   -- the service role keeps the owner
+  new.updated_at := now();
+  return new;
+end $$;
+
+drop trigger if exists touch_push_sub on public.push_subs;
+create trigger touch_push_sub before insert or update on public.push_subs
+  for each row execute function public.touch_push_sub();
+
 -- ─── Audit log (who changed what, readable by every member) ─────────────────
 
 create or replace function public.audit()
@@ -473,6 +506,8 @@ alter table public.draws     enable row level security;
 alter table public.pick_plans  enable row level security;
 alter table public.group_picks enable row level security;
 alter table public.live_picks  enable row level security;
+alter table public.push_subs   enable row level security;
+alter table public.push_keys   enable row level security;
 
 do $$
 declare p record;
@@ -480,7 +515,7 @@ begin
   for p in select policyname, tablename from pg_policies
            where schemaname = 'public'
              and tablename in ('profiles', 'invites', 'settings', 'investors', 'weeks', 'tickets', 'audit_log', 'draws',
-                               'pick_plans', 'group_picks', 'live_picks')
+                               'pick_plans', 'group_picks', 'live_picks', 'push_subs', 'push_keys')
   loop
     execute format('drop policy %I on public.%I', p.policyname, p.tablename);
   end loop;
@@ -534,6 +569,8 @@ create policy "read group picks" on public.group_picks for select to authenticat
 create policy "pick a number"    on public.group_picks for insert to authenticated with check (public.is_member());
 create policy "take back a number" on public.group_picks for delete to authenticated
   using (public.is_member() and (picked_by = auth.uid() or by_engine or public.is_admin()));
+create policy "own push devices" on public.push_subs for all to authenticated
+  using (member = auth.uid() and public.is_member()) with check (member = auth.uid() and public.is_member());
 create policy "read live picks" on public.live_picks for select to authenticated using (public.is_member());
 create policy "add live picks"  on public.live_picks for insert to authenticated with check (public.is_member());
 create policy "edit live picks" on public.live_picks for update to authenticated
@@ -552,6 +589,7 @@ grant update (display_name)          on public.profiles  to authenticated;
 grant select, insert, update         on public.pick_plans  to authenticated;
 grant select, insert, delete         on public.group_picks to authenticated;
 grant select, insert, update         on public.live_picks  to authenticated;
+grant select, insert, update, delete on public.push_subs   to authenticated;
 
 revoke execute on all functions in schema public from public, anon;
 grant execute on function public.is_member(), public.is_admin(), public.normalize_invite(text),

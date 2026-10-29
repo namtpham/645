@@ -1,11 +1,13 @@
 name: Check ticket results
 
 # After each Saturday draw, ask the check-tickets Edge Function to read the result page of every
-# ticket QR code that is still waiting. Members opening the site trigger the same check, so this
+# ticket QR code that is still waiting, and to send the result notifications. Members opening the site trigger the same check, so this
 # is only a safety net for weeks when nobody looks.
 on:
   schedule:
+    - cron: '57 11 * * 6'   # Sat 20:57 KST (results and notifications as soon as they are out)
     - cron: '7 12 * * 6'    # Sat 21:07 KST
+    - cron: '27 12 * * 6'   # Sat 21:27 KST
     - cron: '37 13 * * 6'   # Sat 22:37 KST
     - cron: '17 1 * * 0'    # Sun 10:17 KST
   workflow_dispatch:
