@@ -1012,3 +1012,17 @@ table.bt td, table.bt th { padding: 8px 10px; }
 .live-yt .yt-text strong { font-size: 16px; }
 .live-yt .yt-text small { color: var(--muted); font-size: 12px; }
 .live-yt .yt-go { font-size: 20px; color: #ff5a5a; flex: none; }
+
+/* top bar: the draw on YouTube, from 12 hours before */
+.nb-yt { display: inline-flex; align-items: center; gap: 6px; flex: none; padding: 3px 10px 3px 6px; border-radius: 999px; text-decoration: none;
+  background: rgba(255,0,0,.14); border: 1px solid rgba(255,64,64,.5); color: #fff; font: 600 12px 'DM Sans', sans-serif; }
+.nb-yt:hover, .nb-yt:focus-visible { background: rgba(255,0,0,.26); }
+.nb-yt[hidden] { display: none; }
+.nb-yt .yt-logo { width: 24px; height: 17px; }
+@media (max-width: 640px) { .nb-yt { padding: 2px 8px 2px 4px; font-size: 11px; } .nb-yt .yt-logo { width: 20px; height: 14px; } }
+
+/* a new version is ready */
+.update-bar { position: fixed; left: 50%; bottom: calc(16px + env(safe-area-inset-bottom)); transform: translateX(-50%); z-index: 900;
+  display: flex; align-items: center; gap: 10px; padding: 10px 12px 10px 16px; max-width: calc(100vw - 24px);
+  background: #111a2e; border: 1px solid var(--gold); border-radius: 12px; box-shadow: 0 8px 30px rgba(0,0,0,.5); font-size: 13px; }
+.update-bar[hidden] { display: none; }

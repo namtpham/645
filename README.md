@@ -69,7 +69,9 @@ with an invitation key from the admin.
   groups join 📺 Live. Only you can see these numbers (table `my_picks`, owner-only).
 - **Next draw bar** (under the clock): a progress bar from the last draw to the next one; in the
   last 24 hours it shows a highlighted countdown (hh:mm:ss), and 🔴 while the draw is on. Tap it
-  for 📺 Live. The section you last opened is remembered on that device.
+  for 📺 Live. The section you last opened is remembered on that device. From 12 hours before the
+  draw until the results, a **▶ Live** YouTube button sits on the bar (every tab) and opens
+  동행복권's live stream.
 - **Our numbers** (✍️ Picks): we pick the coming draw's numbers together.
   - Choose how many groups of 6 we play (quick buttons 5–30, ±1).
   - Each group shows 45 round buttons: gray = free, coloured = taken. Every member has their
@@ -484,6 +486,12 @@ A login stays on the device until **Sign out**, and Supabase sessions don't expi
 default. On iPhone, Safari may clear data for sites not opened in 7 days. Avoid this with
 Share → **Add to Home Screen** (the site ships an app icon and manifest), then sign in once
 inside the home-screen app.
+
+**Updates reach the home-screen app by themselves.** Each deploy stamps its version into
+`index.html` and writes `version.json`. The app checks it when it opens, when you come back to it
+after 30 seconds or more, and every 15 minutes while open. Coming back, it reloads itself into the
+new version straight away (unless a form is open or you are typing). While you are using it, a bar
+offers **Update now**. Settings → 🆕 App updates shows the version and has **Check for updates**.
 
 ### Running locally
 

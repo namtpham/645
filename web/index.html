@@ -17,6 +17,7 @@
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='30' fill='%23f59e0b'/%3E%3Ctext x='32' y='42' font-size='26' font-family='Arial' font-weight='700' text-anchor='middle' fill='%2307090f'%3E645%3C/text%3E%3C/svg%3E">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700;900&family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;1,400&family=Bebas+Neue&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <meta name="app-version" content="dev">
   <link rel="stylesheet" href="style.css?v=dev">
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.2/dist/umd/supabase.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.js"></script>
@@ -121,6 +122,10 @@
 <div class="nextbar" id="tb-next" data-act="goto-live" title="Time to the next draw (from the last one)">
   <div class="nb-track"><div class="nb-fill" id="tb-bar"></div></div>
   <div class="nb-text"><strong id="tb-left"></strong> <span id="tb-what"></span></div>
+  <a class="nb-yt" id="tb-yt" data-act="yt" href="https://www.youtube.com/@donghanglottery/streams" target="_blank" rel="noopener" title="Watch the draw live on YouTube (동행복권)" hidden>
+    <svg class="yt-logo" viewBox="0 0 28 20" aria-hidden="true"><path fill="#FF0000" d="M27.4 3.1A3.5 3.5 0 0 0 24.9.6C22.7 0 14 0 14 0S5.3 0 3.1.6A3.5 3.5 0 0 0 .6 3.1C0 5.3 0 10 0 10s0 4.7.6 6.9a3.5 3.5 0 0 0 2.5 2.5C5.3 20 14 20 14 20s8.7 0 10.9-.6a3.5 3.5 0 0 0 2.5-2.5C28 14.7 28 10 28 10s0-4.7-.6-6.9z"/><path fill="#fff" d="M11.2 14.3 18.4 10l-7.2-4.3z"/></svg>
+    <span>Live</span>
+  </a>
 </div>
 
 <main>
@@ -552,6 +557,13 @@
           <button class="btn btn-secondary" data-act="save-name">Save name</button>
         </div>
       </div>
+      <div class="card" id="update-card">
+        <div class="card-hd"><div class="card-title">🆕 App updates</div></div>
+        <p class="fhelp" style="margin:-6px 0 12px">645 checks for a new version whenever you come back to it and updates itself, so the
+          home-screen icon never needs to be removed and added again.</p>
+        <p class="fhelp" id="update-status"></p>
+        <button class="btn btn-secondary" data-act="update-check">Check for updates</button>
+      </div>
       <div class="card" id="lock-card">
         <div class="card-hd"><div class="card-title">🔐 App lock</div></div>
         <p class="fhelp" style="margin:-6px 0 12px">Ask for Face ID, Touch ID or your fingerprint (or the phone's screen lock) before 645 opens on this device.</p>
@@ -866,5 +878,10 @@
   </div>
 </div>
 <div class="toast" id="toast"></div>
+<div class="update-bar" id="update-bar" hidden>
+  <span>🆕 A new version of 645 is ready.</span>
+  <button class="btn btn-primary btn-sm" data-act="update-now">Update now</button>
+  <button class="btn btn-ghost btn-sm" data-act="update-later" aria-label="Later">✕</button>
+</div>
 </body>
 </html>

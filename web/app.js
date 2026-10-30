@@ -362,6 +362,48 @@ async function renderLock() {
   $('lock-status').textContent = !ok && !_lock ? 'This browser or device has no Face ID / fingerprint unlock that websites can use.'
     : _lock ? 'On: you are asked when 645 opens, and when you come back after being away.' : 'Off on this device.';
 }
+// ── App updates. A home-screen app on iPhone keeps the old page and has no reload button, so the app
+// compares its own version (stamped in index.html at deploy) with version.json on the site.
+const APP_VERSION = document.querySelector('meta[name=app-version]')?.content || 'dev';
+let _newVersion = null, _updHiddenAt = 0, _updLater = false;
+async function latestVersion() {
+  const r = await fetch(`version.json?t=${Date.now()}`, { cache: 'no-store' });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return String((await r.json()).v || '');
+}
+/** Nothing would be lost by reloading now: no form open, no field being typed in, no full-screen QR. */
+const updateIsSafe = () => !document.querySelector('.overlay.open') && $('qr-full').hidden
+  && !document.activeElement?.matches?.('input, textarea, select');
+async function checkUpdate({ manual = false, auto = false } = {}) {
+  if (APP_VERSION === 'dev') { if (manual) toast('Development copy: there is nothing to update.'); return; }
+  let v;
+  try { v = await latestVersion(); } catch (e) { if (manual) toast(`Could not check for updates (${e.message}).`, 'err'); return; }
+  if (!v || v === APP_VERSION) { _newVersion = null; renderUpdate(); if (manual) toast('✓ You have the latest version.', 'ok'); return; }
+  _newVersion = v;
+  // a reload already tried for this version still brought the old page (the site's cache lags a minute): just offer it
+  let tried = null;
+  try { tried = sessionStorage.getItem('645-update-tried'); } catch { /* private mode */ }
+  if (manual || (auto && tried !== v && updateIsSafe())) return applyUpdate();
+  renderUpdate();
+}
+async function applyUpdate() {
+  $('update-bar').hidden = true;
+  try { sessionStorage.setItem('645-update-tried', _newVersion || ''); } catch { /* private mode */ }
+  // refresh the cached page first, so the reload can't bring back the old one
+  try { await Promise.all(['./', 'index.html'].map((u) => fetch(u, { cache: 'reload' }))); } catch { /* offline: reload anyway */ }
+  location.reload();
+}
+function renderUpdate() {
+  $('update-bar').hidden = !_newVersion || _updLater;
+  if ($('update-status')) $('update-status').textContent = `This version: ${APP_VERSION}${_newVersion ? ` · new version ${_newVersion} is ready` : ''}`;
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') { _updHiddenAt = Date.now(); return; }
+  if (_updHiddenAt && Date.now() - _updHiddenAt > 30e3) checkUpdate({ auto: true });   // back in the app after a while
+});
+window.addEventListener('pageshow', (e) => { if (e.persisted) checkUpdate({ auto: true }); });
+setInterval(() => { if (document.visibilityState === 'visible') checkUpdate(); }, 15 * 60e3);   // in use: offer it, don't interrupt
+
 /** Coming back to the app after being away long enough locks it again. */
 function shouldRelock(hiddenAt, now, after) { return !!hiddenAt && now - hiddenAt >= after * 1000; }
 document.addEventListener('visibilitychange', () => {
@@ -372,6 +414,7 @@ document.addEventListener('visibilitychange', () => {
 
 async function boot() {
   if (_lock) showLock(true);   // nothing shows until the owner is recognised
+  checkUpdate({ auto: true });
   if (!CFG.supabaseUrl || !CFG.supabaseKey || CFG.supabaseUrl.includes('YOUR-PROJECT') || !window.supabase) {
     showView('setup');
     return;
@@ -639,6 +682,7 @@ function renderCountdown(now = Date.now()) {
   $('tb-bar').style.width = `${pct.toFixed(2)}%`;
   $('tb-left').textContent = drawing ? `🔴 Draw #${drawNo(currentDraw())} is on now` : left < 24 * 3600e3 ? hms(left) : countdown(left);
   $('tb-what').textContent = drawing ? 'results at 20:50 KST' : `until draw #${drawNo(currentDraw())}`;
+  $('tb-yt').hidden = left >= 12 * 3600e3;   // the YouTube stream, from 12 hours before the draw until the results
 }
 setInterval(() => { renderTimebar(); if (S.me) maybeRemind(); }, 1000);
 
@@ -3839,6 +3883,7 @@ async function loadActivity() {
 let _curDraft = null;
 
 function renderSettings() {
+  renderUpdate();
   $('me-username').value = '@' + S.me.username;
   $('me-myqr').checked = showsTab('myqr');
   $('me-sim').checked = showsTab('sim');
@@ -4116,6 +4161,10 @@ const ACTIONS = {
   'live-official': () => liveOfficial(),
   'buy-start': () => startBuying(),
   'goto-buy': () => { goTab('picks'); setPicksSection('buy'); },
+  yt: () => {},   // a link: the browser opens it (and the bar it sits in doesn't jump to Live)
+  'update-check': () => checkUpdate({ manual: true }),
+  'update-now': () => applyUpdate(),
+  'update-later': () => { _updLater = true; renderUpdate(); },
   'goto-live': () => { if (S.me) { goTab('picks'); setPicksSection('live'); } },
   'myqr-x': (el) => setMyGroups(el.dataset.add ? S.my.groups + +el.dataset.add : +el.dataset.set),
   'myqr-num': (el) => toggleMyNum(+el.dataset.g, +el.dataset.n),

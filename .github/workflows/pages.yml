@@ -24,7 +24,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Version asset URLs (so browsers never mix old and new files)
-        run: sed -i "s/?v=dev/?v=${GITHUB_SHA::8}/g" web/index.html
+        run: |
+          sed -i "s/?v=dev/?v=${GITHUB_SHA::8}/g; s/name=\"app-version\" content=\"dev\"/name=\"app-version\" content=\"${GITHUB_SHA::8}\"/" web/index.html
+          echo "{\"v\":\"${GITHUB_SHA::8}\"}" > web/version.json
+          grep -q "content=\"${GITHUB_SHA::8}\"" web/index.html
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
