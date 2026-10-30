@@ -787,13 +787,21 @@ tfoot td { border-top: 1px solid var(--border2); border-bottom: none; font-weigh
 .bsum-todo { color: #fcd34d; font-weight: 600; }
 .picks-sections { max-width: 980px; margin-bottom: 16px; }
 .picks-sections { flex-wrap: wrap; }
-.picks-sections .seg-btn { padding: 10px 8px; font-size: 14px; flex: 1 1 auto; min-width: 96px; }
+.picks-sections .seg-btn { padding: 10px 6px; font-size: 14px; flex: 1 1 0; min-width: 0; white-space: nowrap; }
 .picks-sections .seg-btn[hidden] { display: none; }
 .bn.mine { background: var(--gold); border-color: transparent; color: #0b0b0b; font-weight: 700; }
 .myqr-games .qr-game { margin: 2px 0; }
 #myqr-body { margin-top: 16px; }
 .myqr-sum .sw { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: var(--c); vertical-align: -1px; }
-@media (max-width: 640px) { .picks-sections .seg-btn { font-size: 11px; padding: 8px 2px; min-width: 72px; } }
+/* too narrow for one row: equal rows (5 tabs → 3 + 2, 6 → 3 + 3, 7 → 4 + 3), the shorter row centred */
+@media (max-width: 900px) {
+  .picks-sections { justify-content: center; --cols: 3; }
+  .picks-sections[data-n="7"], .picks-sections[data-n="8"] { --cols: 4; }
+  .picks-sections[data-n="4"] { --cols: 4; }
+  .picks-sections .seg-btn { flex: 0 0 calc((100% - (var(--cols) - 1) * 4px) / var(--cols)); font-size: 13px; }
+}
+@media (max-width: 640px) { .picks-sections .seg-btn { font-size: 12px; padding: 9px 2px; } }
+@media (max-width: 360px) { .picks-sections .seg-btn { font-size: 11px; } }
 .pick-acts { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
 .in-board { color: #34d399; white-space: nowrap; }
 .bsum-row .ball { width: 26px; height: 26px; font-size: 12px; }
@@ -934,7 +942,6 @@ body.qr-open { overflow: hidden; }
 .bn:disabled { cursor: default; }
 .live-acts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .live-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
-.live-yt { text-decoration: none; }
 .live-cols .card { min-width: 0; }
 .live-sum { font-size: 12px; color: var(--dim); margin-bottom: 8px; }
 .live-sum.won { color: #34d399; }
@@ -994,3 +1001,14 @@ table.bt td, table.bt th { padding: 8px 10px; }
   .pick-balls .ball { width: 28px; height: 28px; font-size: 13px; margin-right: 3px; }
   .num-cell .ball { width: 22px; height: 22px; font-size: 11px; }
 }
+
+/* 📺 Live: the draw on YouTube */
+.live-yt { display: flex; align-items: center; gap: 14px; margin: 0 0 14px; padding: 12px 16px; border-radius: 12px; text-decoration: none;
+  background: linear-gradient(135deg, rgba(255,0,0,.16), rgba(255,0,0,.06)); border: 1px solid rgba(255,64,64,.45); color: var(--text);
+  transition: transform .15s, background .15s; }
+.live-yt:hover, .live-yt:focus-visible { background: linear-gradient(135deg, rgba(255,0,0,.26), rgba(255,0,0,.1)); transform: translateY(-1px); }
+.live-yt .yt-logo { width: 44px; height: 32px; flex: none; filter: drop-shadow(0 2px 6px rgba(255,0,0,.35)); }
+.live-yt .yt-text { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
+.live-yt .yt-text strong { font-size: 16px; }
+.live-yt .yt-text small { color: var(--muted); font-size: 12px; }
+.live-yt .yt-go { font-size: 20px; color: #ff5a5a; flex: none; }

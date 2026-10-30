@@ -3,29 +3,36 @@
 export type Mode = 'all' | 'win' | 'big' | 'none';     // every result · any win · 4등 or better · no results
 export type Lang = 'en' | 'ko' | 'vi';
 export type DrawLite = { round: number; numbers: number[]; bonus: number; prizes?: Record<string, number> | null };
-export type Summary = { round: number; games: number; ranks: Record<number, number>; best: number; won: number; estimated: boolean };
+export type Summary = { round: number; games: number; ranks: Record<number, number>; best: number; won: number; gross: number; estimated: boolean };
 
-const FIXED: Record<number, number> = { 4: 50000, 5: 5000 };
+const FIXED: Record<number, number> = { 4: 50000, 5: 5000 };   // 1등–3등 are not fixed: the draw's own amounts
+
+/** Korean lottery tax on one winning game: up to ₩2,000,000 none, then 22%, and 33% on the part over ₩300,000,000. */
+export function prizeTax(gross: number): number {
+  if (!(gross > 2_000_000)) return 0;
+  return Math.round(Math.min(gross, 300_000_000) * 0.22 + Math.max(0, gross - 300_000_000) * 0.33);
+}
 
 export function rankOf(nums: number[], d: DrawLite): number {
   const k = nums.filter((n) => d.numbers.includes(n)).length, b = nums.includes(d.bonus);
   return k === 6 ? 1 : k === 5 && b ? 2 : k === 5 ? 3 : k === 4 ? 4 : k === 3 ? 5 : 0;
 }
 
-/** Our games of one draw against its winning numbers. 1등–3등 use the draw's own prize when known. */
+/** Our games of one draw against its winning numbers. 1등–3등 use the draw's own prize when known; `won` is after tax. */
 export function summarize(games: number[][], d: DrawLite): Summary {
   const ranks: Record<number, number> = {};
-  let won = 0, estimated = false;
+  let won = 0, gross = 0, estimated = false;
   for (const g of games) {
     const r = rankOf(g, d);
     if (!r) continue;
     ranks[r] = (ranks[r] || 0) + 1;
     const amount = FIXED[r] ?? Number(d.prizes?.[String(r)] ?? 0);
     if (!amount) estimated = true;
-    won += amount;
+    gross += amount;
+    won += amount - prizeTax(amount);
   }
   const best = Math.min(...Object.keys(ranks).map(Number), 9);
-  return { round: d.round, games: games.length, ranks, best: best === 9 ? 0 : best, won, estimated };
+  return { round: d.round, games: games.length, ranks, best: best === 9 ? 0 : best, won, gross, estimated };
 }
 
 export function shouldNotify(mode: Mode, s: Summary): boolean {
@@ -41,6 +48,7 @@ const TEXT = {
   en: {
     title: (r: number) => `🎱 Draw #${r} results`,
     won: (m: string, list: string, g: number) => `🎉 We won ${m} (${list}) on ${g} game${g === 1 ? '' : 's'}!`,
+    taxed: (net: string, gross: string) => `${net} after tax (${gross} before)`,
     wonBig: (list: string, g: number) => `🎉 We won ${list} on ${g} game${g === 1 ? '' : 's'}! Prize amount to follow.`,
     none: (g: number) => `No win this time (${g} game${g === 1 ? '' : 's'}).`,
     notPlayed: 'We did not play this draw.',
@@ -49,6 +57,7 @@ const TEXT = {
   ko: {
     title: (r: number) => `🎱 제${r}회 추첨 결과`,
     won: (m: string, list: string, g: number) => `🎉 ${g}게임 중 ${list} 당첨, 총 ${m}!`,
+    taxed: (net: string, gross: string) => `세후 ${net} (세전 ${gross})`,
     wonBig: (list: string, g: number) => `🎉 ${g}게임 중 ${list} 당첨! 당첨금은 곧 확인됩니다.`,
     none: (g: number) => `아쉽게도 낙첨입니다 (${g}게임).`,
     notPlayed: '이번 회차는 참여하지 않았습니다.',
@@ -57,6 +66,7 @@ const TEXT = {
   vi: {
     title: (r: number) => `🎱 Kết quả kỳ #${r}`,
     won: (m: string, list: string, g: number) => `🎉 Chúng ta trúng ${m} (${list}) trên ${g} vé!`,
+    taxed: (net: string, gross: string) => `${net} sau thuế (${gross} trước thuế)`,
     wonBig: (list: string, g: number) => `🎉 Chúng ta trúng ${list} trên ${g} vé! Số tiền thưởng sẽ được cập nhật.`,
     none: (g: number) => `Lần này không trúng (${g} vé).`,
     notPlayed: 'Chúng ta không chơi kỳ này.',
@@ -72,7 +82,7 @@ export function message(s: Summary, d: DrawLite, lang: Lang) {
   const line = !s.games ? T.notPlayed
     : !s.best ? T.none(s.games)
     : s.estimated ? T.wonBig(list, s.games)
-    : T.won(money(s.won, lang), list, s.games);
+    : T.won(s.won < s.gross ? T.taxed(money(s.won, lang), money(s.gross, lang)) : money(s.won, lang), list, s.games);
   return { title: T.title(s.round), body: `${nums}\n${line}`, tag: `draw-${s.round}`, url: './#dashboard' };
 }
 

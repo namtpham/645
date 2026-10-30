@@ -8,7 +8,9 @@
 //        "축하합니다! … 총 5,000원 당첨" → win, prize 5000
 //        "아쉽게도, 낙첨되었습니다."      → no win
 //   If the page can't be read, the numbers decide: no match → no win, 4등/5등 → fixed prize
-//   (50,000 / 5,000); 1등–3등 → win, amount to be entered by hand. Nothing known yet → pending.
+//   (50,000 / 5,000); 1등–3등 → that draw's own amount per game (it changes every draw), or to be
+//   entered by hand when dhlottery doesn't give it. Nothing known yet → pending.
+//   Prizes are recorded before tax, as the result page shows them; the app shows them after tax too.
 //
 // Deploy with the GitHub Action "Deploy result checker" (recommended), or in Supabase →
 // Edge Functions → Deploy a new function → Via Editor → name "check-tickets" → paste → Deploy,
@@ -239,11 +241,12 @@ async function checkItem(it: QrItem, ticketRound: number | null, cache: Map<numb
   if (draw && it.games?.length) {
     if (ranks.every((r) => r === 0)) return Object.assign(it, { status: 'lose', prize: 0, source: 'numbers', message: '낙첨 (from the winning numbers)' });
     const top = Math.min(...ranks.filter((r) => r > 0));
-    const fixed = ranks.every((r) => r === 0 || r >= 4);
+    const amount = (r: number) => (r ? FIXED_PRIZE[r] ?? (Number(draw.prizes?.[String(r)]) || null) : 0);
+    const known = ranks.every((r) => amount(r) != null);
     return Object.assign(it, {
       status: 'win', source: 'numbers',
-      prize: fixed ? ranks.reduce((s, r) => s + (FIXED_PRIZE[r] ?? 0), 0) : null,
-      message: fixed ? `${top}등 (from the winning numbers)` : `${top}등! Enter the amount from the result page`,
+      prize: known ? ranks.reduce((s, r) => s + (amount(r) ?? 0), 0) : null,
+      message: known ? `${top}등 (from the winning numbers${top <= 3 ? ' and this draw\'s prize amounts' : ''})` : `${top}등! Enter the amount from the result page`,
     });
   }
   return Object.assign(it, page, { source: 'page' });

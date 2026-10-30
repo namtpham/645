@@ -48,7 +48,7 @@ with an invitation key from the admin.
   Prize buttons **+5K / +10K / +50K** add to the prize (two 5th-prize tickets = +5K twice).
   Each investor has **5K / 10K**, which set the amount, and **−1K / +1K**, which adjust it.
 - **Statistics**: headline numbers (return rate, win rate, biggest prize, average per draw,
-  draws since the last win, longest dry spell) plus 11 charts:
+  draws since the last win, longest dry spell, longest winning streak) plus 11 charts:
   - invested vs. prizes won (running total), prize per draw, how often we win by prize size
   - prize pool balance, month by month
   - net P/L per investor, invested vs. received per investor, each investor's P/L over time
@@ -144,7 +144,8 @@ with an invitation key from the admin.
   until then the taps stay on your device). Each column is ranked by how many numbers match, in
   this order: our tickets (as bought, by all), **🎫 my own tickets** (from 🎫 My QR, only on your
   screen) and the system's top suggestions (as many as our tickets), with 등수 and prizes once 6
-  numbers are in. **▶️ Watch the draw on YouTube** opens 동행복권's live streams. It works any time for fun: outside Saturday 20:00–24:00 KST it is a test and
+  numbers are in (after tax, using that draw's real 1등–3등 amounts once the official result is in). A big
+  YouTube button at the top opens 동행복권's live streams. It works any time for fun: outside Saturday 20:00–24:00 KST it is a test and
   clears itself after 10 minutes without a tap. When the official result is downloaded, it
   replaces the tapped numbers (**Get official result** asks for it after 20:50 KST).
 - **Simulate a past week** (Picks tab): choose a draw by number or by any date. A Sunday counts
@@ -153,8 +154,14 @@ with an invitation key from the admin.
   - **Groups:** the number of ₩1,000 sets defaults to 5 × the members active that week. Quick
     buttons set 5–30 or ±1, and **− / +** on each row takes a set any number of times.
   - **Reveal results:** shows the winning numbers, each set's 등수 and prize, the total won and
-    the profit. 4등/5등 are fixed amounts. 1등–3등 use that draw's real prize when dhlottery's
-    data has it; otherwise a typical amount marked ≈ is used.
+    the profit, after tax. 4등/5등 are fixed amounts. 1등–3등 change every draw: that draw's real
+    prize when dhlottery's data has it, otherwise a typical amount marked ≈.
+- **Prize tax** (per winning game, as in Korea): up to ₩2,000,000 none; ₩2,000,001–₩300,000,000
+  22%; over ₩300,000,000, 22% of the first ₩300,000,000 plus 33% of the rest. Ticket results
+  show the prize as dhlottery gives it (before tax) and after tax; a week's prize is filled in
+  with the after-tax amount (what is actually paid), and either amount counts as matching the QR
+  results. Result notifications say the amount after tax.
+- **Picks tabs on a phone** wrap into even rows (5 tabs → 3 + 2, 6 → 3 + 3, 7 → 4 + 3).
 - **Languages**: English, 한국어 and Tiếng Việt (Settings → Language, or the 🌐 menu on the sign-in
   page; first visit follows the phone's language). The choice is saved on the account, so every
   device of that member opens in it. Dates follow the language too. The app is
@@ -420,7 +427,8 @@ public draw data and compares every game on the ticket (matched numbers, 1등–
 reads the ticket's own result page. The page's "축하합니다! 총 N원 당첨" or "낙첨되었습니다"
 wins, and a disagreement with the numbers is flagged. If the page can't be read, the numbers
 decide: no match means no win, and 4등/5등 means ₩50,000/₩5,000. For 1등–3등 the amount
-varies, so it asks you to enter it from the result page.
+changes every draw: it uses that draw's own prize per game from dhlottery's data, and asks you to
+enter it from the result page only when that is missing. Prizes are stored before tax.
 
 ### How good are the picks?
 

@@ -726,8 +726,9 @@ function renderLastCard() {
   const rankLine = games ? [1, 2, 3, 4, 5].filter((r) => ranks[r]).map((r) => `<span class="rs-rank r${r}">${ranks[r]}× ${r}등</span>`).join(' ')
     + (ranks[0] ? ` <span class="rs-rank r0">${ranks[0]}× 낙첨</span>` : '') : '';
   const prize = week ? +week.prize_won || 0 : qs.done ? qs.total : null;
+  const prizeText = week ? money(prize) : moneyTax(qs.total, qs.net);
   const verdict = !week && !tix.length ? `<div class="rs-verdict lose">Not played</div>`
-    : prize > 0 ? `<div class="rs-verdict win">축하합니다! <span>총 ${esc(money(prize))} 당첨${week ? (week.big_win ? ' · 💸 shared' : ' · 🏦 to pool') : ''}</span></div>`
+    : prize > 0 ? `<div class="rs-verdict win">축하합니다! <span>총 ${esc(prizeText)} 당첨${week ? (week.big_win ? ' · 💸 shared' : ' · 🏦 to pool') : ''}</span></div>`
       : prize === 0 ? `<div class="rs-verdict lose">아쉽게도, <span>낙첨되었습니다.</span></div>`
         : `<div class="rs-verdict wait">⏳ Results are being checked</div>`;
   $('last-card').innerHTML = `
@@ -738,8 +739,11 @@ function renderLastCard() {
     <div class="lc-facts fhelp">${week ? `Invested ${esc(money(sum(Object.values(week.investments || {}))))}${week.pool_used > 0 ? ` + ${esc(money(week.pool_used))} from pool` : ''}` : 'No week entry'}
       · ${tix.length} ticket photo${tix.length === 1 ? '' : 's'}
       ${!week && (tix.length || qs.n) ? ` · <a href="#" data-act="week-add-date" data-date="${d}">add the week</a>` : ''}
-      ${qs.done && week && Math.round(qs.total) !== Math.round(+week.prize_won || 0) ? `<div class="red">⚠️ QR results say ${esc(money(qs.total))}, the week records ${esc(money(+week.prize_won || 0))}</div>` : ''}</div>`;
+      ${qs.done && week && !qrMatches(qs, week) ? `<div class="red">⚠️ QR results say ${esc(moneyTax(qs.total, qs.net))}, the week records ${esc(money(+week.prize_won || 0))}</div>` : ''}</div>`;
 }
+
+/** A week's recorded prize agrees with its QR results, before or after tax. */
+const qrMatches = (qs, w) => [qs.total, qs.net].some((v) => Math.round(v) === Math.round(+w.prize_won || 0));
 
 const lastDraw = () => S.draws[Math.max(0, ...Object.keys(S.draws).map(Number))] || null;
 
@@ -905,7 +909,7 @@ function weekRow(w) {
   if (w.pool_used - (c.used || 0) > 0.005) warns.push(`entered ${money(w.pool_used)} from pool, only ${money(c.used || 0)} available (earlier weeks changed)`);
   const out = outOfPeriod(w);
   if (out.length) warns.push(`outside their dates: ${out.map((i) => i.nickname).join(', ')}`);
-  if (qs.done && Math.round(qs.total) !== Math.round(+w.prize_won || 0)) warns.push(`ticket QR results say ${money(qs.total)}, but this week records ${money(+w.prize_won || 0)}`);
+  if (qs.done && !qrMatches(qs, w)) warns.push(`ticket QR results say ${moneyTax(qs.total, qs.net)}, but this week records ${money(+w.prize_won || 0)}`);
   if (qs.problem) warns.push(`${qs.problem} ticket QR result${qs.problem > 1 ? 's need' : ' needs'} checking by hand (Tickets tab)`);
   const n = drawNo(w.result_date);
   return `<div class="week-item">
@@ -991,7 +995,7 @@ function openWeekModal(wid, dateArg) {
   $('wm-inv-inputs').innerHTML = '';
   // New week whose ticket results are all in: start from the QR total
   const qs = qrSummary(ticketsFor(date));
-  if (!existing && qs.done && qs.total > 0) $('wm-prize').value = fmtAmt(qs.total);
+  if (!existing && qs.done && qs.total > 0) $('wm-prize').value = fmtAmt(qs.net);
   refreshWeekPool();
   $('week-overlay').classList.add('open');
 }
@@ -1036,7 +1040,7 @@ function refreshWeekPool() {
   const tix = ticketsFor(date), qs = qrSummary(tix);
   $('wm-qr').innerHTML = !tix.length ? '' : !qs.n ? `🎟️ ${tix.length} ticket photo${tix.length > 1 ? 's' : ''}, no QR results yet.`
     : `🎟️ Ticket QR results: ${qs.n} code${qs.n > 1 ? 's' : ''}, ${qs.win} won ${qrBadge(qs)}${qs.pending ? ` · ${qs.pending} still waiting` : ''}
-       ${qs.total > 0 ? `<button type="button" class="btn btn-secondary btn-sm" data-act="wm-use-qr" data-v="${qs.total}">Use ${esc(money(qs.total))}</button>` : ''}`;
+       ${qs.total > 0 ? `<button type="button" class="btn btn-secondary btn-sm" data-act="wm-use-qr" data-v="${qs.net}">Use ${esc(money(qs.net))}${qs.net < qs.total ? ` (after tax, ${esc(money(qs.total))} before)` : ''}</button>` : ''}`;
   previewWeek();
 }
 
@@ -1220,14 +1224,14 @@ function qrSummary(tickets) {
   const pending = items.filter((i) => i.status === 'pending').length;
   return {
     items, n: items.length, win: won.length, lose: items.filter((i) => i.status === 'lose').length,
-    pending, problem: items.filter(qrProblem).length, total: sum(won.map((i) => +i.prize || 0)),
+    pending, problem: items.filter(qrProblem).length, total: sum(won.map((i) => +i.prize || 0)), net: sum(won.map(qrNet)),
     done: items.length > 0 && pending === 0 && !items.some(qrProblem),
   };
 }
 
 function qrBadge(s, { short = false } = {}) {
   if (!s.n) return '';
-  if (s.win) return `<span class="badge qr-win">🎉 ${esc(money(s.total))}${s.pending ? ` · ${s.pending} ⏳` : ''}</span>`;
+  if (s.win) return `<span class="badge qr-win" ${s.net < s.total ? `title="${esc(money(s.net))} after tax"` : ''}>🎉 ${esc(money(s.total))}${s.pending ? ` · ${s.pending} ⏳` : ''}</span>`;
   if (s.pending) return `<span class="badge bg-gray">⏳ ${short ? s.pending : `${s.pending} waiting`}</span>`;
   if (s.problem) return `<span class="badge bg-red">❓ check</span>`;
   return `<span class="badge bg-gray">낙첨</span>`;
@@ -1274,7 +1278,33 @@ function maybeAutoCheck() {
 }
 
 // ─── Result summary (like the official result page) ──────────────────────────
-const FIXED_PRIZE = { 4: 50000, 5: 5000 };
+const FIXED_PRIZE = { 4: 50000, 5: 5000 };   // 1등–3등 are not fixed: they change every draw (draws.prizes)
+
+/** Korean lottery tax on one winning game: up to ₩2,000,000 none, then 22%, and 33% on the part over ₩300,000,000. */
+const TAX_FREE = 2e6, TAX_BAND = 3e8;
+function prizeTax(gross) {
+  gross = +gross || 0;
+  if (gross <= TAX_FREE) return 0;
+  return Math.round(Math.min(gross, TAX_BAND) * 0.22 + Math.max(0, gross - TAX_BAND) * 0.33);
+}
+const afterTax = (gross) => (+gross || 0) - prizeTax(gross);
+
+/** What one QR code's prize leaves after tax. Tax is per winning game, so the total is split back into games:
+ *  4등/5등 are fixed (tax-free), the rest belongs to the 1등–3등 games, at the draw's own amounts when known. */
+function qrNet(it) {
+  const gross = +it.prize || 0;
+  if (it.status !== 'win' || gross <= TAX_FREE) return gross;
+  const draw = S.draws[it.round];
+  const ranks = (it.games || []).map((g) => gameResult(g, draw)?.rank || 0).filter((r) => r > 0);
+  if (!ranks.length) return afterTax(gross);   // games unknown: one prize
+  const big = ranks.filter((r) => r <= 3), rest = gross - sum(ranks.filter((r) => r > 3).map((r) => FIXED_PRIZE[r]));
+  if (big.length <= 1) return gross - prizeTax(rest);
+  const own = big.map((r) => +draw?.prizes?.[r] || 0);
+  const each = own.every((v) => v > 0) && Math.abs(sum(own) - rest) < 1000 ? own : big.map(() => rest / big.length);
+  return gross - sum(each.map(prizeTax));
+}
+/** "₩X" or "₩X (₩Y after tax)" */
+const moneyTax = (gross, net) => (Math.round(net) < Math.round(gross) ? `${money(gross)} (${money(net)} after tax)` : money(gross));
 const GAME_LABELS = 'ABCDE';
 const ball = (n, cls = '') => `<span class="ball ${cls} b${Math.ceil(n / 10)}">${String(n).padStart(2, '0')}</span>`;
 
@@ -1294,7 +1324,7 @@ function resultSummary(it, drawDate) {
   const draw = S.draws[it.round];
   const games = (it.games || []).map((g) => gameResult(g, draw) || g);
   const verdict = it.status === 'win'
-    ? `<div class="rs-verdict win">축하합니다! <span>총 ${+it.prize > 0 ? esc(money(it.prize)) : '?'} 당첨</span></div>`
+    ? `<div class="rs-verdict win">축하합니다! <span>총 ${+it.prize > 0 ? esc(moneyTax(it.prize, qrNet(it))) : '?'} 당첨</span></div>`
     : it.status === 'lose' ? `<div class="rs-verdict lose">아쉽게도, <span>낙첨되었습니다.</span></div>`
       : `<div class="rs-verdict wait">${resultsOut(drawDate) ? '⏳ Result not checked yet' : `⏳ Results after ${RESULTS_TIME} KST on ${esc(fmtD(drawDate))}`}</div>`;
   return `<div class="rs">
@@ -1302,7 +1332,8 @@ function resultSummary(it, drawDate) {
       ${draw ? `<span class="rs-win">당첨번호 ${drawBalls(draw)}</span>` : resultsOut(drawDate) ? '<span class="fhelp">winning numbers not loaded yet</span>' : ''}</div>
     ${games.map((g, i) => {
       const hit = (n) => (g.match?.includes(n) ? 'hit' : g.bonus && draw && n === draw.bonus ? 'hit-bonus' : '');
-      const rank = g.rank == null ? '' : g.rank ? `<span class="rs-rank r${g.rank}">${g.rank}등${FIXED_PRIZE[g.rank] ? ' ' + esc(money(FIXED_PRIZE[g.rank])) : ''}</span>` : '<span class="rs-rank r0">낙첨</span>';
+      const amt = g.rank ? FIXED_PRIZE[g.rank] || +draw?.prizes?.[g.rank] || 0 : 0;
+      const rank = g.rank == null ? '' : g.rank ? `<span class="rs-rank r${g.rank}">${g.rank}등${amt ? ' ' + esc(moneyTax(amt, afterTax(amt))) : ''}</span>` : '<span class="rs-rank r0">낙첨</span>';
       return `<div class="rs-game"><span class="rs-label">${GAME_LABELS[i] || i + 1}</span><span class="rs-nums">${g.nums.map((n) => ball(n, hit(n))).join('')}</span>${rank}</div>`;
     }).join('')}
     ${verdict}
@@ -1720,6 +1751,7 @@ function renderPicks() {
   const myQr = showsTab('myqr'), sim = showsTab('sim');
   document.querySelector('#picks-sections [data-sec=myqr]').hidden = !myQr;
   document.querySelector('#picks-sections [data-sec=sim]').hidden = !sim;
+  $('picks-sections').dataset.n = document.querySelectorAll('#picks-sections .seg-btn:not([hidden])').length;
   if ((_picksSec === 'myqr' && !myQr) || (_picksSec === 'sim' && !sim)) _picksSec = 'board';
   document.querySelectorAll('#picks-sections .seg-btn').forEach((b) => b.classList.toggle('active', b.dataset.sec === _picksSec));
   for (const sec of PICK_SECTIONS) $('pk-' + sec).hidden = sec !== _picksSec;
@@ -2796,17 +2828,23 @@ function liveRank(nums, main, bonus) {
   return { match, k, b, rank };
 }
 
-function liveColumn(list, main, bonus, final) {
+/** One ranked column of Live. `draw` is the official result once it is in (its 1등–3등 amounts change every draw). */
+function liveColumn(list, main, bonus, draw) {
+  const final = !!draw;
   const rows = list.map((t, i) => ({ ...t, i, ...liveRank(t.nums, main, bonus) }))
     .sort((a, b) => b.k - a.k || b.b - a.b || a.i - b.i);
   const ranks = {};
   rows.forEach((r) => { if (r.rank) ranks[r.rank] = (ranks[r.rank] || 0) + 1; });
-  const fixed = (ranks[4] || 0) * FIXED_RANK_PRIZE[4] + (ranks[5] || 0) * FIXED_RANK_PRIZE[5];
-  const big = (ranks[1] || 0) + (ranks[2] || 0) + (ranks[3] || 0);
+  let fixed = (ranks[4] || 0) * FIXED_RANK_PRIZE[4] + (ranks[5] || 0) * FIXED_RANK_PRIZE[5], big = 0;
+  for (const r of [1, 2, 3]) {
+    if (!ranks[r]) continue;
+    const own = +draw?.prizes?.[r];
+    if (own > 0) fixed += ranks[r] * afterTax(own); else big += ranks[r];
+  }
   const best = rows[0]?.k || 0;
   const head = !main.length ? `${list.length} ticket${list.length === 1 ? '' : 's'} · waiting for the first number`
     : `${final ? 'Final' : 'So far'}: best ${best} of ${main.length} matched${[1, 2, 3, 4, 5].filter((r) => ranks[r]).map((r) => ` · ${ranks[r]}× ${r}등`).join('')}`
-      + (main.length === 6 ? ` · won ${money(fixed)}${big ? ' + big prize' : ''} for ${money(list.length * TICKET_PRICE)}` : '');
+      + (main.length === 6 ? ` · won ${money(fixed)}${big ? ' + big prize' : fixed > TAX_FREE ? ' after tax' : ''} for ${money(list.length * TICKET_PRICE)}` : '');
   return `<p class="live-sum ${big ? 'big' : fixed ? 'won' : ''}">${esc(head)}</p>` + rows.map((r, pos) => `<div class="live-row ${r.rank ? 'r' + r.rank : ''}">
       <span class="live-pos">${pos + 1}</span>
       <span class="live-main">
@@ -2847,8 +2885,8 @@ function renderLive() {
   // my own tickets (🎫 My QR) for this draw, if I picked any
   const mine = myLive(round);
   $('live-mine-card').hidden = !mine?.length;
-  if (mine?.length) $('live-mine').innerHTML = liveColumn(mine.map((nums, i) => ({ label: `My group ${i + 1}`, nums })), main, bonus, final);
-  $('live-ours').innerHTML = (ours.list.length ? liveColumn(ours.list, main, bonus, final)
+  if (mine?.length) $('live-mine').innerHTML = liveColumn(mine.map((nums, i) => ({ label: `My group ${i + 1}`, nums })), main, bonus, final ? draw : null);
+  $('live-ours').innerHTML = (ours.list.length ? liveColumn(ours.list, main, bonus, final ? draw : null)
     : '<p class="fhelp">No complete groups or ticket photos for this draw yet.</p>')
     + (ours.open ? `<p class="fhelp" style="margin-top:8px">${ours.open} unfinished group${ours.open > 1 ? 's are' : ' is'} left out.</p>` : '');
   const hist = pickHistory().filter((d) => d.round < round);
@@ -2856,7 +2894,7 @@ function renderLive() {
   const key = `${round}-${hist.length}-${x}`;
   if (key !== _liveSuggKey) { _liveSugg = suggestSets(hist, { seed: round * 7919, count: x }).picks; _liveSuggKey = key; }
   $('live-sugg').innerHTML = `<p class="fhelp" style="margin-bottom:6px">The system's top ${x}${ours.list.length ? ', as many as our tickets' : ''}.</p>`
-    + liveColumn(_liveSugg.map((p, i) => ({ label: `Suggestion ${i + 1}`, nums: p.nums })), main, bonus, final);
+    + liveColumn(_liveSugg.map((p, i) => ({ label: `Suggestion ${i + 1}`, nums: p.nums })), main, bonus, final ? draw : null);
 }
 
 // ── Who picked lucky numbers: each picked number of our complete groups, credited to who picked it
@@ -3003,7 +3041,7 @@ function renderSim() {
   const rows = SIM.sets.map((p, i) => {
     const r = draw ? gameResult({ nums: p.nums }, draw) : null;
     const prize = simPrize(r?.rank, draw), q = SIM.qty[i] || 0;
-    if (SIM.revealed && q) { won += q * prize.amount; estimated ||= prize.estimated && r.rank > 0; if (r.rank) rankCount[r.rank] = (rankCount[r.rank] || 0) + q; }
+    if (SIM.revealed && q) { won += q * afterTax(prize.amount); estimated ||= prize.estimated && r.rank > 0; if (r.rank) rankCount[r.rank] = (rankCount[r.rank] || 0) + q; }
     const hit = (n) => (!SIM.revealed ? 'hit' : r.match.includes(n) ? 'hit' : r.bonus && n === draw.bonus ? 'hit-bonus' : '');
     return `<div class="sim-row ${q ? '' : 'off'}">
       <span class="sim-rank">${i + 1}</span>
@@ -3014,7 +3052,7 @@ function renderSim() {
         <strong>${q}</strong>
         <button class="qb qb-plus" data-act="sim-qty" data-i="${i}" data-d="1">+</button>
       </span>
-      <span class="sim-res">${!SIM.revealed ? '' : r.rank ? `<span class="rs-rank r${r.rank}">${r.rank}등</span> ${esc(money(prize.amount))}${prize.estimated ? '≈' : ''}${q > 1 ? ` ×${q}` : ''}` : '<span class="rs-rank r0">낙첨</span>'}</span>
+      <span class="sim-res">${!SIM.revealed ? '' : r.rank ? `<span class="rs-rank r${r.rank}">${r.rank}등</span> ${esc(money(afterTax(prize.amount)))}${prize.estimated ? '≈' : ''}${q > 1 ? ` ×${q}` : ''}` : '<span class="rs-rank r0">낙첨</span>'}</span>
     </div>`;
   }).join('');
 
@@ -3023,7 +3061,7 @@ function renderSim() {
     <div class="sim-summary">
       <span><strong>${groups}</strong> group${groups === 1 ? '' : 's'} · cost <strong>${esc(money(cost))}</strong></span>
       ${SIM.revealed
-        ? `<span>Won <strong class="${won ? 'green' : ''}">${esc(money(won))}${estimated ? ' ≈' : ''}</strong></span>
+        ? `<span>Won <strong class="${won ? 'green' : ''}">${esc(money(won))}${estimated ? ' ≈' : ''}</strong> after tax</span>
            <span class="sim-profit ${profit >= 0 ? 'green' : 'red'}">Profit ${profit >= 0 ? '+' : ''}${esc(money(profit))}</span>
            <span class="fhelp">${Object.keys(rankCount).length ? Object.entries(rankCount).map(([k, v]) => `${v}× ${k}등`).join(' · ') : 'no winning games'}</span>`
         : `<button class="btn btn-primary btn-sm" data-act="sim-reveal" ${groups && draw ? '' : 'disabled'}>Reveal results</button>`}
@@ -3032,8 +3070,9 @@ function renderSim() {
     ${!draw ? '<p class="form-error">The winning numbers of this draw are not loaded.</p>' : ''}
     <div class="sim-list">${rows}</div>
     <p class="fhelp" style="margin-top:8px">Suggestions use only the ${SIM.round - 1} draws before 제${SIM.round}회, the same way this
-      week's picks are made. Prizes: 4등 ₩50,000 and 5등 ₩5,000 are fixed. 1등–3등 use that draw's real amount when known,
-      otherwise a typical amount marked ≈. On average a ₩1,000 game pays back about ₩500.</p>`;
+      week's picks are made. Prizes: 4등 ₩50,000 and 5등 ₩5,000 are fixed. 1등–3등 change every draw: that draw's real amount
+      when known, otherwise a typical amount marked ≈. Amounts are after tax: none up to ₩2,000,000 per game, 22% above that,
+      33% on the part over ₩300,000,000. On average a ₩1,000 game pays back about ₩500.</p>`;
 
   // the draw's own 1–3등 amounts: ask the result checker once if they are missing
   if (SIM.revealed && estimated && !SIM.prizesAsked) {
@@ -3382,8 +3421,12 @@ function renderKpis(d) {
   const done = weeks.filter((w) => w.result_date < currentDraw());
   const wins = done.filter((w) => +w.prize_won > 0);
   const biggest = wins.reduce((b, w) => (!b || +w.prize_won > +b.prize_won ? w : b), null);
-  let streak = 0, longest = 0, cur = 0;
-  for (const w of done) { cur = +w.prize_won > 0 ? 0 : cur + 1; longest = Math.max(longest, cur); }
+  let streak = 0, longest = 0, cur = 0, run = 0, best = 0;
+  for (const w of done) {
+    const won = +w.prize_won > 0;
+    cur = won ? 0 : cur + 1; longest = Math.max(longest, cur);
+    run = won ? run + 1 : 0; best = Math.max(best, run);
+  }
   streak = cur;
   const tile = (label, value, sub, cls = '') => `<div class="stat-card ${cls}"><div class="stat-label">${label}</div>
     <div class="stat-value">${value}</div><div class="stat-sub">${sub}</div></div>`;
@@ -3395,6 +3438,7 @@ function renderKpis(d) {
     tile('Group per day', esc(money(invested / Math.max(1, groupDays()))), `${groupDays()} days since ${esc(fmtD(groupStart()))}`, 'bl'),
     tile('Since last win', `${streak}`, streak === 1 ? 'draw without a prize' : 'draws without a prize', 'rd'),
     tile('Longest dry spell', `${longest}`, 'draws in a row without a prize'),
+    tile('Longest winning streak', `${best}`, run > 1 ? `draws in a row with a prize · now ${run} in a row` : 'draws in a row with a prize', 'em'),
   ].join('') : '';
 }
 
