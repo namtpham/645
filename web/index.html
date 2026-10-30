@@ -117,7 +117,7 @@
     <button class="btn-logout" data-act="logout">Sign out</button>
   </div>
 </nav>
-<div class="timebar"><span id="tb-clock"></span><span id="tb-update"></span></div>
+<div class="timebar"><span id="tb-clock"></span></div>
 <div class="nextbar" id="tb-next" data-act="goto-live" title="Time to the next draw (from the last one)">
   <div class="nb-track"><div class="nb-fill" id="tb-bar"></div></div>
   <div class="nb-text"><strong id="tb-left"></strong> <span id="tb-what"></span></div>
@@ -232,10 +232,10 @@
     <div class="seg picks-sections" id="picks-sections">
       <button type="button" class="seg-btn" data-act="picks-section" data-sec="board">✍️ Picks</button>
       <button type="button" class="seg-btn" data-act="picks-section" data-sec="buy">🛒 Buy</button>
-      <button type="button" class="seg-btn" data-act="picks-section" data-sec="myqr" hidden>🎫 My QR</button>
+      <button type="button" class="seg-btn" data-act="picks-section" data-sec="myqr">🎫 My QR</button>
       <button type="button" class="seg-btn" data-act="picks-section" data-sec="suggest">🎯 Suggestion</button>
       <button type="button" class="seg-btn" data-act="picks-section" data-sec="stats">📊 Stats</button>
-      <button type="button" class="seg-btn" data-act="picks-section" data-sec="sim">🕰️ Simulation</button>
+      <button type="button" class="seg-btn" data-act="picks-section" data-sec="sim" hidden>🕰️ Simulation</button>
       <button type="button" class="seg-btn" data-act="picks-section" data-sec="live">📺 Live</button>
     </div>
     <section class="picks-sec" id="pk-board">
@@ -358,6 +358,7 @@
         <div class="live-drawn" id="live-drawn"></div>
         <div class="live-pad" id="live-pad"></div>
         <div class="live-acts">
+          <a class="btn btn-secondary btn-sm live-yt" href="https://www.youtube.com/@donghanglottery/streams" target="_blank" rel="noopener">▶️ Watch the draw on YouTube (동행복권)</a>
           <button class="btn btn-ghost btn-sm" data-act="live-undo">↩ Undo last</button>
           <button class="btn btn-ghost btn-sm" data-act="live-reset">Reset</button>
           <button class="btn btn-secondary btn-sm" data-act="live-official" id="live-official">Get official result</button>
@@ -373,6 +374,10 @@
         <div class="card">
           <div class="card-hd"><div class="card-title">🎟️ Our tickets</div></div>
           <div id="live-ours"></div>
+        </div>
+        <div class="card" id="live-mine-card" hidden>
+          <div class="card-hd"><div class="card-title">🎫 My own tickets</div></div>
+          <div id="live-mine"></div>
         </div>
         <div class="card">
           <div class="card-hd"><div class="card-title">🎯 Top suggestions</div></div>
@@ -534,6 +539,7 @@
         <div class="stack">
           <div class="fgrp"><label class="flbl">Username</label><input class="finp" id="me-username" disabled></div>
           <div class="fgrp"><label class="flbl" for="me-name">Display name</label><input class="finp" id="me-name" maxlength="40"></div>
+          <label class="lock-toggle"><input type="checkbox" id="me-sim" data-on-input="me-sim"> <span><strong>🕰️ Simulation tab in Picks</strong><small>Try the suggestions on a past week and see what they would have won</small></span></label>
           <label class="lock-toggle"><input type="checkbox" id="me-myqr" data-on-input="me-myqr"> <span><strong>🎫 My QR tab in Picks</strong><small>Pick numbers and make QR codes for tickets of your own (only you see them)</small></span></label>
           <div class="fgrp"><label class="flbl" for="me-lang">Language</label>
             <select class="finp" id="me-lang" data-on-input="lang" data-no-i18n>

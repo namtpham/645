@@ -28,7 +28,7 @@ const S = {
   ledger: { pool: { total: 0, entries: [] }, perWeek: {}, history: [] },
   charts: {}, tab: 'dashboard', openWeeks: new Set(),
   audit: null, invites: null, uploads: [], lbTicket: null,
-  draws: {}, lastChange: null, loadedAt: null,
+  draws: {}, loadedAt: null,
 };
 let _wmPool = { total: 0, entries: [] };
 let _wmShare = false, _wmShareTouched = false;   // week modal: share prize now vs. add to pool
@@ -514,11 +514,7 @@ function must(r) { if (r.error) throw r.error; return r.data; }
 /** After a live update: reload only the tables that changed (less data on phones), then redraw. */
 async function loadSome(tables) {
   if (tables.has('*') || [...tables].some((t) => !TABLE_LOADERS[t])) return loadAll({ draws: tables.has('draws') || tables.has('*') });
-  const [, lc] = await Promise.all([
-    Promise.all([...tables].map((t) => TABLE_LOADERS[t]())),
-    S.sb.from('audit_log').select('*').order('at', { ascending: false }).limit(10),
-  ]);
-  S.lastChange = (lc.data || []).find((r) => !quietChange(r)) || S.lastChange;
+  await Promise.all([...tables].map((t) => TABLE_LOADERS[t]()));
   S.loadedAt = new Date();
   if (S.lbTicket && tables.has('tickets')) {
     S.lbTicket = S.tickets.find((t) => t.id === S.lbTicket.id) || S.lbTicket;
@@ -545,12 +541,8 @@ async function loadAll({ draws = true } = {}) {
   const err = res.find((r) => r.error)?.error;
   if (err) throw err;
   const [st, pr, iv, wk, tk] = res.map((r) => r.data);
-  const [drawRows, lc] = await Promise.all([
-    draws || !S.drawsLoaded ? loadDraws() : null,
-    sb.from('audit_log').select('*').order('at', { ascending: false }).limit(10),
-  ]);
+  const [drawRows] = await Promise.all([draws || !S.drawsLoaded ? loadDraws() : null]);
   if (drawRows) { S.draws = Object.fromEntries(drawRows.map((d) => [d.round, d])); S.drawsLoaded = true; }   // missing table → {}
-  S.lastChange = (lc.data || []).find((r) => !quietChange(r)) || null;
   S.loadedAt = new Date();
   if (st) S.settings = { ...S.settings, ...st, big_win_threshold: +st.big_win_threshold };
   S.profiles = pr || [];
@@ -631,13 +623,6 @@ function renderTimebar() {
   const local = now.toLocaleString(LOCALE, { weekday: 'short', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
   const kst = LOCAL_TZ === TZ ? '' : ` · Korea ${now.toLocaleTimeString(LOCALE, { timeZone: TZ, hour: '2-digit', minute: '2-digit', hour12: false })}`;
   $('tb-clock').textContent = `🕒 ${local} (${LOCAL_TZ.replace('_', ' ')})${kst}`;
-  const c = S.lastChange;
-  if (c) {
-    const d = describeChange(c);
-    const at = new Date(c.at).toLocaleString(LOCALE, { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false });
-    $('tb-update').innerHTML = `🔄 Last update <strong>${esc(at)}</strong> (${ago(c.at)}) · ${esc(d.self ? userName(d.self) : d.auto || userName(c.actor))} ${esc(d.head)} ${esc(d.subject || '')}`;
-  } else $('tb-update').textContent = '';
-  $('tb-update').title = S.loadedAt ? `Data loaded ${S.loadedAt.toLocaleTimeString(LOCALE, { hour12: false })}` : '';
   renderCountdown(now.getTime());
 }
 
@@ -1732,9 +1717,10 @@ function historyReady() {
 
 function renderPicks() {
   updateWakeLock();
-  const myQr = !!S.me?.prefs?.my_qr;
+  const myQr = showsTab('myqr'), sim = showsTab('sim');
   document.querySelector('#picks-sections [data-sec=myqr]').hidden = !myQr;
-  if (_picksSec === 'myqr' && !myQr) _picksSec = 'board';
+  document.querySelector('#picks-sections [data-sec=sim]').hidden = !sim;
+  if ((_picksSec === 'myqr' && !myQr) || (_picksSec === 'sim' && !sim)) _picksSec = 'board';
   document.querySelectorAll('#picks-sections .seg-btn').forEach((b) => b.classList.toggle('active', b.dataset.sec === _picksSec));
   for (const sec of PICK_SECTIONS) $('pk-' + sec).hidden = sec !== _picksSec;
   $('picks-for').textContent = `for draw #${drawNo(currentDraw())} · ${fmtD(currentDraw())}`;
@@ -1991,7 +1977,7 @@ function setFocus(key) {
   applyFocus();
 }
 function applyFocus() {
-  const rows = [...document.querySelectorAll('#board-body .bsum-row')];
+  const rows = [...document.querySelectorAll('#board-body .bsum-row, #myqr-body .bsum-row')];
   if (_focusKey && !rows.some((r) => r.dataset.key === _focusKey)) _focusKey = null;
   rows.forEach((r) => r.classList.toggle('focused', r.dataset.key === _focusKey));
   document.body.classList.toggle('focus-mode', !!_focusKey);
@@ -2538,11 +2524,20 @@ function renderBuy(own = false) {
 S.my = { round: null, groups: 5, games: [], loaded: false, missing: false, busy: false };
 let _mySaveT = null;
 
-async function loadMyPicks() {
-  const round = drawNo(currentDraw());
+// Each group is { n: its numbers, e: the ones the engine picked } (older rows were a plain list of numbers).
+const ok45 = (n) => Number.isInteger(n) && n >= 1 && n <= 45;
+function myEntry(x) {
+  if (Array.isArray(x)) return { n: x.filter(ok45), e: [] };
+  const n = Array.isArray(x?.n) ? x.n.filter(ok45) : [];
+  return { n, e: Array.isArray(x?.e) ? x.e.filter((v) => n.includes(v)) : [] };
+}
+async function fetchMyPicks(round) {
   const { data, error } = await S.sb.from('my_picks').select('*').eq('member', S.me.id).eq('round', round).maybeSingle();
-  S.my = { ...S.my, round, loaded: true, missing: !!error, groups: data?.groups || 5,
-    games: Array.isArray(data?.games) ? data.games.map((g) => (Array.isArray(g) ? g.filter((n) => n >= 1 && n <= 45) : [])) : [] };
+  return { round, error, groups: data?.groups || 5, games: Array.isArray(data?.games) ? data.games.map(myEntry) : [] };
+}
+async function loadMyPicks() {
+  const r = await fetchMyPicks(drawNo(currentDraw()));
+  S.my = { ...S.my, round: r.round, loaded: true, missing: !!r.error, groups: r.groups, games: r.games };
 }
 function saveMyPicks() {
   clearTimeout(_mySaveT);
@@ -2552,7 +2547,7 @@ function saveMyPicks() {
     if (error) fail(error);
   }, 400);
 }
-const myGame = (g) => (S.my.games[g - 1] ||= []);
+const myGame = (g) => (S.my.games[g - 1] = myEntry(S.my.games[g - 1]));
 
 function setMyGroups(n) {
   S.my.groups = Math.max(1, Math.min(100, n | 0));
@@ -2560,24 +2555,26 @@ function setMyGroups(n) {
   renderMyQr();
 }
 function toggleMyNum(g, n) {
-  const nums = myGame(g);
-  if (nums.includes(n)) nums.splice(nums.indexOf(n), 1);
-  else if (nums.length >= 6) return toast(`Group ${g} already has 6 numbers. Take one back first.`, 'err');
-  else nums.push(n);
+  const x = myGame(g);
+  if (x.n.includes(n)) { x.n = x.n.filter((v) => v !== n); x.e = x.e.filter((v) => v !== n); }
+  else if (x.n.length >= 6) return toast(`Group ${g} already has 6 numbers. Take one back first.`, 'err');
+  else x.n.push(n);
   saveMyPicks();
   renderMyQr();
 }
 async function myEngine(g, mode) {
-  const have = [...myGame(g)], target = S.my.round, hist = pickHistory().filter((d) => d.round < target);
+  const have = [...myGame(g).n], target = S.my.round, hist = pickHistory().filter((d) => d.round < target);
   if (have.length >= 6) return;
   if (hist.length < 100) return toast('Past winning numbers are still loading. Try again in a moment.', 'err');
   S.my.busy = true; renderMyQr();
   await new Promise((r) => setTimeout(r, 20));
   const k = mode === 'one' ? 1 : 6 - have.length;
   const res = suggestPartial(hist, { fixed: have, k, seed: target * 7919 + g * 977 + (S.me.id.charCodeAt(0) || 1), count: 8 });
-  const others = new Set(S.my.games.filter((_, i) => i !== g - 1).map((x) => [...x].sort((a, b) => a - b).join()));
+  const others = new Set(S.my.games.filter((_, i) => i !== g - 1).map((x) => [...myEntry(x).n].sort((a, b) => a - b).join()));
   const pick = res.picks.find((p) => have.length + k < 6 || !others.has(p.nums.join())) || res.picks[0];
-  myGame(g).push(...(pick?.part || []));
+  const x = myGame(g);
+  x.n.push(...(pick?.part || []));
+  x.e.push(...(pick?.part || []));
   S.my.busy = false;
   saveMyPicks();
   renderMyQr();
@@ -2595,12 +2592,30 @@ async function renderMyQr() {
   }
   const my = S.my, busy = my.busy ? 'disabled' : '';
   if (document.activeElement !== $('myqr-x')) $('myqr-x').value = my.groups;
-  const groups = Array.from({ length: my.groups }, (_, i) => ({ g: i + 1, nums: [...myGame(i + 1)].sort((a, b) => a - b) }));
+  const groups = Array.from({ length: my.groups }, (_, i) => ({ g: i + 1, nums: [...myGame(i + 1).n].sort((a, b) => a - b), eng: myGame(i + 1).e }));
   const done = groups.filter((x) => x.nums.length === 6);
-  $('myqr-body').innerHTML = `<div class="board-groups">${groups.map((x) => `<div class="bgroup ${x.nums.length === 6 ? 'full' : 'open'}">
+  // my numbers in my colour, the engine's in its own, as in ✍️ Picks
+  const colorOf = (x, n) => (x.eng.includes(n) ? ENGINE_COLOR : memberColor(S.me.id));
+  const whoOf = (x, n) => (x.eng.includes(n) ? '🤖 engine' : 'you');
+  const rows = groups.filter((x) => x.nums.length);
+  $('myqr-body').innerHTML = `<div class="board-sum myqr-sum">
+      <div class="bsum-hd">
+        <div class="card-title">🧾 My tickets</div>
+        <span class="fhelp">${done.length} of ${groups.length} groups complete · ${esc(money(groups.length * TICKET_PRICE))}</span>
+        <span class="fhelp"><span class="sw" style="--c:${memberColor(S.me.id)}"></span> you · <span class="sw" style="--c:${ENGINE_COLOR}"></span> 🤖 engine</span>
+      </div>
+      ${rows.length ? `<p class="fhelp bsum-tip">Tap a row to dim everything else while you copy it onto a slip; tap it again (or anywhere else) to go back.</p>` : '<p class="fhelp">No numbers picked yet. Pick them in the groups below.</p>'}
+      ${rows.map((x) => `<div class="bsum-row ${x.nums.length === 6 ? 'full' : 'open'}" data-act="bsum-focus" data-key="m${x.g}">
+        <span class="bsum-n">${x.g}</span>
+        <span class="bsum-balls">${x.nums.map((n) => `<span class="ball mc" style="--c:${colorOf(x, n)}" title="${esc(whoOf(x, n))}">${two(n)}</span>`).join('')}${'<span class="ball open">?</span>'.repeat(6 - x.nums.length)}</span>
+        <span class="bsum-end">${x.nums.length === 6 ? '<span class="bsum-ready">✓ ready</span>' : `<span class="bsum-todo">${6 - x.nums.length} to go</span>`}</span>
+      </div>`).join('')}
+    </div>
+    <div class="board-groups">${groups.map((x) => `<div class="bgroup ${x.nums.length === 6 ? 'full' : 'open'}">
       <div class="bg-hd"><span class="bg-title">Group ${x.g}</span>
         ${x.nums.length === 6 ? '<span class="bg-badge done">✓ Complete</span>' : `<span class="bg-badge todo">${x.nums.length}/6 · ${6 - x.nums.length} to go</span>`}</div>
-      <div class="bg-nums">${layoutOrder(`m${x.g}`).map((n) => `<button type="button" class="bn ${x.nums.includes(n) ? 'mine' : ''}" data-act="myqr-num" data-g="${x.g}" data-n="${n}" ${busy}>${n}</button>`).join('')}</div>
+      <div class="bg-nums">${layoutOrder(`m${x.g}`).map((n) => `<button type="button" class="bn ${x.nums.includes(n) ? 'on' : ''}" data-act="myqr-num" data-g="${x.g}" data-n="${n}"
+        ${x.nums.includes(n) ? `style="--c:${colorOf(x, n)}" title="${n} · ${esc(whoOf(x, n))}"` : ''} ${busy}>${n}</button>`).join('')}</div>
       <div class="bg-foot">
         ${x.nums.length === 6 ? '' : `<button class="btn btn-ghost btn-sm" data-act="myqr-engine" data-g="${x.g}" data-mode="one" ${busy}>🤖 +1</button>
         <button class="btn btn-ghost btn-sm" data-act="myqr-engine" data-g="${x.g}" data-mode="fill" ${busy}>🤖 Fill the rest</button>`}
@@ -2609,6 +2624,7 @@ async function renderMyQr() {
           ${['random', 'sorted'].map((m) => `<button type="button" class="seg-btn ${groupLayout(`m${x.g}`).mode === m ? 'active' : ''}" data-act="board-layout" data-g="m${x.g}" data-mode="${m}">${m === 'random' ? '🔀 Random' : '🔢 Sorted'}</button>`).join('')}
         </div>
       </div></div>`).join('')}</div>`;
+  applyFocus();
   // QR codes once every group is ready
   if (done.length < groups.length) {
     $('myqr-codes').innerHTML = `<div class="card"><p class="fhelp">🎫 ${done.length} of ${groups.length} groups ready: the QR codes appear when all of them are complete.</p></div>`;
@@ -2637,13 +2653,18 @@ async function renderMyQr() {
 }
 let _myCodes = [];
 
-/** Settings: show or hide the 🎫 My QR tab (saved on the account, so it follows the member). */
-async function setMyQrTab(on) {
-  const prefs = { ...(S.me.prefs || {}), my_qr: on };
+/** Optional Picks tabs, per account: 🎫 My QR is shown unless turned off, 🕰️ Simulation hidden unless turned on. */
+const TAB_PREFS = { myqr: { key: 'my_qr', dflt: true }, sim: { key: 'sim', dflt: false } };
+function showsTab(tab) {
+  const p = TAB_PREFS[tab], v = S.me?.prefs?.[p.key];
+  return 'prefs' in (S.me || {}) ? (v === undefined ? p.dflt : !!v) : p.dflt;
+}
+async function setTabPref(tab, on) {
+  const prefs = { ...(S.me.prefs || {}), [TAB_PREFS[tab].key]: on };
   const { error } = await S.sb.from('profiles').update({ prefs }).eq('id', S.me.id);
-  if (error) { fail(error); $('me-myqr').checked = !on; return; }
+  if (error) { fail(error); renderSettings(); return; }
   S.me.prefs = prefs;
-  toast(on ? '🎫 My QR is now a tab in Picks.' : '🎫 My QR tab hidden.', 'ok');
+  toast({ myqr: on ? '🎫 My QR is now a tab in Picks.' : '🎫 My QR tab hidden.', sim: on ? '🕰️ Simulation is now a tab in Picks.' : '🕰️ Simulation tab hidden.' }[tab], 'ok');
   renderPicks();
 }
 
@@ -2719,6 +2740,22 @@ function liveUndo() {
   L.at = Date.now(); saveLive(); renderLive();
 }
 function liveReset() { const L = liveState(); Object.assign(L, { main: [], bonus: null, at: 0 }); saveLive(); renderLive(); }
+
+/** My complete own groups (🎫 My QR) for a draw; loaded once per draw. */
+let _myLive = null;
+function myLive(round) {
+  if (!showsTab('myqr')) return null;
+  if (S.my.loaded && S.my.round === round) return S.my.games.map(myEntry).filter((x) => x.n.length === 6).map((x) => x.n);
+  if (_myLive?.round === round) return _myLive.games;
+  if (!_myLive?.loading) {
+    _myLive = { round, loading: true, games: null };
+    fetchMyPicks(round).then((r) => {
+      _myLive = { round, games: r.games.filter((x) => x.n.length === 6).map((x) => x.n) };
+      if (S.tab === 'picks' && _picksSec === 'live') renderLive();
+    }).catch(() => { _myLive = { round, games: [] }; });
+  }
+  return null;
+}
 
 /** Our groups for the live draw (the board may already have moved on to next week). */
 function liveBoard(round) {
@@ -2807,6 +2844,10 @@ function renderLive() {
   if (!ours) { $('live-ours').innerHTML = '<p class="fhelp">Loading our tickets…</p>'; $('live-sugg').innerHTML = ''; return; }
   renderLuck(round, liveBoard(round), main, bonus);
   const x = ours.list.length || 5;
+  // my own tickets (🎫 My QR) for this draw, if I picked any
+  const mine = myLive(round);
+  $('live-mine-card').hidden = !mine?.length;
+  if (mine?.length) $('live-mine').innerHTML = liveColumn(mine.map((nums, i) => ({ label: `My group ${i + 1}`, nums })), main, bonus, final);
   $('live-ours').innerHTML = (ours.list.length ? liveColumn(ours.list, main, bonus, final)
     : '<p class="fhelp">No complete groups or ticket photos for this draw yet.</p>')
     + (ours.open ? `<p class="fhelp" style="margin-top:8px">${ours.open} unfinished group${ours.open > 1 ? 's are' : ' is'} left out.</p>` : '');
@@ -3755,8 +3796,9 @@ let _curDraft = null;
 
 function renderSettings() {
   $('me-username').value = '@' + S.me.username;
-  $('me-myqr').checked = !!S.me.prefs?.my_qr;
-  $('me-myqr').disabled = !('prefs' in S.me);
+  $('me-myqr').checked = showsTab('myqr');
+  $('me-sim').checked = showsTab('sim');
+  $('me-myqr').disabled = $('me-sim').disabled = !('prefs' in S.me);
   if (S.tab === 'settings') renderPush();
   if (document.activeElement !== $('me-name')) $('me-name').value = S.me.display_name;
 
@@ -4034,7 +4076,7 @@ const ACTIONS = {
   'myqr-x': (el) => setMyGroups(el.dataset.add ? S.my.groups + +el.dataset.add : +el.dataset.set),
   'myqr-num': (el) => toggleMyNum(+el.dataset.g, +el.dataset.n),
   'myqr-engine': (el) => myEngine(+el.dataset.g, el.dataset.mode),
-  'myqr-clear': (el) => { S.my.games[+el.dataset.g - 1] = []; saveMyPicks(); renderMyQr(); },
+  'myqr-clear': (el) => { S.my.games[+el.dataset.g - 1] = { n: [], e: [] }; saveMyPicks(); renderMyQr(); },
   'myqr-big': (el) => openQrFull(_myCodes, +el.dataset.k),
   'buy-remove': (el) => removeBuyer(+el.dataset.i),
   'qr-big': (el) => openQrFull(_buyCodes, +el.dataset.k),
@@ -4104,7 +4146,8 @@ const INPUTS = {
   'push-mode': (el, e) => { if (e.type === 'change') setPushMode(); },
   'push-extra': (el, e) => { if (e.type === 'change') setPushMode(); },
   'myqr-x': (el, e) => { if (e.type === 'change' && el.value) setMyGroups(parseInt(el.value, 10) || 1); },
-  'me-myqr': (el, e) => { if (e.type === 'change') setMyQrTab(el.checked); },
+  'me-myqr': (el, e) => { if (e.type === 'change') setTabPref('myqr', el.checked); },
+  'me-sim': (el, e) => { if (e.type === 'change') setTabPref('sim', el.checked); },
   'lock-on': (el, e) => { if (e.type === 'change') (el.checked ? turnLockOn() : turnLockOff()); },
   'lock-after': (el, e) => { if (e.type === 'change' && _lock) { _lock.after = +el.value; saveLock(); renderLock(); } },
   lang: (el, e) => { if (e.type === 'change') changeLang(el.value); },

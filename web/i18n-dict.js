@@ -870,4 +870,13 @@ window.I18N_DICT = [
   ['That is not a dhlottery.co.kr QR link.', 'dhlottery.co.kr QR 링크가 아닙니다.', 'Đây không phải liên kết QR của dhlottery.co.kr.'],
   ['This QR code is already on the list.', '이미 목록에 있는 QR 코드입니다.', 'Mã QR này đã có trong danh sách.'],
   ['The database needs an update first: run supabase/schema.sql again in the Supabase SQL editor.', '먼저 데이터베이스 업데이트가 필요합니다: Supabase SQL 편집기에서 supabase/schema.sql을 다시 실행하세요.', 'Cần cập nhật cơ sở dữ liệu trước: chạy lại supabase/schema.sql trong trình soạn SQL của Supabase.'],
+  ['🧾 My tickets', '🧾 내 복권', '🧾 Vé của tôi'],
+  ['{0} of {1} groups complete · ₩{2}', '{1}조합 중 {0}개 완성 · ₩{2}', '{0}/{1} bộ đã xong · ₩{2}'],
+  ['My group {0}', '내 조합 {0}', 'Bộ của tôi {0}'],
+  ['🎫 My own tickets', '🎫 내 개인 복권', '🎫 Vé riêng của tôi'],
+  ['▶️ Watch the draw on YouTube (동행복권)', '▶️ 유튜브로 추첨 생방송 보기 (동행복권)', '▶️ Xem quay số trên YouTube (동행복권)'],
+  ['🕰️ Simulation tab in Picks', '🕰️ 번호 메뉴에 시뮬레이션 탭', '🕰️ Thẻ Mô phỏng trong Chọn số'],
+  ['Try the suggestions on a past week and see what they would have won', '지난 회차에 추천 번호를 적용해 얼마나 당첨됐을지 확인합니다', 'Thử các gợi ý trên một tuần đã qua và xem chúng sẽ trúng bao nhiêu'],
+  ['🕰️ Simulation is now a tab in Picks.', '🕰️ 이제 번호 메뉴에 시뮬레이션 탭이 있습니다.', '🕰️ Mô phỏng giờ là một thẻ trong Chọn số.'],
+  ['🕰️ Simulation tab hidden.', '🕰️ 시뮬레이션 탭을 숨겼습니다.', '🕰️ Đã ẩn thẻ Mô phỏng.'],
 ];

@@ -791,6 +791,8 @@ tfoot td { border-top: 1px solid var(--border2); border-bottom: none; font-weigh
 .picks-sections .seg-btn[hidden] { display: none; }
 .bn.mine { background: var(--gold); border-color: transparent; color: #0b0b0b; font-weight: 700; }
 .myqr-games .qr-game { margin: 2px 0; }
+#myqr-body { margin-top: 16px; }
+.myqr-sum .sw { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: var(--c); vertical-align: -1px; }
 @media (max-width: 640px) { .picks-sections .seg-btn { font-size: 11px; padding: 8px 2px; min-width: 72px; } }
 .pick-acts { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
 .in-board { color: #34d399; white-space: nowrap; }
@@ -822,6 +824,7 @@ tfoot td { border-top: 1px solid var(--border2); border-bottom: none; font-weigh
 .stat-tbl td { padding: 4px 6px; border-bottom: 1px solid rgba(30,45,74,.45); white-space: nowrap; }
 .stat-tbl .ball { width: 24px; height: 24px; font-size: 11px; margin-right: 2px; }
 @media (max-width: 900px) { .stat-tables { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 600px) { .stat-tables { grid-template-columns: 1fr; } }
 
 /* Our tickets: focus on one row while copying it to a slip */
 #focus-veil { position: fixed; inset: 0; background: rgba(4,6,12,.8); z-index: 400; }
@@ -930,7 +933,8 @@ body.qr-open { overflow: hidden; }
 .bn.bonus { box-shadow: 0 0 0 3px var(--gold); }
 .bn:disabled { cursor: default; }
 .live-acts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
-.live-cols { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.live-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+.live-yt { text-decoration: none; }
 .live-cols .card { min-width: 0; }
 .live-sum { font-size: 12px; color: var(--dim); margin-bottom: 8px; }
 .live-sum.won { color: #34d399; }

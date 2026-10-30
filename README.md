@@ -57,12 +57,16 @@ with an invitation key from the admin.
     odd- and even-numbered draws. It also reports how often a gap that big appears when the same
     draws are split into two groups at random, which tells luck from a real pattern.
 - **Picks tab** sections: **✍️ Picks** (our own numbers), **🛒 Buy** (who buys, and QR codes for
-  the shop), **🎫 My QR** (optional, below), **🎯 Suggestion** (the engine's ranked sets and
+  the shop), **🎫 My QR** (below), **🎯 Suggestion** (the engine's ranked sets and
   backtest), **📊 Stats** (number statistics), **🕰️ Simulation** (a past week) and **📺 Live**.
-- **🎫 My QR** (turn on in Settings → My Account; saved on the account): tickets of your own, not
+  🎫 My QR is shown and 🕰️ Simulation hidden unless changed in Settings → My Account (saved on the
+  account, so it follows the member to every device).
+- **🎫 My QR** (can be hidden in Settings → My Account): tickets of your own, not
   the group's. Choose how many (5, 10, 15, 20, ±1), pick each group's numbers the same way as in
-  Picks (🔀 Random / 🔢 Sorted, 🤖 +1 / Fill the rest); once every group is complete the QR codes
-  for the shop appear. Only you can see these numbers (table `my_picks`, owner-only).
+  Picks (🔀 Random / 🔢 Sorted, 🤖 +1 / Fill the rest). **🧾 My tickets** above the groups lists
+  them row by row (tap a row to focus on it), your numbers in your colour and the engine's in its
+  own, as in ✍️ Picks. Once every group is complete the QR codes for the shop appear, and the
+  groups join 📺 Live. Only you can see these numbers (table `my_picks`, owner-only).
 - **Next draw bar** (under the clock): a progress bar from the last draw to the next one; in the
   last 24 hours it shows a highlighted countdown (hh:mm:ss), and 🔴 while the draw is on. Tap it
   for 📺 Live. The section you last opened is remembered on that device.
@@ -137,9 +141,10 @@ with an invitation key from the admin.
 - **📺 Live** (Picks tab): while watching the draw, tap each number as it comes out (the 7th
   is the bonus). The taps are shared: every member sees the same numbers in real time and anyone
   can tap (needs the database update: run `supabase/schema.sql` again, which adds `live_picks`;
-  until then the taps stay on your device). Our tickets (as bought) are ranked on the left by how many numbers they match,
-  the system's top suggestions (as many as our tickets) on the right, with 등수 and prizes once 6
-  numbers are in. It works any time for fun: outside Saturday 20:00–24:00 KST it is a test and
+  until then the taps stay on your device). Each column is ranked by how many numbers match, in
+  this order: our tickets (as bought, by all), **🎫 my own tickets** (from 🎫 My QR, only on your
+  screen) and the system's top suggestions (as many as our tickets), with 등수 and prizes once 6
+  numbers are in. **▶️ Watch the draw on YouTube** opens 동행복권's live streams. It works any time for fun: outside Saturday 20:00–24:00 KST it is a test and
   clears itself after 10 minutes without a tap. When the official result is downloaded, it
   replaces the tapped numbers (**Get official result** asks for it after 20:50 KST).
 - **Simulate a past week** (Picks tab): choose a draw by number or by any date. A Sunday counts
