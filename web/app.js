@@ -516,9 +516,9 @@ async function loadSome(tables) {
   if (tables.has('*') || [...tables].some((t) => !TABLE_LOADERS[t])) return loadAll({ draws: tables.has('draws') || tables.has('*') });
   const [, lc] = await Promise.all([
     Promise.all([...tables].map((t) => TABLE_LOADERS[t]())),
-    S.sb.from('audit_log').select('*').order('at', { ascending: false }).limit(1),
+    S.sb.from('audit_log').select('*').order('at', { ascending: false }).limit(10),
   ]);
-  S.lastChange = lc.data?.[0] || S.lastChange;
+  S.lastChange = (lc.data || []).find((r) => !quietChange(r)) || S.lastChange;
   S.loadedAt = new Date();
   if (S.lbTicket && tables.has('tickets')) {
     S.lbTicket = S.tickets.find((t) => t.id === S.lbTicket.id) || S.lbTicket;
@@ -547,10 +547,10 @@ async function loadAll({ draws = true } = {}) {
   const [st, pr, iv, wk, tk] = res.map((r) => r.data);
   const [drawRows, lc] = await Promise.all([
     draws || !S.drawsLoaded ? loadDraws() : null,
-    sb.from('audit_log').select('*').order('at', { ascending: false }).limit(1),
+    sb.from('audit_log').select('*').order('at', { ascending: false }).limit(10),
   ]);
   if (drawRows) { S.draws = Object.fromEntries(drawRows.map((d) => [d.round, d])); S.drawsLoaded = true; }   // missing table → {}
-  S.lastChange = lc.data?.[0] || null;
+  S.lastChange = (lc.data || []).find((r) => !quietChange(r)) || null;
   S.loadedAt = new Date();
   if (st) S.settings = { ...S.settings, ...st, big_win_threshold: +st.big_win_threshold };
   S.profiles = pr || [];
@@ -638,6 +638,22 @@ function renderTimebar() {
     $('tb-update').innerHTML = `🔄 Last update <strong>${esc(at)}</strong> (${ago(c.at)}) · ${esc(d.self ? userName(d.self) : d.auto || userName(c.actor))} ${esc(d.head)} ${esc(d.subject || '')}`;
   } else $('tb-update').textContent = '';
   $('tb-update').title = S.loadedAt ? `Data loaded ${S.loadedAt.toLocaleTimeString(LOCALE, { hour12: false })}` : '';
+  renderCountdown(now.getTime());
+}
+
+const hms = (ms) => { const t = Math.max(0, Math.floor(ms / 1000)); return [t / 3600, (t % 3600) / 60, t % 60].map((x) => String(Math.floor(x)).padStart(2, '0')).join(':'); };
+/** From the last draw to the next one: a progress bar, and a countdown (hh:mm:ss) in the last 24 hours. */
+function renderCountdown(now = Date.now()) {
+  const el = $('tb-next');
+  if (!el) return;
+  const next = kstAt(currentDraw(), DRAW_TIME).getTime(), last = kstAt(addDays(currentDraw(), -7), DRAW_TIME).getTime();
+  const left = next - now, drawing = left <= 0;   // between the draw (20:35) and the results (20:50)
+  const pct = drawing ? 100 : Math.min(100, Math.max(0, ((now - last) / (next - last)) * 100));
+  el.classList.toggle('soon', left < 24 * 3600e3);
+  el.classList.toggle('now', drawing);
+  $('tb-bar').style.width = `${pct.toFixed(2)}%`;
+  $('tb-left').textContent = drawing ? `🔴 Draw #${drawNo(currentDraw())} is on now` : left < 24 * 3600e3 ? hms(left) : countdown(left);
+  $('tb-what').textContent = drawing ? 'results at 20:50 KST' : `until draw #${drawNo(currentDraw())}`;
 }
 setInterval(() => { renderTimebar(); if (S.me) maybeRemind(); }, 1000);
 
@@ -1690,7 +1706,7 @@ function renderPickControls() {
 const pickHistory = () => Object.values(S.draws).filter((d) => d.numbers?.length === 6).sort((a, b) => a.round - b.round);
 
 // Picks tab sections: our own numbers, the engine's suggestions, past-week simulation
-const PICK_SECTIONS = ['board', 'buy', 'suggest', 'sim', 'live'];
+const PICK_SECTIONS = ['board', 'buy', 'myqr', 'suggest', 'stats', 'sim', 'live'];
 let _picksSec = (() => { try { return localStorage.getItem('645-picks-sec'); } catch { return null; } })();
 if (!PICK_SECTIONS.includes(_picksSec)) _picksSec = 'board';
 let _historyErr = '';
@@ -1716,6 +1732,9 @@ function historyReady() {
 
 function renderPicks() {
   updateWakeLock();
+  const myQr = !!S.me?.prefs?.my_qr;
+  document.querySelector('#picks-sections [data-sec=myqr]').hidden = !myQr;
+  if (_picksSec === 'myqr' && !myQr) _picksSec = 'board';
   document.querySelectorAll('#picks-sections .seg-btn').forEach((b) => b.classList.toggle('active', b.dataset.sec === _picksSec));
   for (const sec of PICK_SECTIONS) $('pk-' + sec).hidden = sec !== _picksSec;
   $('picks-for').textContent = `for draw #${drawNo(currentDraw())} · ${fmtD(currentDraw())}`;
@@ -1724,6 +1743,11 @@ function renderPicks() {
   else if (_picksSec === 'sim') renderSim();
   else if (_picksSec === 'live') renderLive();
   else if (_picksSec === 'buy') renderBuy();
+  else if (_picksSec === 'myqr') renderMyQr();
+  else if (_picksSec === 'stats') {
+    if (ready) renderNumStats(pickHistory().filter((d) => d.round < drawNo(currentDraw())));
+    else $('picks-grid').innerHTML = _historyErr ? `<div class="form-error">${_historyErr}</div>` : '<div class="empty"><div class="spinner" style="margin:0 auto 12px"></div><p>Loading past winning numbers…</p></div>';
+  }
   else renderSuggestions(ready);
 }
 
@@ -1785,7 +1809,6 @@ function renderSuggestions(ready) {
       </div>
     </div>`).join('') : '<div class="empty"><p>No suggestions for this choice.</p></div>');
 
-  renderNumStats(hist);
   if (!$('picks-backtest').innerHTML) {
     $('picks-backtest').innerHTML = `<p class="fhelp">Replays the last 100 draws: 5 suggestions per draw made only from the draws before it,
       against 5 random sets. This shows honestly what the analysis is worth.</p>
@@ -1897,7 +1920,7 @@ function setGroupLayout(g, mode) {
   l.mode = mode;
   if (mode === 'random') l.seed = (Math.random() * 2 ** 31) | 0;   // a fresh shuffle each time
   try { localStorage.setItem('645-board-layout', JSON.stringify(_layout)); } catch { /* private mode */ }
-  renderBoard();
+  renderPicks();
 }
 function layoutOrder(g) {
   const l = groupLayout(g), order = [...Array(45)].map((_, i) => i + 1);
@@ -2510,6 +2533,119 @@ function renderBuy(own = false) {
 //     chkCompare();
 //   } catch (e) { chkShow(`<p class="buy-issue">${esc(e.message || 'Could not read the picture.')}</p>`); }
 // }
+
+// ── 🎫 My QR: a member's own tickets (not the group's). Private: the my_picks table only shows its owner.
+S.my = { round: null, groups: 5, games: [], loaded: false, missing: false, busy: false };
+let _mySaveT = null;
+
+async function loadMyPicks() {
+  const round = drawNo(currentDraw());
+  const { data, error } = await S.sb.from('my_picks').select('*').eq('member', S.me.id).eq('round', round).maybeSingle();
+  S.my = { ...S.my, round, loaded: true, missing: !!error, groups: data?.groups || 5,
+    games: Array.isArray(data?.games) ? data.games.map((g) => (Array.isArray(g) ? g.filter((n) => n >= 1 && n <= 45) : [])) : [] };
+}
+function saveMyPicks() {
+  clearTimeout(_mySaveT);
+  _mySaveT = setTimeout(async () => {
+    const M = S.my;
+    const { error } = await S.sb.from('my_picks').upsert({ member: S.me.id, round: M.round, groups: M.groups, games: M.games.slice(0, M.groups) }, { onConflict: 'member,round' });
+    if (error) fail(error);
+  }, 400);
+}
+const myGame = (g) => (S.my.games[g - 1] ||= []);
+
+function setMyGroups(n) {
+  S.my.groups = Math.max(1, Math.min(100, n | 0));
+  saveMyPicks();
+  renderMyQr();
+}
+function toggleMyNum(g, n) {
+  const nums = myGame(g);
+  if (nums.includes(n)) nums.splice(nums.indexOf(n), 1);
+  else if (nums.length >= 6) return toast(`Group ${g} already has 6 numbers. Take one back first.`, 'err');
+  else nums.push(n);
+  saveMyPicks();
+  renderMyQr();
+}
+async function myEngine(g, mode) {
+  const have = [...myGame(g)], target = S.my.round, hist = pickHistory().filter((d) => d.round < target);
+  if (have.length >= 6) return;
+  if (hist.length < 100) return toast('Past winning numbers are still loading. Try again in a moment.', 'err');
+  S.my.busy = true; renderMyQr();
+  await new Promise((r) => setTimeout(r, 20));
+  const k = mode === 'one' ? 1 : 6 - have.length;
+  const res = suggestPartial(hist, { fixed: have, k, seed: target * 7919 + g * 977 + (S.me.id.charCodeAt(0) || 1), count: 8 });
+  const others = new Set(S.my.games.filter((_, i) => i !== g - 1).map((x) => [...x].sort((a, b) => a - b).join()));
+  const pick = res.picks.find((p) => have.length + k < 6 || !others.has(p.nums.join())) || res.picks[0];
+  myGame(g).push(...(pick?.part || []));
+  S.my.busy = false;
+  saveMyPicks();
+  renderMyQr();
+}
+
+async function renderMyQr() {
+  if (!$('myqr-body')) return;
+  const M = S.my, target = drawNo(currentDraw());
+  $('myqr-for').textContent = `draw #${target} · ${fmtD(currentDraw())}`;
+  if (!M.loaded || M.round !== target) { $('myqr-body').innerHTML = '<p class="fhelp">Loading…</p>'; await loadMyPicks().catch(console.error); }
+  if (M.missing || S.my.missing) {
+    $('myqr-body').innerHTML = '<div class="form-error">This needs the database update: run supabase/schema.sql again.</div>';
+    $('myqr-codes').innerHTML = '';
+    return;
+  }
+  const my = S.my, busy = my.busy ? 'disabled' : '';
+  if (document.activeElement !== $('myqr-x')) $('myqr-x').value = my.groups;
+  const groups = Array.from({ length: my.groups }, (_, i) => ({ g: i + 1, nums: [...myGame(i + 1)].sort((a, b) => a - b) }));
+  const done = groups.filter((x) => x.nums.length === 6);
+  $('myqr-body').innerHTML = `<div class="board-groups">${groups.map((x) => `<div class="bgroup ${x.nums.length === 6 ? 'full' : 'open'}">
+      <div class="bg-hd"><span class="bg-title">Group ${x.g}</span>
+        ${x.nums.length === 6 ? '<span class="bg-badge done">✓ Complete</span>' : `<span class="bg-badge todo">${x.nums.length}/6 · ${6 - x.nums.length} to go</span>`}</div>
+      <div class="bg-nums">${layoutOrder(`m${x.g}`).map((n) => `<button type="button" class="bn ${x.nums.includes(n) ? 'mine' : ''}" data-act="myqr-num" data-g="${x.g}" data-n="${n}" ${busy}>${n}</button>`).join('')}</div>
+      <div class="bg-foot">
+        ${x.nums.length === 6 ? '' : `<button class="btn btn-ghost btn-sm" data-act="myqr-engine" data-g="${x.g}" data-mode="one" ${busy}>🤖 +1</button>
+        <button class="btn btn-ghost btn-sm" data-act="myqr-engine" data-g="${x.g}" data-mode="fill" ${busy}>🤖 Fill the rest</button>`}
+        ${x.nums.length ? `<button class="btn btn-ghost btn-sm" data-act="myqr-clear" data-g="${x.g}">Clear</button>` : ''}
+        <div class="seg bg-layout" title="Order of the 45 buttons (only on this device)">
+          ${['random', 'sorted'].map((m) => `<button type="button" class="seg-btn ${groupLayout(`m${x.g}`).mode === m ? 'active' : ''}" data-act="board-layout" data-g="m${x.g}" data-mode="${m}">${m === 'random' ? '🔀 Random' : '🔢 Sorted'}</button>`).join('')}
+        </div>
+      </div></div>`).join('')}</div>`;
+  // QR codes once every group is ready
+  if (done.length < groups.length) {
+    $('myqr-codes').innerHTML = `<div class="card"><p class="fhelp">🎫 ${done.length} of ${groups.length} groups ready: the QR codes appear when all of them are complete.</p></div>`;
+    return;
+  }
+  if (!window.qrcode) {
+    $('myqr-codes').innerHTML = '<div class="card"><p class="fhelp">Making QR codes…</p></div>';
+    return loadQrLib().then(() => S.tab === 'picks' && _picksSec === 'myqr' && renderMyQr()).catch((e) => { $('myqr-codes').innerHTML = `<div class="form-error">${esc(e.message)}</div>`; });
+  }
+  const codes = [];
+  for (let i = 0; i < done.length; i += QR_MAX_GAMES) {
+    const part = done.slice(i, i + QR_MAX_GAMES);
+    codes.push({ games: part, payload: eslipPayload(part.map((x) => x.nums)) });
+  }
+  _myCodes = codes.map((c, j) => ({ payload: c.payload, cap: `${S.me.display_name} · QR ${j + 1} of ${codes.length} · groups ${rangeText(c.games.map((x) => x.g))} · ${c.games.length} games` }));
+  $('myqr-codes').innerHTML = `<div class="card buy-card mine">
+      <div class="card-hd"><div class="card-title">🎫 My QR codes</div><span class="fhelp">${done.length} game${done.length > 1 ? 's' : ''} · ${esc(money(done.length * TICKET_PRICE))}</span></div>
+      <div class="qr-grid">${codes.map((c, j) => `<figure class="qr-fig">
+        <button type="button" class="qr-btn" data-act="myqr-big" data-k="${j}" title="Show full screen">${qrSvg(c.payload)}</button>
+        <figcaption><strong>QR ${j + 1}${codes.length > 1 ? ` of ${codes.length}` : ''}</strong> · groups ${rangeText(c.games.map((x) => x.g))} · ${c.games.length} game${c.games.length > 1 ? 's' : ''} · ${esc(money(c.games.length * TICKET_PRICE))}</figcaption>
+        <details class="qr-details"><summary>Numbers and QR text</summary>
+          <div class="myqr-games">${c.games.map((x) => `<div class="qr-game"><span class="bsum-n">${x.g}</span>${x.nums.map((n) => ball(n, 'hit')).join('')}</div>`).join('')}</div>
+          <code class="qr-text">${esc(c.payload)}</code>
+          <button type="button" class="btn btn-ghost btn-sm" data-act="copy" data-text="${esc(c.payload)}">Copy QR text</button>
+        </details></figure>`).join('')}</div></div>`;
+}
+let _myCodes = [];
+
+/** Settings: show or hide the 🎫 My QR tab (saved on the account, so it follows the member). */
+async function setMyQrTab(on) {
+  const prefs = { ...(S.me.prefs || {}), my_qr: on };
+  const { error } = await S.sb.from('profiles').update({ prefs }).eq('id', S.me.id);
+  if (error) { fail(error); $('me-myqr').checked = !on; return; }
+  S.me.prefs = prefs;
+  toast(on ? '🎫 My QR is now a tab in Picks.' : '🎫 My QR tab hidden.', 'ok');
+  renderPicks();
+}
 
 // ── Live results: tap the numbers as the draw is streamed, our tickets and the top suggestions re-rank
 // Shared by all members through the live_picks table (realtime); on this device only until that table exists.
@@ -3523,7 +3659,13 @@ async function pushTest() {
 
 // ─── Activity log ─────────────────────────────────────────────────────────────
 const TABLE_LABEL = { weeks: 'week', investors: 'investor', tickets: 'ticket photo', settings: 'settings', profiles: 'member' };
-const SKIP_FIELDS = new Set(['updated_at', 'updated_by', 'created_at', 'created_by', 'id']);
+const SKIP_FIELDS = new Set(['updated_at', 'updated_by', 'created_at', 'created_by', 'id', 'lang', 'prefs']);
+/** An edit that changed nothing the group cares about (logged before the database learned to skip these). */
+function quietChange(r) {
+  if (r.action !== 'UPDATE') return false;
+  const o = r.old_data || {}, n = r.new_data || {};
+  return Object.keys({ ...o, ...n }).every((k) => SKIP_FIELDS.has(k) || JSON.stringify(o[k]) === JSON.stringify(n[k]));
+}
 
 function qrStatusText(it) {
   if (it.status === 'win') return `🎉 won ${+it.prize > 0 ? money(it.prize) : '(amount ?)'}`;
@@ -3593,7 +3735,7 @@ function describeChange(r) {
 async function loadActivity() {
   const { data, error } = await S.sb.from('audit_log').select('*').order('at', { ascending: false }).limit(300);
   if (error) return fail(error);
-  S.audit = data || [];
+  S.audit = (data || []).filter((r) => !quietChange(r));
   const el = $('activity-list');
   el.innerHTML = S.audit.length ? S.audit.map((r) => {
     const d = describeChange(r);
@@ -3613,6 +3755,8 @@ let _curDraft = null;
 
 function renderSettings() {
   $('me-username').value = '@' + S.me.username;
+  $('me-myqr').checked = !!S.me.prefs?.my_qr;
+  $('me-myqr').disabled = !('prefs' in S.me);
   if (S.tab === 'settings') renderPush();
   if (document.activeElement !== $('me-name')) $('me-name').value = S.me.display_name;
 
@@ -3875,7 +4019,7 @@ const ACTIONS = {
   'board-num': (el) => toggleBoardNum(+el.dataset.g, +el.dataset.n),
   'board-engine': (el) => engineFill(+el.dataset.g, el.dataset.mode),
   'board-clear': (el) => clearMine(+el.dataset.g),
-  'board-layout': (el) => setGroupLayout(+el.dataset.g, el.dataset.mode),
+  'board-layout': (el) => setGroupLayout(el.dataset.g, el.dataset.mode),
   'pick-merge': (el) => { el.disabled = true; mergeSuggestion(+el.dataset.i); },
   'picks-section': (el) => setPicksSection(el.dataset.sec),
   'bsum-focus': (el) => setFocus(el.dataset.key),
@@ -3886,6 +4030,12 @@ const ACTIONS = {
   'live-official': () => liveOfficial(),
   'buy-start': () => startBuying(),
   'goto-buy': () => { goTab('picks'); setPicksSection('buy'); },
+  'goto-live': () => { if (S.me) { goTab('picks'); setPicksSection('live'); } },
+  'myqr-x': (el) => setMyGroups(el.dataset.add ? S.my.groups + +el.dataset.add : +el.dataset.set),
+  'myqr-num': (el) => toggleMyNum(+el.dataset.g, +el.dataset.n),
+  'myqr-engine': (el) => myEngine(+el.dataset.g, el.dataset.mode),
+  'myqr-clear': (el) => { S.my.games[+el.dataset.g - 1] = []; saveMyPicks(); renderMyQr(); },
+  'myqr-big': (el) => openQrFull(_myCodes, +el.dataset.k),
   'buy-remove': (el) => removeBuyer(+el.dataset.i),
   'qr-big': (el) => openQrFull(_buyCodes, +el.dataset.k),
   // 'qr-chk': () => { const t = $('chk-ours')?.textContent; if (t) openQrFull([{ payload: t, cap: 'Our QR for the typed games' }], 0); },
@@ -3953,6 +4103,8 @@ const INPUTS = {
   'sim-x': (el, e) => { if (e.type === 'change') simSetX(parseInt(el.value, 10) || 1); },
   'push-mode': (el, e) => { if (e.type === 'change') setPushMode(); },
   'push-extra': (el, e) => { if (e.type === 'change') setPushMode(); },
+  'myqr-x': (el, e) => { if (e.type === 'change' && el.value) setMyGroups(parseInt(el.value, 10) || 1); },
+  'me-myqr': (el, e) => { if (e.type === 'change') setMyQrTab(el.checked); },
   'lock-on': (el, e) => { if (e.type === 'change') (el.checked ? turnLockOn() : turnLockOff()); },
   'lock-after': (el, e) => { if (e.type === 'change' && _lock) { _lock.after = +el.value; saveLock(); renderLock(); } },
   lang: (el, e) => { if (e.type === 'change') changeLang(el.value); },

@@ -134,6 +134,7 @@ create table if not exists public.draws (
 );
 alter table public.draws add column if not exists prizes jsonb;
 alter table public.profiles add column if not exists lang text check (lang in ('en', 'ko', 'vi'));   -- same language on every device
+alter table public.profiles add column if not exists prefs jsonb not null default '{}';               -- the member's own settings (e.g. 🎫 My QR tab)
 alter table public.tickets add column if not exists notified_at timestamptz;   -- "new ticket photos" sent
 alter table public.draws add column if not exists raw jsonb;
 
@@ -198,6 +199,16 @@ create table if not exists public.push_keys (
   public_key  text not null,
   private_jwk jsonb not null,
   created_at  timestamptz not null default now()
+);
+
+-- 🎫 My QR (Picks): numbers a member picks for tickets of their own. Private: only they can see them.
+create table if not exists public.my_picks (
+  member     uuid not null references public.profiles (id) on delete cascade default auth.uid(),
+  round      int not null,
+  groups     int not null default 5 check (groups between 1 and 100),
+  games      jsonb not null default '[]',          -- [[n, n, …], …] one list per group (0–6 numbers each)
+  updated_at timestamptz not null default now(),
+  primary key (member, round)
 );
 
 -- Live results (Picks → Live): the numbers members tap while watching the draw, shared by everyone.
@@ -469,7 +480,13 @@ create trigger touch_push_sub before insert or update on public.push_subs
 
 create or replace function public.audit()
 returns trigger language plpgsql security definer set search_path = public as $$
+declare
+  -- personal settings and bookkeeping columns: changing only these is not news for the group
+  quiet text[] := array['updated_at', 'updated_by', 'lang', 'prefs'];
 begin
+  if tg_op = 'UPDATE' and (to_jsonb(new) - quiet) = (to_jsonb(old) - quiet) then
+    return null;   -- nothing the group would care about changed (e.g. the same name saved again)
+  end if;
   insert into audit_log (actor, table_name, row_id, action, old_data, new_data)
   values (auth.uid(), tg_table_name,
           coalesce(to_jsonb(new) ->> 'id', to_jsonb(old) ->> 'id'),
@@ -518,6 +535,7 @@ alter table public.pick_plans  enable row level security;
 alter table public.group_picks enable row level security;
 alter table public.live_picks  enable row level security;
 alter table public.push_subs   enable row level security;
+alter table public.my_picks    enable row level security;
 alter table public.push_keys   enable row level security;
 
 do $$
@@ -526,7 +544,7 @@ begin
   for p in select policyname, tablename from pg_policies
            where schemaname = 'public'
              and tablename in ('profiles', 'invites', 'settings', 'investors', 'weeks', 'tickets', 'audit_log', 'draws',
-                               'pick_plans', 'group_picks', 'live_picks', 'push_subs', 'push_keys')
+                               'pick_plans', 'group_picks', 'live_picks', 'push_subs', 'push_keys', 'my_picks')
   loop
     execute format('drop policy %I on public.%I', p.policyname, p.tablename);
   end loop;
@@ -580,6 +598,8 @@ create policy "read group picks" on public.group_picks for select to authenticat
 create policy "pick a number"    on public.group_picks for insert to authenticated with check (public.is_member());
 create policy "take back a number" on public.group_picks for delete to authenticated
   using (public.is_member() and (picked_by = auth.uid() or by_engine or public.is_admin()));
+create policy "own picks only" on public.my_picks for all to authenticated
+  using (member = auth.uid() and public.is_member()) with check (member = auth.uid() and public.is_member());
 create policy "own push devices" on public.push_subs for all to authenticated
   using (member = auth.uid() and public.is_member()) with check (member = auth.uid() and public.is_member());
 create policy "read live picks" on public.live_picks for select to authenticated using (public.is_member());
@@ -596,11 +616,12 @@ grant update (qr_data, result)       on public.tickets   to authenticated;
 grant select, update                 on public.settings  to authenticated;
 grant select, update, delete         on public.invites   to authenticated;
 grant select                         on public.profiles, public.audit_log, public.draws to authenticated;
-grant update (display_name, lang)    on public.profiles  to authenticated;
+grant update (display_name, lang, prefs) on public.profiles to authenticated;
 grant select, insert, update         on public.pick_plans  to authenticated;
 grant select, insert, delete         on public.group_picks to authenticated;
 grant select, insert, update         on public.live_picks  to authenticated;
 grant select, insert, update, delete on public.push_subs   to authenticated;
+grant select, insert, update, delete on public.my_picks    to authenticated;
 
 revoke execute on all functions in schema public from public, anon;
 grant execute on function public.is_member(), public.is_admin(), public.normalize_invite(text),

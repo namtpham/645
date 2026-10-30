@@ -56,9 +56,16 @@ with an invitation key from the admin.
   - **odd vs even draws (회차)**: spent, won, money back per ₩1,000 and how often we win, for
     odd- and even-numbered draws. It also reports how often a gap that big appears when the same
     draws are split into two groups at random, which tells luck from a real pattern.
-- **Picks tab** has five sections: **✍️ Picks** (our own numbers), **🛒 Buy** (who buys, and QR
-  codes for the shop), **🎯 Suggestion** (the engine's ranked sets, number statistics, backtest),
-  **🕰️ Simulation** (a past week) and **📺 Live** (follow the draw). The section you last opened is remembered on that device.
+- **Picks tab** sections: **✍️ Picks** (our own numbers), **🛒 Buy** (who buys, and QR codes for
+  the shop), **🎫 My QR** (optional, below), **🎯 Suggestion** (the engine's ranked sets and
+  backtest), **📊 Stats** (number statistics), **🕰️ Simulation** (a past week) and **📺 Live**.
+- **🎫 My QR** (turn on in Settings → My Account; saved on the account): tickets of your own, not
+  the group's. Choose how many (5, 10, 15, 20, ±1), pick each group's numbers the same way as in
+  Picks (🔀 Random / 🔢 Sorted, 🤖 +1 / Fill the rest); once every group is complete the QR codes
+  for the shop appear. Only you can see these numbers (table `my_picks`, owner-only).
+- **Next draw bar** (under the clock): a progress bar from the last draw to the next one; in the
+  last 24 hours it shows a highlighted countdown (hh:mm:ss), and 🔴 while the draw is on. Tap it
+  for 📺 Live. The section you last opened is remembered on that device.
 - **Our numbers** (✍️ Picks): we pick the coming draw's numbers together.
   - Choose how many groups of 6 we play (quick buttons 5–30, ±1).
   - Each group shows 45 round buttons: gray = free, coloured = taken. Every member has their
@@ -174,6 +181,8 @@ with an invitation key from the admin.
   downloaded once per visit, and photo links are kept for a day so the browser shows photos
   from its cache.
 - **Activity log**: every add/edit/delete by every member, with old → new values. It can't be edited.
+  Saves that change nothing (the same name saved again) and personal settings (language, which
+  tabs to show) are not logged.
   Deleting a ticket photo (admins only) asks why: duplicate, QR code not detected, wrong image,
   wrong draw, blurry, or a reason you write; the reason is shown with the deletion.
 - **Currency**: KRW by default. Pick from popular currencies (₩ $ ₫ ¥ ฿ € …) or any ISO
@@ -476,4 +485,5 @@ python3 -m http.server -d web 8000
 functions, policies and grants. Run it again after updates that add tables, for example
 **Our numbers** (tables `pick_plans` and `group_picks`), shared **Live** picks (`live_picks`) and
 **Who buys** (column `pick_plans.buyers`), photo deletion with a reason (`delete_ticket`),
-notifications (tables `push_subs` and `push_keys`) and the account's language (`profiles.lang`).
+notifications (tables `push_subs` and `push_keys`), the account's language and settings
+(`profiles.lang`, `profiles.prefs`) and 🎫 My QR (`my_picks`).

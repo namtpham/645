@@ -838,6 +838,26 @@ window.I18N_DICT = [
   ['{*}: no complete groups yet.', '{*1}: 아직 완성된 조합이 없습니다.', '{*1}: chưa có bộ nào xong.'],
   ['lang: {*}', '언어: {*1}', 'ngôn ngữ: {*1}'],
 
+  // ── next draw, Stats, My QR
+  ['until draw #{0}', '제{0}회 추첨까지', 'đến kỳ #{0}'],
+  ['🔴 Draw #{0} is on now', '🔴 제{0}회 추첨 진행 중', '🔴 Kỳ #{0} đang quay'],
+  ['results at {0} KST', '결과 {0} KST', 'kết quả lúc {0} KST'],
+  ['Time to the next draw (from the last one)', '다음 추첨까지 남은 시간 (지난 추첨부터)', 'Thời gian đến kỳ quay tiếp theo (từ kỳ trước)'],
+  ['📊 Stats', '📊 통계', '📊 Thống kê'],
+  ['🎫 My QR', '🎫 내 QR', '🎫 QR của tôi'],
+  ['🎫 My QR tab in Picks', '🎫 번호 메뉴에 내 QR 탭', '🎫 Thẻ QR của tôi trong Chọn số'],
+  ['Pick numbers and make QR codes for tickets of your own (only you see them)', '내 개인 복권 번호를 고르고 QR 코드를 만듭니다 (나만 볼 수 있음)', 'Chọn số và tạo mã QR cho vé của riêng bạn (chỉ bạn thấy)'],
+  ["Numbers for tickets of your own, not the group's. Only you can see them. When every group is complete, the QR codes to show at the shop appear below.",
+    '모임이 아닌 내 개인 복권 번호입니다. 나만 볼 수 있습니다. 모든 조합이 완성되면 판매점에서 보여 줄 QR 코드가 아래에 나타납니다.',
+    'Số cho vé của riêng bạn, không phải của nhóm. Chỉ bạn thấy được. Khi mọi bộ đã xong, mã QR để đưa ở cửa hàng sẽ hiện bên dưới.'],
+  ['How many tickets (groups of 6)', '몇 장 살까요 (6개 번호 조합)', 'Bao nhiêu vé (bộ 6 số)'],
+  ['🎫 {0} of {1} groups ready: the QR codes appear when all of them are complete.', '🎫 {1}조합 중 {0}개 준비됨: 모두 완성되면 QR 코드가 나타납니다.', '🎫 {0}/{1} bộ đã xong: mã QR hiện khi tất cả đều xong.'],
+  ['🎫 My QR codes', '🎫 내 QR 코드', '🎫 Mã QR của tôi'],
+  ['🎫 My QR is now a tab in Picks.', '🎫 내 QR 탭이 번호 메뉴에 생겼습니다.', '🎫 Đã thêm thẻ QR của tôi vào Chọn số.'],
+  ['🎫 My QR tab hidden.', '🎫 내 QR 탭을 숨겼습니다.', '🎫 Đã ẩn thẻ QR của tôi.'],
+  ['This needs the database update: run supabase/schema.sql again.', '데이터베이스 업데이트가 필요합니다: supabase/schema.sql을 다시 실행하세요.', 'Cần cập nhật cơ sở dữ liệu: chạy lại supabase/schema.sql.'],
+  ['Loading…', '불러오는 중…', 'Đang tải…'],
+
   // ── common phrases and errors
   ['Something went wrong.', '문제가 생겼습니다.', 'Đã có lỗi xảy ra.'],
   ['Remove', '삭제', 'Bỏ'],

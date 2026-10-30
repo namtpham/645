@@ -118,6 +118,10 @@
   </div>
 </nav>
 <div class="timebar"><span id="tb-clock"></span><span id="tb-update"></span></div>
+<div class="nextbar" id="tb-next" data-act="goto-live" title="Time to the next draw (from the last one)">
+  <div class="nb-track"><div class="nb-fill" id="tb-bar"></div></div>
+  <div class="nb-text"><strong id="tb-left"></strong> <span id="tb-what"></span></div>
+</div>
 
 <main>
 
@@ -228,7 +232,9 @@
     <div class="seg picks-sections" id="picks-sections">
       <button type="button" class="seg-btn" data-act="picks-section" data-sec="board">✍️ Picks</button>
       <button type="button" class="seg-btn" data-act="picks-section" data-sec="buy">🛒 Buy</button>
+      <button type="button" class="seg-btn" data-act="picks-section" data-sec="myqr" hidden>🎫 My QR</button>
       <button type="button" class="seg-btn" data-act="picks-section" data-sec="suggest">🎯 Suggestion</button>
+      <button type="button" class="seg-btn" data-act="picks-section" data-sec="stats">📊 Stats</button>
       <button type="button" class="seg-btn" data-act="picks-section" data-sec="sim">🕰️ Simulation</button>
       <button type="button" class="seg-btn" data-act="picks-section" data-sec="live">📺 Live</button>
     </div>
@@ -295,22 +301,6 @@
           </div>
         </div>
         <div id="picks-list"></div>
-      </div>
-      <div class="card" id="stats-card">
-        <div class="card-hd"><div class="card-title">📊 Number statistics</div></div>
-        <div class="stats-controls">
-          <div class="seg" id="stat-range">
-            <button type="button" class="seg-btn" data-act="stat-range" data-n="26">6 months</button>
-            <button type="button" class="seg-btn" data-act="stat-range" data-n="52">1 year</button>
-            <button type="button" class="seg-btn" data-act="stat-range" data-n="104">2 years</button>
-            <button type="button" class="seg-btn" data-act="stat-range" data-n="all">All time</button>
-          </div>
-          <div class="seg" id="stat-sort">
-            <button type="button" class="seg-btn" data-act="stat-sort" data-sort="num">🔢 By number</button>
-            <button type="button" class="seg-btn" data-act="stat-sort" data-sort="freq">📶 By frequency</button>
-          </div>
-        </div>
-        <div id="picks-grid"></div>
       </div>
       <div class="card">
         <div class="card-hd"><div class="card-title">🧪 Backtest</div></div>
@@ -389,6 +379,50 @@
           <div id="live-sugg"></div>
         </div>
       </div>
+    </section>
+    <section class="picks-sec" id="pk-stats" hidden>
+      <div class="card" id="stats-card">
+        <div class="card-hd"><div class="card-title">📊 Number statistics</div></div>
+        <div class="stats-controls">
+          <div class="seg" id="stat-range">
+            <button type="button" class="seg-btn" data-act="stat-range" data-n="26">6 months</button>
+            <button type="button" class="seg-btn" data-act="stat-range" data-n="52">1 year</button>
+            <button type="button" class="seg-btn" data-act="stat-range" data-n="104">2 years</button>
+            <button type="button" class="seg-btn" data-act="stat-range" data-n="all">All time</button>
+          </div>
+          <div class="seg" id="stat-sort">
+            <button type="button" class="seg-btn" data-act="stat-sort" data-sort="num">🔢 By number</button>
+            <button type="button" class="seg-btn" data-act="stat-sort" data-sort="freq">📶 By frequency</button>
+          </div>
+        </div>
+        <div id="picks-grid"></div>
+      </div>
+    </section>
+    <section class="picks-sec" id="pk-myqr" hidden>
+      <div class="card" id="myqr-card">
+        <div class="card-hd">
+          <div class="card-title">🎫 My QR</div>
+          <span class="fhelp" id="myqr-for"></span>
+        </div>
+        <p class="fhelp" style="margin:-6px 0 12px">Numbers for tickets of your own, not the group's. Only you can see them. When every group is complete,
+          the QR codes to show at the shop appear below.</p>
+        <div class="fgrp">
+          <label class="flbl" for="myqr-x">How many tickets (groups of 6)</label>
+          <div class="sim-x-row">
+            <input type="number" class="finp mono" id="myqr-x" min="1" max="100" step="1" inputmode="numeric" data-on-input="myqr-x">
+            <div class="quick-row">
+              <button type="button" class="qb" data-act="myqr-x" data-set="5">5</button>
+              <button type="button" class="qb" data-act="myqr-x" data-set="10">10</button>
+              <button type="button" class="qb" data-act="myqr-x" data-set="15">15</button>
+              <button type="button" class="qb" data-act="myqr-x" data-set="20">20</button>
+              <button type="button" class="qb qb-minus" data-act="myqr-x" data-add="-1">−1</button>
+              <button type="button" class="qb qb-plus" data-act="myqr-x" data-add="1">+1</button>
+            </div>
+          </div>
+        </div>
+        <div id="myqr-body"></div>
+      </div>
+      <div id="myqr-codes"></div>
     </section>
     <section class="picks-sec" id="pk-sim" hidden>
       <div class="card" id="sim-card">
@@ -500,6 +534,7 @@
         <div class="stack">
           <div class="fgrp"><label class="flbl">Username</label><input class="finp" id="me-username" disabled></div>
           <div class="fgrp"><label class="flbl" for="me-name">Display name</label><input class="finp" id="me-name" maxlength="40"></div>
+          <label class="lock-toggle"><input type="checkbox" id="me-myqr" data-on-input="me-myqr"> <span><strong>🎫 My QR tab in Picks</strong><small>Pick numbers and make QR codes for tickets of your own (only you see them)</small></span></label>
           <div class="fgrp"><label class="flbl" for="me-lang">Language</label>
             <select class="finp" id="me-lang" data-on-input="lang" data-no-i18n>
               <option value="en">English</option><option value="ko">한국어 (Korean)</option><option value="vi">Tiếng Việt (Vietnamese)</option>
