@@ -124,6 +124,9 @@ with an invitation key from the admin.
     numbers handy as a backup.
   - A tool that compared our codes with another QR maker's (LottoMate) confirmed they match; it is
     switched off but kept, commented out, in `index.html`, `app.js` and `style.css`.
+- **🍀 Who picked lucky numbers** (📺 Live): every number in our complete groups, credited to the
+  member (or the 🤖 engine) who picked it: how many came out, the rate, and luck compared with chance
+  (6 in 45), for the draw being followed (tapped or official numbers) and for all draws so far.
 - **📺 Live** (Picks tab): while watching the draw, tap each number as it comes out (the 7th
   is the bonus). The taps are shared: every member sees the same numbers in real time and anyone
   can tap (needs the database update: run `supabase/schema.sql` again, which adds `live_picks`;
@@ -141,7 +144,8 @@ with an invitation key from the admin.
     the profit. 4등/5등 are fixed amounts. 1등–3등 use that draw's real prize when dhlottery's
     data has it; otherwise a typical amount marked ≈ is used.
 - **Languages**: English, 한국어 and Tiếng Việt (Settings → Language, or the 🌐 menu on the sign-in
-  page; first visit follows the phone's language). Dates follow the language too. The app is
+  page; first visit follows the phone's language). The choice is saved on the account, so every
+  device of that member opens in it. Dates follow the language too. The app is
   written in English and `web/i18n.js` translates the page as it is drawn, using the table in
   `web/i18n-dict.js` (add a row there to translate something new; anything missing stays English).
 - **Notifications** (Settings → 🔔 Notifications, per device): the Saturday result as soon as it
@@ -161,7 +165,10 @@ with an invitation key from the admin.
   the fingerprint / face unlock / screen lock on Android, when it opens and when you come back
   after being away (every time, 1, 5 or 30 minutes). It uses the phone's own passkey support
   (WebAuthn); nothing leaves the phone. It keeps people who pick up your unlocked phone out of
-  645; turning it off needs the owner too, and **Sign out instead** is always there.
+  645; turning it off needs the owner too, and **Sign out instead** is always there. The phone is
+  asked straight away when the lock shows, so where the browser allows it no tap is needed. (A
+  website can't call Face ID the way the Photos app does for the Hidden album; this passkey check
+  is the only way browsers offer.)
 - **Screen stays on** while a QR code is shown full screen and while 📺 Live is open.
 - **Light on data**: a live update reloads only the table that changed, the draw history is
   downloaded once per visit, and photo links are kept for a day so the browser shows photos
@@ -468,5 +475,5 @@ python3 -m http.server -d web 8000
 `supabase/schema.sql` is safe to run again. It keeps existing data and re-applies
 functions, policies and grants. Run it again after updates that add tables, for example
 **Our numbers** (tables `pick_plans` and `group_picks`), shared **Live** picks (`live_picks`) and
-**Who buys** (column `pick_plans.buyers`), photo deletion with a reason (`delete_ticket`), and
-notifications (tables `push_subs` and `push_keys`).
+**Who buys** (column `pick_plans.buyers`), photo deletion with a reason (`delete_ticket`),
+notifications (tables `push_subs` and `push_keys`) and the account's language (`profiles.lang`).

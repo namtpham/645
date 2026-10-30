@@ -299,28 +299,33 @@ async function canLock() {
   catch { return false; }
 }
 function showLock(on) {
+  const was = !$('lock-view').hidden;
   document.body.classList.toggle('locked', on);
   $('lock-view').hidden = !on;
   $('lock-err').hidden = true;
+  if (on && !was && document.visibilityState === 'visible') setTimeout(() => unlock(true), 50);
 }
 /** Ask the phone to recognise its owner; true when it did. */
 async function verifyOwner() {
   const cred = await navigator.credentials.get({ publicKey: {
     challenge: crypto.getRandomValues(new Uint8Array(32)),
     allowCredentials: [{ type: 'public-key', id: unb64url(_lock.cred), transports: ['internal'] }],
-    userVerification: 'required', timeout: 60000,
+    userVerification: 'required', timeout: 60000, hints: ['client-device'],
   } });
   return !!cred;
 }
-async function unlock() {
+/** `auto`: asked straight away when the lock shows (no tap needed where the browser allows it). */
+async function unlock(auto = false) {
+  if (_unlocking) return;
+  _unlocking = true;
   $('lock-btn').disabled = true;
   try {
     if (await verifyOwner()) showLock(false);
   } catch {
-    $('lock-err').textContent = 'Not recognised, or cancelled. Try again.';
-    $('lock-err').hidden = false;
-  } finally { $('lock-btn').disabled = false; }
+    if (!auto) { $('lock-err').textContent = 'Not recognised, or cancelled. Try again.'; $('lock-err').hidden = false; }
+  } finally { $('lock-btn').disabled = false; _unlocking = false; }
 }
+let _unlocking = false;
 async function turnLockOn() {
   if (!(await canLock())) { toast('This device has no Face ID / fingerprint unlock the browser can use.', 'err'); return renderLock(); }
   try {
@@ -330,9 +335,9 @@ async function turnLockOn() {
       user: { id: lockBytes(S.me.id), name: S.me.username, displayName: S.me.display_name },
       pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }],
       authenticatorSelection: { authenticatorAttachment: 'platform', userVerification: 'required', residentKey: 'discouraged' },
-      timeout: 60000,
+      timeout: 60000, hints: ['client-device'],
     } });
-    _lock = { cred: b64u(cred.rawId), user: S.me.id, after: +$('lock-after').value || 60 };
+    _lock = { cred: b64u(cred.rawId), user: S.me.id, after: +$('lock-after').value || 300 };
     saveLock();
     toast('App lock is on: 645 asks for Face ID / your fingerprint on this device.', 'ok');
   } catch { toast('App lock was not turned on (cancelled or not allowed).', 'err'); }
@@ -351,7 +356,7 @@ async function renderLock() {
   const ok = await canLock();
   $('lock-on').checked = !!_lock;
   $('lock-on').disabled = !ok && !_lock;
-  $('lock-after').value = String(_lock?.after ?? 60);
+  $('lock-after').value = String(_lock?.after ?? 300);
   $('lock-after').disabled = !_lock;
   $('lock-what').textContent = /iPhone|iPad|Mac/.test(navigator.userAgent) ? 'Face ID or Touch ID' : 'Fingerprint, face unlock or the screen lock';
   $('lock-status').textContent = !ok && !_lock ? 'This browser or device has no Face ID / fingerprint unlock that websites can use.'
@@ -487,6 +492,7 @@ async function enterApp() {
   startRealtime();
   goTab(S.tab);
   openFromHash();
+  syncLang();
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -500,7 +506,7 @@ const TABLE_LOADERS = {
     S.weeks = rows.map((w) => ({ ...w, pool_used: +w.pool_used, prize_won: +w.prize_won }));
     S.ledger = replay(S.weeks);
   },
-  tickets: async () => { S.tickets = sortTickets(must(await S.sb.from('tickets').select('*').order('draw_date', { ascending: false }).order('created_at')) || []); },
+  tickets: async () => { S.tickets = sortTickets((must(await S.sb.from('tickets').select('*').order('draw_date', { ascending: false }).order('created_at')) || []).map(cleanTicket)); },
   draws: async () => { S.draws = Object.fromEntries((await loadDraws()).map((d) => [d.round, d])); S.drawsLoaded = true; },
 };
 function must(r) { if (r.error) throw r.error; return r.data; }
@@ -550,7 +556,7 @@ async function loadAll({ draws = true } = {}) {
   S.profiles = pr || [];
   S.investors = iv || [];
   S.weeks = (wk || []).map((w) => ({ ...w, pool_used: +w.pool_used, prize_won: +w.prize_won }));
-  S.tickets = sortTickets(tk || []);
+  S.tickets = sortTickets((tk || []).map(cleanTicket));
   S.ledger = replay(S.weeks);
   await Promise.all([loadBoard(), loadLive()]).catch(console.error);
   if (S.lbTicket) {
@@ -776,7 +782,8 @@ function renderDashboard() {
 
   const timeline = weekTimeline().filter((r) => r.date < currentDraw());
   const played = timeline.filter((r) => r.weeks.length).length;
-  const wins = weeks.filter((w) => +w.prize_won > 0).length;
+  const finished = weeks.filter((w) => w.result_date < currentDraw());
+  const wins = finished.filter((w) => +w.prize_won > 0).length;
   const net = allPrizes - totalInv;
   const tile = (cls, label, id, value, sub, subId = '') => `<div class="stat-card ${cls}"><div class="stat-label">${label}</div>
     <div class="stat-value" id="${id}">${value}</div><div class="stat-sub" ${subId ? `id="${subId}"` : ''}>${sub}</div></div>`;
@@ -785,7 +792,7 @@ function renderDashboard() {
     tile('bl', 'Total invested', 's-inv', esc(money(totalInv)), `${esc(money(totalInv / Math.max(1, groupDays())))} per day since ${esc(fmtD(groupStart()))}`, 's-inv-sub'),
     tile('em', 'Paid out', 's-won', esc(money(paidOut)), 'prizes shared to investors'),
     tile(net >= 0 ? 'em' : 'rd', 'Group result', 's-net', `${net >= 0 ? '+' : ''}${esc(money(net))}`, `${esc(money(allPrizes))} won in total`),
-    tile('pu', 'Win rate', 's-rate', weeks.length ? `${Math.round(wins / weeks.length * 100)}%` : '—', `${wins} of ${weeks.length} draws won something`),
+    tile('pu', 'Win rate', 's-rate', finished.length ? `${Math.round(wins / finished.length * 100)}%` : '—', `${wins} of ${finished.length} draws won something`),
     tile('', 'Draws played', 's-wks', `${played}`, `of ${timeline.length} since ${esc(fmtD(groupStart()))} · ${S.tickets.length} photos`, 's-tix'),
   ].join('');
 
@@ -845,7 +852,7 @@ function renderDashChart() {
   const data = weeks.map((w) => (run += (+w.prize_won || 0) - sum(Object.values(w.investments || {}))));
   const opts = chartOpts({ legend: false, timeline: true });
   opts.aspectRatio = window.innerWidth < 640 ? 1.4 : 4;
-  opts.plugins.tooltip.callbacks.title = (items) => `${drawLabel(weeks[items[0].dataIndex].result_date)} · ${fmtD(weeks[items[0].dataIndex].result_date)}`;
+  opts.plugins.tooltip.callbacks.title = (items) => (items.length ? `${drawLabel(weeks[items[0].dataIndex].result_date)} · ${fmtD(weeks[items[0].dataIndex].result_date)}` : '');
   opts.scales.y.grid.color = (c) => (c.tick.value === 0 ? INK.zero : INK.grid);
   killChart('dash');
   S.charts.dash = new Chart($('ch-dash'), { type: 'line', data: { labels: weeks.map((w) => fmtShort(w.result_date)),
@@ -1124,6 +1131,14 @@ function loadZXing() {
   return _zx;
 }
 
+/** A real game: 6 different numbers from 1 to 45 (a ticket's QR also lists its empty slots as zeros). */
+const isGame = (g) => Array.isArray(g?.nums) && g.nums.length === 6 && new Set(g.nums).size === 6 && g.nums.every((n) => n >= 1 && n <= 45);
+/** Saved QR data from before empty slots were left out: drop them when reading. */
+function cleanTicket(t) {
+  if (!Array.isArray(t.qr_data)) return t;
+  return { ...t, qr_data: t.qr_data.map((it) => (Array.isArray(it.games) && !it.games.every(isGame) ? { ...it, games: it.games.filter(isGame) } : it)) };
+}
+
 function parseLottoQR(text) {
   let u;
   try { u = new URL(String(text).trim()); } catch { return null; }
@@ -1131,7 +1146,7 @@ function parseLottoQR(text) {
   const v = u.searchParams.get('v') || '';
   const m = v.match(/^(\d{3,4})/);
   const games = [...v.slice(m ? m[1].length : 0).matchAll(/([a-z])(\d{12})/gi)]
-    .map(([, mode, d]) => ({ mode: mode.toLowerCase(), nums: d.match(/\d\d/g).map(Number) }));
+    .map(([, mode, d]) => ({ mode: mode.toLowerCase(), nums: d.match(/\d\d/g).map(Number) })).filter(isGame);
   return { url: u.href, round: m ? +m[1] : null, games, status: 'pending', prize: null, manual: false, checked_at: null, message: null };
 }
 
@@ -2654,6 +2669,7 @@ function renderLive() {
 
   const ours = ourTickets(round);
   if (!ours) { $('live-ours').innerHTML = '<p class="fhelp">Loading our tickets…</p>'; $('live-sugg').innerHTML = ''; return; }
+  renderLuck(round, liveBoard(round), main, bonus);
   const x = ours.list.length || 5;
   $('live-ours').innerHTML = (ours.list.length ? liveColumn(ours.list, main, bonus, final)
     : '<p class="fhelp">No complete groups or ticket photos for this draw yet.</p>')
@@ -2664,6 +2680,66 @@ function renderLive() {
   if (key !== _liveSuggKey) { _liveSugg = suggestSets(hist, { seed: round * 7919, count: x }).picks; _liveSuggKey = key; }
   $('live-sugg').innerHTML = `<p class="fhelp" style="margin-bottom:6px">The system's top ${x}${ours.list.length ? ', as many as our tickets' : ''}.</p>`
     + liveColumn(_liveSugg.map((p, i) => ({ label: `Suggestion ${i + 1}`, nums: p.nums })), main, bonus, final);
+}
+
+// ── Who picked lucky numbers: each picked number of our complete groups, credited to who picked it
+const LUCK_CHANCE = 6 / 45;
+let _luckAll = null, _luckAsked = false;
+
+/** picks: [{ round, grp, num, picked_by, by_engine }]; draws: round → { numbers, bonus } (only rounds to count). */
+function luckTable(picks, draws) {
+  const groups = new Map();
+  for (const p of picks) {
+    if (!draws[p.round]) continue;
+    const k = `${p.round}-${p.grp}`;
+    (groups.get(k) || groups.set(k, []).get(k)).push(p);
+  }
+  const by = new Map();
+  for (const ps of groups.values()) {
+    if (ps.length !== 6) continue;   // only groups that became tickets
+    for (const p of ps) {
+      const who = p.by_engine ? 'engine' : p.picked_by, d = draws[p.round];
+      const r = by.get(who) || by.set(who, { who, picked: 0, hits: 0, bonus: 0, rounds: new Set() }).get(who);
+      r.picked++;
+      r.rounds.add(p.round);
+      if (d.numbers.includes(p.num)) r.hits++;
+      else if (p.num === d.bonus) r.bonus++;
+    }
+  }
+  return [...by.values()].map((r) => ({ ...r, rate: r.picked ? r.hits / r.picked : 0, luck: r.picked ? r.hits / (r.picked * LUCK_CHANCE) : 0 }))
+    .sort((a, b) => b.hits - a.hits || b.rate - a.rate);
+}
+
+function luckHtml(rows, title) {
+  if (!rows.length) return `<p class="fhelp">${esc(title)}: no complete groups yet.</p>`;
+  const tot = rows.reduce((a, r) => ({ picked: a.picked + r.picked, hits: a.hits + r.hits }), { picked: 0, hits: 0 });
+  const name = (w) => (w === 'engine' ? '🤖 engine' : esc(memberName(w)) + (w === S.me.id ? ' (you)' : ''));
+  const sw = (w) => `<span class="sw" style="--c:${w === 'engine' ? ENGINE_COLOR : memberColor(w)}"></span>`;
+  return `<div class="luck-title">${esc(title)}</div>
+    <table class="stat-tbl luck-tbl"><thead><tr><th>Who</th><th>Numbers</th><th>Came out</th><th>Rate</th><th>Luck</th></tr></thead><tbody>
+    ${rows.map((r) => `<tr><td>${sw(r.who)}${name(r.who)}</td><td class="mono">${r.picked}</td>
+      <td class="mono">${r.hits}${r.bonus ? ` <small>+${r.bonus} B</small>` : ''}</td><td class="mono">${Math.round(r.rate * 100)}%</td>
+      <td class="mono ${r.luck >= 1 ? 'lucky' : ''}">×${r.luck.toFixed(1)}</td></tr>`).join('')}
+    <tr class="luck-sum"><td>All of us</td><td class="mono">${tot.picked}</td><td class="mono">${tot.hits}</td><td class="mono">${tot.picked ? Math.round(tot.hits / tot.picked * 100) : 0}%</td>
+      <td class="mono">×${tot.picked ? (tot.hits / (tot.picked * LUCK_CHANCE)).toFixed(1) : '0.0'}</td></tr>
+    </tbody></table>`;
+}
+
+/** This draw (official or tapped live numbers) and every finished draw we picked numbers for. */
+function renderLuck(round, B, main, bonus) {
+  if (!$('luck-body')) return;
+  const now = main.length ? luckHtml(luckTable(B.picks.map((p) => ({ ...p, round })), { [round]: { numbers: main, bonus } }),
+    `Draw #${round}${S.draws[round] ? '' : ' (numbers tapped so far)'}`) : '<p class="fhelp">This draw: waiting for the first number.</p>';
+  if (!_luckAll && !_luckAsked) {
+    _luckAsked = true;
+    S.sb.from('group_picks').select('round, grp, num, picked_by, by_engine').then(({ data }) => {
+      _luckAll = data || [];
+      if (S.tab === 'picks' && _picksSec === 'live') renderLive();
+    }, () => { _luckAsked = false; });
+  }
+  const finished = Object.fromEntries(Object.values(S.draws).map((d) => [d.round, d]));
+  const all = _luckAll ? luckHtml(luckTable(_luckAll, finished), `All draws so far (${new Set(_luckAll.filter((p) => finished[p.round]).map((p) => p.round)).size})`) : '';
+  $('luck-body').innerHTML = `<div class="luck-cols"><div>${now}</div><div>${all}</div></div>`;
 }
 
 // Countdown and auto-reset of a test run
@@ -3125,16 +3201,18 @@ function chartData() {
 function renderKpis(d) {
   const { weeks } = d;
   const invested = d.cumInvested.at(-1) || 0, won = d.cumWon.at(-1) || 0;
-  const wins = weeks.filter((w) => +w.prize_won > 0);
+  // only draws whose results are out: this week's entry has no prize yet, which is not a loss
+  const done = weeks.filter((w) => w.result_date < currentDraw());
+  const wins = done.filter((w) => +w.prize_won > 0);
   const biggest = wins.reduce((b, w) => (!b || +w.prize_won > +b.prize_won ? w : b), null);
   let streak = 0, longest = 0, cur = 0;
-  for (const w of weeks) { cur = +w.prize_won > 0 ? 0 : cur + 1; longest = Math.max(longest, cur); }
+  for (const w of done) { cur = +w.prize_won > 0 ? 0 : cur + 1; longest = Math.max(longest, cur); }
   streak = cur;
   const tile = (label, value, sub, cls = '') => `<div class="stat-card ${cls}"><div class="stat-label">${label}</div>
     <div class="stat-value">${value}</div><div class="stat-sub">${sub}</div></div>`;
   $('kpi-grid').innerHTML = weeks.length ? [
     tile('Return rate', invested ? `${Math.round(won / invested * 100)}%` : '—', `${esc(money(won))} won from ${esc(money(invested))}`, 'em'),
-    tile('Win rate', `${Math.round(wins.length / weeks.length * 100)}%`, `${wins.length} of ${weeks.length} draws won something`, 'bl'),
+    tile('Win rate', done.length ? `${Math.round(wins.length / done.length * 100)}%` : '—', `${wins.length} of ${done.length} draws won something`, 'bl'),
     tile('Biggest prize', biggest ? esc(money(biggest.prize_won)) : '—', biggest ? `${esc(fmtD(biggest.result_date))} ${drawLabel(biggest.result_date)}` : 'no wins yet'),
     tile('Avg. per draw', esc(money(invested / weeks.length)), 'fresh money invested', 'pu'),
     tile('Group per day', esc(money(invested / Math.max(1, groupDays()))), `${groupDays()} days since ${esc(fmtD(groupStart()))}`, 'bl'),
@@ -3224,7 +3302,8 @@ function renderCharts() {
   if (!Chart.registry.plugins.get('endLabels')) Chart.register(endLabelsPlugin);
   if (!Chart.registry.plugins.get('i18n')) Chart.register(chartI18n);
   const d = chartData(), { weeks, labels, stats } = d, investors = S.investors;
-  const tl = (opts, titles = d.titles) => { opts.plugins.tooltip.callbacks.title = (items) => titles[items[0].dataIndex]; return opts; };
+  // a hovered column whose values are all filtered out has no items: an error here stops every chart from responding
+  const tl = (opts, titles = d.titles) => { opts.plugins.tooltip.callbacks.title = (items) => (items.length ? titles[items[0].dataIndex] ?? '' : ''); return opts; };
   renderKpis(d);
   show('charts-empty', !weeks.length);
   document.querySelector('#tab-charts .charts-grid').hidden = !weeks.length;
@@ -3406,6 +3485,21 @@ function maybeRemind() {
   if (now < at - 25 * 60e3 || now >= at) return;
   _remindAsked = drawNo(d);
   S.sb.functions.invoke('check-tickets', { body: { push: 'remind' }, region: 'ap-northeast-2' }).catch(() => {});
+}
+
+// The language follows the account: chosen on one device, used on all of them (when the app opens).
+async function changeLang(lang) {
+  if (S.me) await S.sb.from('profiles').update({ lang }).eq('id', S.me.id).then(() => {}, () => {});
+  else try { localStorage.setItem('645-lang-pending', '1'); } catch { /* private mode */ }   // chosen before signing in
+  window.I18N?.setLang(lang);
+}
+function syncLang() {
+  let pending = false;
+  try { pending = !!localStorage.getItem('645-lang-pending'); localStorage.removeItem('645-lang-pending'); } catch { /* private mode */ }
+  if (!('lang' in (S.me || {}))) return;                       // database not updated yet
+  if (pending || !S.me.lang) {
+    if (S.me.lang !== LANG) S.sb.from('profiles').update({ lang: LANG }).eq('id', S.me.id).then(() => {}, () => {});
+  } else if (S.me.lang !== LANG) window.I18N?.setLang(S.me.lang);   // reloads in the account's language
 }
 
 /** A notification (or a link) can open a place in the app: #dashboard, #tickets, #picks-live, … */
@@ -3861,7 +3955,7 @@ const INPUTS = {
   'push-extra': (el, e) => { if (e.type === 'change') setPushMode(); },
   'lock-on': (el, e) => { if (e.type === 'change') (el.checked ? turnLockOn() : turnLockOff()); },
   'lock-after': (el, e) => { if (e.type === 'change' && _lock) { _lock.after = +el.value; saveLock(); renderLock(); } },
-  lang: (el, e) => { if (e.type === 'change') window.I18N?.setLang(el.value); },
+  lang: (el, e) => { if (e.type === 'change') changeLang(el.value); },
   'del-reason': (el, e) => {
     if (e.type !== 'change') return;
     $('del-custom').hidden = el.value !== 'custom';

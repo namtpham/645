@@ -896,6 +896,15 @@ body.qr-open { overflow: hidden; }
 /* @media (max-width: 760px) { .buy-check { grid-template-columns: 1fr; } .chk-res { grid-template-columns: 1fr; } .chk-res .qr-btn { max-width: 220px; } } */
 
 /* Live results */
+.luck-cols { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+.luck-title { font-size: 12px; font-weight: 600; color: var(--dim); margin-bottom: 6px; }
+.luck-tbl td:first-child { white-space: nowrap; }
+.luck-tbl th:not(:first-child), .luck-tbl td:not(:first-child) { text-align: right; }
+.luck-tbl .sw { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: var(--c); margin-right: 6px; }
+.luck-tbl .lucky { color: #34d399; font-weight: 600; }
+.luck-tbl small { color: var(--gold); }
+.luck-sum td { font-weight: 600; border-top: 1px solid var(--border2); }
+@media (max-width: 760px) { .luck-cols { grid-template-columns: 1fr; } }
 .live-mode { font-size: 12px; margin-bottom: 10px; padding: 6px 10px; border-radius: 8px; display: inline-block; }
 .live-mode.on { color: #fca5a5; background: rgba(239,68,68,.1); }
 .live-mode.test { color: var(--dim); background: rgba(255,255,255,.04); }

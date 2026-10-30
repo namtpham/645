@@ -133,6 +133,7 @@ create table if not exists public.draws (
   fetched_at timestamptz not null default now()
 );
 alter table public.draws add column if not exists prizes jsonb;
+alter table public.profiles add column if not exists lang text check (lang in ('en', 'ko', 'vi'));   -- same language on every device
 alter table public.tickets add column if not exists notified_at timestamptz;   -- "new ticket photos" sent
 alter table public.draws add column if not exists raw jsonb;
 
@@ -595,7 +596,7 @@ grant update (qr_data, result)       on public.tickets   to authenticated;
 grant select, update                 on public.settings  to authenticated;
 grant select, update, delete         on public.invites   to authenticated;
 grant select                         on public.profiles, public.audit_log, public.draws to authenticated;
-grant update (display_name)          on public.profiles  to authenticated;
+grant update (display_name, lang)    on public.profiles  to authenticated;
 grant select, insert, update         on public.pick_plans  to authenticated;
 grant select, insert, delete         on public.group_picks to authenticated;
 grant select, insert, update         on public.live_picks  to authenticated;

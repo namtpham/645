@@ -211,7 +211,11 @@ async function readResultPage(url: string): Promise<{ status: string; prize: num
 }
 
 /** Combine the official page verdict with our own comparison against the winning numbers. */
+/** A real game: 6 different numbers from 1 to 45 (empty slots on a ticket's QR are all zeros). */
+const isGame = (g: Game) => Array.isArray(g?.nums) && g.nums.length === 6 && new Set(g.nums).size === 6 && g.nums.every((n) => n >= 1 && n <= 45);
+
 async function checkItem(it: QrItem, ticketRound: number | null, cache: Map<number, Draw | null>) {
+  if (it.games) it.games = it.games.filter(isGame);   // older scans kept the empty slots
   const round = it.round ?? ticketRound;
   const draw = round ? await getDraw(round, cache) : null;
   if (draw && it.games?.length) for (const g of it.games) Object.assign(g, rankGame(g.nums, draw));
@@ -373,7 +377,7 @@ async function gamesFor(round: number): Promise<number[][]> {
       const r = it.round ?? (t.draw_date === date ? round : null);
       if (r !== round || seen.has(it.url) || it.status === 'invalid') continue;
       seen.add(it.url);
-      for (const g of it.games ?? []) games.push(g.nums);
+      for (const g of (it.games ?? []).filter(isGame)) games.push(g.nums);
     }
   }
   if (games.length) return games;
@@ -420,7 +424,7 @@ async function sendTicketNews(memberId: string, ids: string[]) {
   const rounds = new Set<number>();
   for (const p of photos) {
     const qr = (Array.isArray(p.qr_data) ? p.qr_data : []) as QrItem[];
-    const n = qr.reduce((a, it) => a + (it.games?.length ?? 0), 0);
+    const n = qr.reduce((a, it) => a + (it.games ?? []).filter(isGame).length, 0);
     games += n || (p.game_count ?? 0);
     rounds.add(qr.find((it) => it.round)?.round ?? roundOf(p.draw_date));
   }

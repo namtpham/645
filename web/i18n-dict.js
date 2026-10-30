@@ -820,6 +820,24 @@ window.I18N_DICT = [
   ['App lock is off on this device.', '이 기기에서 앱 잠금을 껐습니다.', 'Đã tắt khóa trên thiết bị này.'],
   ['This device has no Face ID / fingerprint unlock the browser can use.', '이 기기에는 브라우저가 쓸 수 있는 Face ID / 지문 잠금 해제가 없습니다.', 'Thiết bị này không có Face ID / vân tay mà trình duyệt dùng được.'],
 
+  // ── lucky pickers
+  ['🍀 Who picked lucky numbers', '🍀 누가 행운의 번호를 골랐나', '🍀 Ai chọn số may mắn'],
+  ['Every number in our complete groups, by who picked it: how many came out. By chance alone about 6 in 45 (13%) of any picks come out; "luck" compares with that.',
+    '완성된 조합의 모든 번호를 고른 사람별로 묶어, 몇 개가 나왔는지 봅니다. 운만으로는 고른 번호의 약 45분의 6(13%)이 나오며, "행운"은 그것과 비교한 값입니다.',
+    'Mọi số trong các bộ đã xong, theo người chọn: có bao nhiêu số đã ra. Chỉ do may rủi thì khoảng 6/45 (13%) số được chọn sẽ ra; "may mắn" so với mức đó.'],
+  ['Who', '누가', 'Ai'],
+  ['Numbers', '번호', 'Số'],
+  ['Came out', '나옴', 'Đã ra'],
+  ['Rate', '비율', 'Tỷ lệ'],
+  ['Luck', '행운', 'May mắn'],
+  ['All of us', '우리 모두', 'Cả nhóm'],
+  ['Draw #{0}', '제{0}회', 'Kỳ #{0}'],
+  ['Draw #{0} (numbers tapped so far)', '제{0}회 (지금까지 누른 번호)', 'Kỳ #{0} (các số đã chạm)'],
+  ['All draws so far ({0})', '지금까지 전체 회차 ({0})', 'Tất cả các kỳ đến nay ({0})'],
+  ['This draw: waiting for the first number.', '이번 회차: 첫 번호를 기다리는 중.', 'Kỳ này: đang chờ số đầu tiên.'],
+  ['{*}: no complete groups yet.', '{*1}: 아직 완성된 조합이 없습니다.', '{*1}: chưa có bộ nào xong.'],
+  ['lang: {*}', '언어: {*1}', 'ngôn ngữ: {*1}'],
+
   // ── common phrases and errors
   ['Something went wrong.', '문제가 생겼습니다.', 'Đã có lỗi xảy ra.'],
   ['Remove', '삭제', 'Bỏ'],
