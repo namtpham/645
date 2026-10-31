@@ -36,9 +36,18 @@ with an invitation key from the admin.
 - **Tickets**: upload one or many photos per draw (each photo may show several tickets).
   Photos are resized to keep QR codes sharp and stamped with the upload time by the
   server. Each one shows **"✓ before draw"** if it was uploaded before 20:35 KST on draw day.
+- **💬 Chat** (tab): every member can write; links open in a new tab. A row of quick emoji sends
+  one with a single tap, and 😊 opens a full emoji picker. Tap ☺ next to a message to react
+  (👍 ❤️ 😂 😮 😢 🎉 🍀, or ➕ for any emoji); tap a reaction again to take it back. Authors (and
+  admins) can delete a message. Unread messages show a red count on the tab. **🤖 645 bot** posts
+  every draw's result (winning numbers, our 등수 and prize after tax) once, in each member's
+  language. Tables `chat_messages` and `chat_reactions`; the latest 60 messages load, older ones
+  on request.
 - **Investors**: per-person invested / won / net P/L, plus a leaderboard. Each investor has a
   **start date** (default 17 May 2025) and an **end date** (empty = still in). Add/Edit Week only
-  lists investors whose dates cover that week. Click an investor to see **every draw** in their
+  lists investors whose dates cover that week. An investor can have a **link to send them money**
+  (their KakaoPay 송금 link, or any https link): a **💛 Send money** button then shows on their
+  card. Click an investor to see **every draw** in their
   period, laid out like the Weeks list. Draws they skipped or the group didn't play are marked,
   and weeks where they have money outside their dates are highlighted, so mistakes are easy to
   find. **Per day** is fresh money ÷ days from their start date to today (or their end date),
@@ -70,7 +79,7 @@ with an invitation key from the admin.
 - **Next draw bar** (under the clock): a progress bar from the last draw to the next one; in the
   last 24 hours it shows a highlighted countdown (hh:mm:ss), and 🔴 while the draw is on. Tap it
   for 📺 Live. The section you last opened is remembered on that device. From 12 hours before the
-  draw until the results, a **▶ Live** YouTube button sits on the bar (every tab) and opens
+  draw until the results, a big red YouTube banner shows under the bar on every tab and opens
   동행복권's live stream.
 - **Our numbers** (✍️ Picks): we pick the coming draw's numbers together.
   - Choose how many groups of 6 we play (quick buttons 5–30, ±1).
@@ -180,8 +189,9 @@ with an invitation key from the admin.
   Two more, each on or off per device: **📺 Before the draw** (Saturday about 20:30 KST: "the
   draw starts in x minutes", time to watch it live; sent by the scheduled workflow at 20:17 and
   20:27 KST and by any member's open app from 20:10, each device once) and **🎟️ New ticket
-  photos** (when someone uploads tickets; the uploader isn't told about their own). Tapping a
-  notification opens the right place (Picks → Live, Tickets, Dashboard).
+  photos** (when someone uploads tickets; the uploader isn't told about their own) and **💬 Chat
+  messages** (each message once, to everyone but its author). Tapping a notification opens the
+  right place (Picks → Live, Tickets, Chat, Dashboard).
 - **App lock** (Settings → 🔐 App lock, per device): 645 asks for Face ID / Touch ID on iPhone, or
   the fingerprint / face unlock / screen lock on Android, when it opens and when you come back
   after being away (every time, 1, 5 or 30 minutes). It uses the phone's own passkey support

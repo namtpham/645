@@ -88,6 +88,11 @@ begin
   end if;
 end $$;
 alter table public.investors alter column since set default '2025-05-17';
+-- A link to send this investor money (e.g. their KakaoPay 송금 link), shown on their card.
+alter table public.investors add column if not exists pay_url text;
+alter table public.investors drop constraint if exists investors_pay_url_check;
+alter table public.investors add constraint investors_pay_url_check
+  check (pay_url is null or (pay_url ~ '^https://[^\s<>"]+$' and length(pay_url) <= 500));
 
 create table if not exists public.weeks (
   id          text primary key default substr(md5(gen_random_uuid()::text), 1, 8)
@@ -190,6 +195,7 @@ create table if not exists public.push_subs (
 alter table public.push_subs add column if not exists remind boolean not null default false;
 alter table public.push_subs add column if not exists tickets boolean not null default false;
 alter table public.push_subs add column if not exists last_remind int;
+alter table public.push_subs add column if not exists chat boolean not null default false;   -- new chat messages
 alter table public.push_subs drop constraint if exists push_subs_mode_check;
 alter table public.push_subs add constraint push_subs_mode_check check (mode in ('all', 'win', 'big', 'none'));
 
@@ -218,6 +224,27 @@ create table if not exists public.live_picks (
   bonus      int,
   updated_by uuid references public.profiles (id) on delete set null default auth.uid(),
   updated_at timestamptz not null default now()
+);
+
+-- 💬 Chat: every member reads and writes; the result bot (check-tickets) posts each draw's result once.
+create table if not exists public.chat_messages (
+  id          bigint generated always as identity primary key,
+  author      uuid references public.profiles (id) on delete set null default auth.uid(),   -- null: the bot
+  body        text not null check (length(trim(body)) between 1 and 2000),
+  bot         text,                  -- 'results' for the result bot, null for members
+  bot_key     text unique,           -- e.g. 'result-1248': the bot posts each one once
+  meta        jsonb,                 -- what the bot's message is about (draw, numbers, prizes)
+  notified_at timestamptz,           -- push sent to the members who want chat notifications
+  created_at  timestamptz not null default now()
+);
+create index if not exists chat_messages_created on public.chat_messages (created_at desc);
+
+create table if not exists public.chat_reactions (
+  message_id bigint not null references public.chat_messages (id) on delete cascade,
+  member     uuid not null references public.profiles (id) on delete cascade default auth.uid(),
+  emoji      text not null check (length(emoji) between 1 and 16),
+  created_at timestamptz not null default now(),
+  primary key (message_id, member, emoji)
 );
 
 -- ─── Helpers ────────────────────────────────────────────────────────────────
@@ -537,6 +564,8 @@ alter table public.live_picks  enable row level security;
 alter table public.push_subs   enable row level security;
 alter table public.my_picks    enable row level security;
 alter table public.push_keys   enable row level security;
+alter table public.chat_messages  enable row level security;
+alter table public.chat_reactions enable row level security;
 
 do $$
 declare p record;
@@ -544,7 +573,8 @@ begin
   for p in select policyname, tablename from pg_policies
            where schemaname = 'public'
              and tablename in ('profiles', 'invites', 'settings', 'investors', 'weeks', 'tickets', 'audit_log', 'draws',
-                               'pick_plans', 'group_picks', 'live_picks', 'push_subs', 'push_keys', 'my_picks')
+                               'pick_plans', 'group_picks', 'live_picks', 'push_subs', 'push_keys', 'my_picks',
+                               'chat_messages', 'chat_reactions')
   loop
     execute format('drop policy %I on public.%I', p.policyname, p.tablename);
   end loop;
@@ -602,6 +632,16 @@ create policy "own picks only" on public.my_picks for all to authenticated
   using (member = auth.uid() and public.is_member()) with check (member = auth.uid() and public.is_member());
 create policy "own push devices" on public.push_subs for all to authenticated
   using (member = auth.uid() and public.is_member()) with check (member = auth.uid() and public.is_member());
+create policy "read chat"      on public.chat_messages for select to authenticated using (public.is_member());
+create policy "write in chat"  on public.chat_messages for insert to authenticated
+  with check (public.is_member() and author = auth.uid());
+create policy "delete own messages" on public.chat_messages for delete to authenticated
+  using (public.is_member() and (author = auth.uid() or public.is_admin()));
+create policy "read reactions" on public.chat_reactions for select to authenticated using (public.is_member());
+create policy "react"          on public.chat_reactions for insert to authenticated
+  with check (public.is_member() and member = auth.uid());
+create policy "take back a reaction" on public.chat_reactions for delete to authenticated
+  using (public.is_member() and member = auth.uid());
 create policy "read live picks" on public.live_picks for select to authenticated using (public.is_member());
 create policy "add live picks"  on public.live_picks for insert to authenticated with check (public.is_member());
 create policy "edit live picks" on public.live_picks for update to authenticated
@@ -622,6 +662,9 @@ grant select, insert, delete         on public.group_picks to authenticated;
 grant select, insert, update         on public.live_picks  to authenticated;
 grant select, insert, update, delete on public.push_subs   to authenticated;
 grant select, insert, update, delete on public.my_picks    to authenticated;
+grant select, delete                 on public.chat_messages  to authenticated;
+grant insert (body)                  on public.chat_messages  to authenticated;   -- author = auth.uid() by default; bot columns are the server's
+grant select, insert, delete         on public.chat_reactions to authenticated;
 
 revoke execute on all functions in schema public from public, anon;
 grant execute on function public.is_member(), public.is_admin(), public.normalize_invite(text),
@@ -663,7 +706,8 @@ create policy "645 delete tickets" on storage.objects for delete to authenticate
 do $$
 declare t text;
 begin
-  foreach t in array array['investors', 'weeks', 'tickets', 'settings', 'profiles', 'draws', 'pick_plans', 'group_picks', 'live_picks'] loop
+  foreach t in array array['investors', 'weeks', 'tickets', 'settings', 'profiles', 'draws', 'pick_plans', 'group_picks', 'live_picks',
+                           'chat_messages', 'chat_reactions'] loop
     if not exists (select 1 from pg_publication_tables
                    where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = t) then
       execute format('alter publication supabase_realtime add table public.%I', t);

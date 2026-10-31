@@ -104,6 +104,7 @@
   <div class="nav-logo" id="nav-title">645</div>
   <div class="nav-tabs" id="nav-tabs">
     <div class="nav-tab active" data-act="tab" data-tab="dashboard">📊 Dashboard</div>
+    <div class="nav-tab" data-act="tab" data-tab="chat">💬 Chat<span class="nav-badge" id="chat-badge" hidden></span></div>
     <div class="nav-tab" data-act="tab" data-tab="weeks">📅 Weeks</div>
     <div class="nav-tab" data-act="tab" data-tab="tickets">🎟️ Tickets</div>
     <div class="nav-tab" data-act="tab" data-tab="picks">🔮 Picks</div>
@@ -122,11 +123,12 @@
 <div class="nextbar" id="tb-next" data-act="goto-live" title="Time to the next draw (from the last one)">
   <div class="nb-track"><div class="nb-fill" id="tb-bar"></div></div>
   <div class="nb-text"><strong id="tb-left"></strong> <span id="tb-what"></span></div>
-  <a class="nb-yt" id="tb-yt" data-act="yt" href="https://www.youtube.com/@donghanglottery/streams" target="_blank" rel="noopener" title="Watch the draw live on YouTube (동행복권)" hidden>
-    <svg class="yt-logo" viewBox="0 0 28 20" aria-hidden="true"><path fill="#FF0000" d="M27.4 3.1A3.5 3.5 0 0 0 24.9.6C22.7 0 14 0 14 0S5.3 0 3.1.6A3.5 3.5 0 0 0 .6 3.1C0 5.3 0 10 0 10s0 4.7.6 6.9a3.5 3.5 0 0 0 2.5 2.5C5.3 20 14 20 14 20s8.7 0 10.9-.6a3.5 3.5 0 0 0 2.5-2.5C28 14.7 28 10 28 10s0-4.7-.6-6.9z"/><path fill="#fff" d="M11.2 14.3 18.4 10l-7.2-4.3z"/></svg>
-    <span>Live</span>
-  </a>
 </div>
+<a class="yt-banner" id="tb-yt" data-act="link" href="https://www.youtube.com/@donghanglottery/streams" target="_blank" rel="noopener" hidden>
+  <svg class="yt-logo" viewBox="0 0 28 20" aria-hidden="true"><path fill="#FF0000" d="M27.4 3.1A3.5 3.5 0 0 0 24.9.6C22.7 0 14 0 14 0S5.3 0 3.1.6A3.5 3.5 0 0 0 .6 3.1C0 5.3 0 10 0 10s0 4.7.6 6.9a3.5 3.5 0 0 0 2.5 2.5C5.3 20 14 20 14 20s8.7 0 10.9-.6a3.5 3.5 0 0 0 2.5-2.5C28 14.7 28 10 28 10s0-4.7-.6-6.9z"/><path fill="#fff" d="M11.2 14.3 18.4 10l-7.2-4.3z"/></svg>
+  <span class="yt-text"><strong id="tb-yt-title">Watch the draw live on YouTube</strong><small id="tb-yt-sub">동행복권 · Saturday 20:35 KST</small></span>
+  <span class="yt-go" aria-hidden="true">↗</span>
+</a>
 
 <main>
 
@@ -531,6 +533,24 @@
   </div>
 
   <!-- ═══ ACTIVITY ═════════════════════════════════════════════════════════ -->
+  <div class="tab-pane" id="tab-chat">
+    <div class="card chat-card">
+      <div class="card-hd">
+        <div class="card-title">💬 Chat</div>
+        <span class="fhelp">Everyone in the group · 🤖 the bot posts every draw's result</span>
+      </div>
+      <div class="chat-list" id="chat-list"></div>
+      <div class="chat-quick" id="chat-quick" title="Tap to send"></div>
+      <div class="chat-picker" id="chat-picker" hidden></div>
+      <div class="chat-compose">
+        <button type="button" class="chat-emoji-btn" data-act="chat-emoji" title="Emoji" aria-label="Emoji">😊</button>
+        <textarea class="finp chat-input" id="chat-input" rows="1" maxlength="2000" placeholder="Message" data-on-input="chat-input"></textarea>
+        <button type="button" class="btn btn-primary chat-send" data-act="chat-send" id="chat-send">Send</button>
+      </div>
+    </div>
+    <div class="chat-pop" id="chat-pop" hidden></div>
+  </div>
+
   <div class="tab-pane" id="tab-activity">
     <div class="row-hd">
       <h2 class="sec-title">Activity Log</h2>
@@ -591,6 +611,7 @@
         <div class="push-modes push-extra" id="push-extra">
           <label><input type="checkbox" id="push-remind" data-on-input="push-extra"> <span><strong>📺 Before the draw</strong><small>Saturday about 20:30 KST: the draw starts in a few minutes, time to watch it live</small></span></label>
           <label><input type="checkbox" id="push-tickets" data-on-input="push-extra"> <span><strong>🎟️ New ticket photos</strong><small>When someone uploads the tickets they bought</small></span></label>
+          <label><input type="checkbox" id="push-chat" data-on-input="push-extra"> <span><strong>💬 Chat messages</strong><small>When someone writes in 💬 Chat</small></span></label>
         </div>
         <p class="fhelp" id="push-status"></p>
         <div class="btn-row" style="margin-top:8px">
@@ -774,6 +795,12 @@
       </div>
       <p class="fhelp" style="margin-top:8px">The first and last draw this investor takes part in. Leave the end date
         empty while they are still in. Add/Edit Week only lists investors whose dates cover that week.</p>
+      <div class="fgrp" style="margin-top:14px">
+        <label class="flbl" for="im-pay">💛 Link to send them money (optional)</label>
+        <input type="url" class="finp" id="im-pay" maxlength="500" placeholder="https://qr.kakaopay.com/…" inputmode="url" autocapitalize="off" autocomplete="off" spellcheck="false">
+        <p class="fhelp" style="margin-top:6px">Their KakaoPay link (KakaoPay → 송금 → 송금코드 → share the link), or any https link.
+          A <strong>Send money</strong> button then shows on their card.</p>
+      </div>
     </div>
     <div class="modal-ft">
       <button class="btn btn-secondary" data-act="close-modal" data-id="inv-overlay">Cancel</button>

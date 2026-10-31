@@ -533,6 +533,7 @@ async function enterApp() {
   showView('app');
   navigator.storage?.persist?.().catch(() => {});   // keep the login even when storage is tight
   startRealtime();
+  loadChat();
   goTab(S.tab);
   openFromHash();
   syncLang();
@@ -643,7 +644,8 @@ function startRealtime() {
   if (_channel) return;
   _channel = S.sb.channel('db-changes')
     .on('postgres_changes', { event: '*', schema: 'public' },
-      (p) => (p?.table === 'live_picks' ? scheduleLiveReload() : BOARD_TABLES.includes(p?.table) ? scheduleBoardReload() : scheduleReload(p?.table)))
+      (p) => (p?.table === 'live_picks' ? scheduleLiveReload() : BOARD_TABLES.includes(p?.table) ? scheduleBoardReload()
+        : CHAT_TABLES.includes(p?.table) ? chatChange(p) : scheduleReload(p?.table)))
     .subscribe((status) => $('syncDot').classList.toggle('off', status !== 'SUBSCRIBED'));
 }
 function stopRealtime() {
@@ -682,7 +684,13 @@ function renderCountdown(now = Date.now()) {
   $('tb-bar').style.width = `${pct.toFixed(2)}%`;
   $('tb-left').textContent = drawing ? `🔴 Draw #${drawNo(currentDraw())} is on now` : left < 24 * 3600e3 ? hms(left) : countdown(left);
   $('tb-what').textContent = drawing ? 'results at 20:50 KST' : `until draw #${drawNo(currentDraw())}`;
-  $('tb-yt').hidden = left >= 12 * 3600e3;   // the YouTube stream, from 12 hours before the draw until the results
+  // the YouTube stream, as a banner on every tab from 12 hours before the draw until the results
+  $('tb-yt').hidden = left >= 12 * 3600e3;
+  if (!$('tb-yt').hidden) {
+    const n = drawNo(currentDraw());
+    $('tb-yt-title').textContent = drawing ? `🔴 Draw #${n} is on now: watch it live` : `Watch draw #${n} live on YouTube`;
+    $('tb-yt-sub').textContent = drawing ? '동행복권 YouTube · results at 20:50 KST' : `동행복권 · Saturday 20:35 KST · starts in ${hms(left)}`;
+  }
 }
 setInterval(() => { renderTimebar(); if (S.me) maybeRemind(); }, 1000);
 
@@ -712,6 +720,7 @@ function goTab(name) {
   if (name === 'picks') setTimeout(renderPicks, 30);
   if (name === 'tickets') hydrateImages($('tickets-list'));
   if (name === 'activity') loadActivity();
+  if (name === 'chat') openChat();
   if (name === 'settings' && isAdmin()) loadInvites();
   if (name === 'settings') { renderPush(); renderLock(); }
 }
@@ -3146,6 +3155,7 @@ function renderInvestors() {
         <div class="inv-avatar" style="background:${clr}22;color:${clr};border:2px solid ${clr}44">${esc(ini(inv.nickname))}</div>
         <div class="inv-name">${esc(inv.nickname)} ${state === 'active' ? '' : `<span class="badge bg-gray">${state === 'ended' ? 'ended' : 'not started'}</span>`}</div>
         <div class="inv-id">${esc(fmtPeriod(inv))}</div>
+        ${payButton(inv)}
         ${bad ? `<div class="red fhelp" style="margin-top:6px">⚠️ ${bad} week${bad > 1 ? 's' : ''} outside these dates</div>` : ''}
         <div class="inv-stats">
           <div class="inv-stat"><span class="k">Invested</span><span class="v">${esc(money(s.invested || 0))}</span></div>
@@ -3201,6 +3211,18 @@ function renderLeaderboard(stats = investorStats()) {
   </tr>` : '';
 }
 
+/** "Send money" for an investor who has a payment link (their KakaoPay link, or any https link). */
+const safePayUrl = (u) => (/^https:\/\/[^\s<>"]+$/.test(String(u || '')) ? u : null);
+function payButton(inv) {
+  const url = safePayUrl(inv?.pay_url);
+  if (!url) return '';
+  let host = '';
+  try { host = new URL(url).hostname; } catch { return ''; }
+  const kakao = /(^|\.)kakaopay\.com$|(^|\.)kakao\.com$/.test(host);
+  return `<a class="pay-btn ${kakao ? '' : 'other'}" data-act="link" href="${esc(url)}" target="_blank" rel="noopener noreferrer"
+    title="${esc(url)}">${kakao ? '💛 Send money · KakaoPay' : '💸 Send money'}</a>`;
+}
+
 function openInvModal(id) {
   const inv = id ? S.investors.find((i) => i.id === id) : null;
   $('im-title').textContent = inv ? 'Edit Investor' : 'Add Investor';
@@ -3208,6 +3230,7 @@ function openInvModal(id) {
   $('im-nick').value = inv?.nickname || '';
   $('im-start').value = inv ? invStart(inv) : START_DEFAULT;
   $('im-end').value = inv && invEnd(inv) !== NO_END ? invEnd(inv) : '';
+  $('im-pay').value = inv?.pay_url || '';
   $('inv-overlay').classList.add('open');
   setTimeout(() => $('im-nick').focus(), 80);
 }
@@ -3219,11 +3242,14 @@ async function saveInvestor() {
   const end_date = $('im-end').value || NO_END;
   if (end_date < since) return toast('End date must be on or after the start date.', 'err');
   const row = { nickname, since, end_date };
-  const id = $('im-id').value;
+  const id = $('im-id').value, old = id ? S.investors.find((i) => i.id === id) : null;
+  const pay = $('im-pay').value.trim();
+  if (pay && !safePayUrl(pay)) return toast('The money link must be a web address starting with https://', 'err');
+  if (pay || (old && old.pay_url != null)) row.pay_url = pay || null;   // a database without the column still saves the rest
   const { error } = id
     ? await S.sb.from('investors').update(row).eq('id', id)
     : await S.sb.from('investors').insert(row);
-  if (error) return fail(error);
+  if (error) return fail(/pay_url/.test(error.message) ? new Error('The database needs an update for money links: run supabase/schema.sql again.') : error);
   toast('Investor saved!', 'ok');
   closeModal('inv-overlay');
   await loadAll();
@@ -3312,6 +3338,7 @@ function openInvDetail(id) {
   $('invd-edit').dataset.id = id;
   $('invd-body').innerHTML = `
     <div class="fhelp mb8">Takes part: <strong>${esc(fmtPeriod(inv))}</strong> · ${days} day${days === 1 ? '' : 's'} so far</div>
+    ${payButton(inv) ? `<div class="mb8">${payButton(inv)}</div>` : ''}
     <div class="mini-stats">
       <div><span>Fresh invested</span><strong>${esc(money(tot.fresh))}</strong></div>
       <div><span>Per day (active period)</span><strong>${esc(money(perDay(inv, tot.fresh)))}</strong></div>
@@ -3653,6 +3680,266 @@ function renderCharts() {
   })) }, options: tl(chartOpts({ stacked: true, hideZero: true, timeline: true })) });
 }
 
+// ─── 💬 Chat ──────────────────────────────────────────────────────────────────────────────────
+// Every member reads and writes; reactions are one tap; the result bot (check-tickets) posts each
+// draw's result. Only the latest page is loaded, older messages on request; realtime adds the rest.
+const CHAT_TABLES = ['chat_messages', 'chat_reactions'];
+const CHAT_PAGE = 60;
+const QUICK_SEND = ['👍', '😂', '🎉', '🍀', '🙏', '🤞', '😭', '🔥', '💸', '❤️'];
+const QUICK_REACT = ['👍', '❤️', '😂', '😮', '😢', '🎉', '🍀'];
+const EMOJI_SETS = [
+  ['Smileys', '😀 😃 😄 😁 😆 😅 🤣 😂 🙂 😉 😊 😇 🥰 😍 🤩 😘 😋 😜 🤪 😎 🤓 🧐 🤔 🤫 🤭 🙄 😏 😬 😮 😲 😳 🥺 😢 😭 😤 😡 🤯 😱 😴 🤤 🥳 🤑 🤗 😵‍💫 🫠 🫡'],
+  ['Hands', '👍 👎 👏 🙌 🙏 🤞 ✌️ 🤟 👌 🤌 👊 ✊ 🤝 👋 💪 🫶 👀 🫵'],
+  ['Lucky', '🍀 🎱 🎰 🎲 🎯 🏆 🥇 💰 💸 💵 💴 🪙 🎟️ 🎫 📺 🔮 ✨ 🌟 ⭐ 🔥 💯 🎉 🎊 🧧 🐷 🐉 🌈'],
+  ['Hearts', '❤️ 🧡 💛 💚 💙 💜 🖤 🤍 💔 💖 💕 💯'],
+  ['Food', '☕ 🍺 🍻 🥂 🍾 🍗 🍕 🍜 🍣 🍚 🍰 🍩'],
+];
+S.chat = { msgs: [], reacts: [], loaded: false, missing: false, more: false, picker: null, busy: false };
+let _chatReloadT = null;
+
+const chatSeenKey = () => `645-chat-seen-${S.me?.id}`;
+function chatSeen() { try { return localStorage.getItem(chatSeenKey()) || ''; } catch { return ''; } }
+function markChatSeen() {
+  const last = S.chat.msgs.at(-1)?.created_at;
+  if (!last || S.tab !== 'chat' || document.visibilityState !== 'visible') return;
+  try { if (last > chatSeen()) localStorage.setItem(chatSeenKey(), last); } catch { /* private mode */ }
+  renderChatBadge();
+}
+function renderChatBadge() {
+  const seen = chatSeen();
+  const n = S.chat.msgs.filter((m) => m.created_at > seen && m.author !== S.me?.id).length;
+  $('chat-badge').hidden = !n;
+  $('chat-badge').textContent = n > 9 ? '9+' : String(n);
+}
+
+async function loadChat({ older = false } = {}) {
+  if (!S.me) return;
+  let q = S.sb.from('chat_messages').select('*').order('created_at', { ascending: false }).limit(CHAT_PAGE);
+  if (older && S.chat.msgs.length) q = q.lt('created_at', S.chat.msgs[0].created_at);
+  const { data, error } = await q;
+  if (error) { S.chat.missing = /chat_messages|schema cache|does not exist/.test(error.message); S.chat.loaded = true; renderChat(); return; }
+  const page = (data || []).reverse();
+  S.chat.missing = false;
+  S.chat.more = page.length === CHAT_PAGE;
+  S.chat.msgs = older ? [...page, ...S.chat.msgs] : page;
+  const ids = page.map((m) => m.id);
+  const { data: rs } = ids.length ? await S.sb.from('chat_reactions').select('*').in('message_id', ids) : { data: [] };
+  const fresh = new Set(ids.map(String));
+  S.chat.reacts = [...S.chat.reacts.filter((r) => !fresh.has(String(r.message_id))), ...(rs || [])];
+  S.chat.loaded = true;
+  renderChat({ keepTop: older });
+}
+
+/** A realtime change: messages and reactions arrive with the row itself; anything else reloads the latest page. */
+function chatChange(p) {
+  const n = p?.new, o = p?.old;
+  if (p?.table === 'chat_messages' && p.eventType === 'INSERT' && n?.id != null) {
+    if (!S.chat.msgs.some((m) => String(m.id) === String(n.id))) S.chat.msgs.push(n);
+    return renderChat();
+  }
+  if (p?.table === 'chat_messages' && p.eventType === 'DELETE' && o?.id != null) {
+    S.chat.msgs = S.chat.msgs.filter((m) => String(m.id) !== String(o.id));
+    return renderChat();
+  }
+  if (p?.table === 'chat_reactions' && (p.eventType === 'INSERT' || p.eventType === 'DELETE') && (n || o)?.message_id != null) {
+    const r = n?.message_id != null ? n : o, same = (x) => String(x.message_id) === String(r.message_id) && x.member === r.member && x.emoji === r.emoji;
+    S.chat.reacts = S.chat.reacts.filter((x) => !same(x));
+    if (p.eventType === 'INSERT') S.chat.reacts.push(r);
+    return renderChat();
+  }
+  clearTimeout(_chatReloadT);
+  _chatReloadT = setTimeout(() => loadChat().catch(console.error), 300);
+}
+
+const EMOJI_ONLY = /^(?:\p{Extended_Pictographic}|\p{Emoji_Modifier}|\p{Regional_Indicator}|‍|️|\s)+$/u;
+function chatText(body) {
+  const t = String(body || '');
+  const big = EMOJI_ONLY.test(t) && [...t.replace(/\s/g, '')].filter((c) => /\p{Extended_Pictographic}/u.test(c)).length <= 3;
+  const html = esc(t).replace(/https?:\/\/[^\s<>"']+/g, (u) => `<a href="${u}" target="_blank" rel="noopener noreferrer" data-act="link">${u}</a>`);
+  return { html, big };
+}
+
+/** The result bot's post, in this member's language (from its data, not the stored English text). */
+function botPost(m) {
+  const d = m.meta || {};
+  if (d.type !== 'result') return esc(m.body);
+  const list = Object.keys(d.ranks || {}).map(Number).sort((a, b) => a - b).map((r) => `${d.ranks[r]}× ${r}등`).join(', ');
+  const g = d.games || 0, games = `${g} game${g === 1 ? '' : 's'}`;
+  const line = !g ? 'We did not play this draw.'
+    : !d.best ? `No win this time (${games}).`
+      : d.estimated ? `🎉 We won ${list} on ${games}! Prize amount to follow.`
+        : `🎉 We won ${money(d.won)}${d.won < d.gross ? ' after tax' : ''} (${list}) on ${games}!`;
+  return `<div class="cm-bot-title">🎱 Draw #${d.round} results</div>
+    <div class="cm-bot-balls">${(d.numbers || []).map((n) => ball(n)).join('')}<span class="plus">+</span>${ball(d.bonus, 'bonus')}</div>
+    <div>${esc(line)}</div>`;
+}
+
+function renderChat({ keepTop = false } = {}) {
+  renderChatBadge();
+  const list = $('chat-list');
+  if (!list || S.tab !== 'chat') return;
+  if (!$('chat-quick').childElementCount) $('chat-quick').innerHTML = QUICK_SEND.map((e) => `<button type="button" data-act="chat-quick" data-e="${e}" aria-label="Send ${e}">${e}</button>`).join('');
+  if (S.chat.missing) { list.innerHTML = '<div class="chat-empty">💬 Chat needs the database update: run supabase/schema.sql again in the Supabase SQL editor.</div>'; return; }
+  if (!S.chat.loaded) { list.innerHTML = '<div class="chat-empty"><div class="spinner" style="margin:0 auto"></div></div>'; return; }
+  const atBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 80, prevH = list.scrollHeight, prevTop = list.scrollTop;
+  const byMsg = new Map();
+  for (const r of S.chat.reacts) {
+    const k = String(r.message_id);
+    if (!byMsg.has(k)) byMsg.set(k, new Map());
+    const e = byMsg.get(k);
+    if (!e.has(r.emoji)) e.set(r.emoji, []);
+    e.get(r.emoji).push(r.member);
+  }
+  let html = S.chat.more ? '<button class="btn btn-ghost btn-sm chat-more" data-act="chat-older">Load earlier messages</button>' : '';
+  let lastDay = '', prev = null;
+  for (const m of S.chat.msgs) {
+    const at = new Date(m.created_at), day = at.toLocaleDateString(LOCALE, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
+    if (day !== lastDay) { html += `<div class="chat-day"><span>${esc(day)}</span></div>`; lastDay = day; prev = null; }
+    const bot = !!m.bot, mine = !bot && m.author === S.me.id;
+    const cont = prev && prev.author === m.author && !!prev.bot === bot && at - new Date(prev.created_at) < 5 * 60e3;
+    const name = bot ? '645 bot' : memberName(m.author), clr = bot ? '#60a5fa' : memberColor(m.author);
+    const { html: text, big } = bot ? { html: botPost(m), big: false } : chatText(m.body);
+    const reacts = [...(byMsg.get(String(m.id)) || new Map())].map(([e, who]) =>
+      `<button type="button" class="cm-r ${who.includes(S.me.id) ? 'on' : ''}" data-act="chat-react" data-id="${m.id}" data-e="${esc(e)}"
+        title="${esc(who.map((w) => (w === S.me.id ? 'you' : memberName(w))).join(', '))}">${esc(e)}<small>${who.length}</small></button>`).join('');
+    html += `<div class="cm ${mine ? 'mine' : ''} ${bot ? 'bot' : ''} ${cont ? 'cont' : ''}" data-id="${m.id}">
+      ${cont ? '' : `<div class="cm-hd" style="--c:${clr}">${mine ? '' : `<span class="cm-av" style="--c:${clr}">${bot ? '🤖' : esc(ini(name))}</span><strong ${bot ? '' : 'data-no-i18n'}>${esc(name)}</strong>`}
+        <span class="cm-time">${at.toLocaleTimeString(LOCALE, { hour: '2-digit', minute: '2-digit', hour12: false })}</span></div>`}
+      <div class="cm-line"><div class="cm-bubble ${big ? 'big' : ''}" ${bot ? '' : 'data-no-i18n'}>${text}</div>
+        <button type="button" class="cm-react-btn" data-act="chat-react-open" data-id="${m.id}" title="React" aria-label="React">☺</button></div>
+      ${reacts ? `<div class="cm-reacts">${reacts}</div>` : ''}
+    </div>`;
+    prev = m;
+  }
+  list.innerHTML = html || '<div class="chat-empty">No messages yet. Say hello 👋</div>';
+  fitChat();
+  if (keepTop) list.scrollTop = list.scrollHeight - prevH + prevTop;
+  else if (atBottom || !_chatShown) list.scrollTop = list.scrollHeight;
+  _chatShown = true;
+  markChatSeen();
+}
+let _chatShown = false;
+
+/** The chat fills the screen: messages scroll, the emoji row and the message box stay in view. */
+function fitChat() {
+  const list = $('chat-list');
+  if (!list || S.tab !== 'chat') return;
+  const below = ['chat-quick', 'chat-picker'].reduce((h, id) => h + ($(id).hidden ? 0 : $(id).offsetHeight), 0)
+    + document.querySelector('.chat-compose').offsetHeight + 40;
+  const top = list.getBoundingClientRect().top + scrollY;
+  const keep = list.scrollHeight - list.scrollTop - list.clientHeight < 80;
+  list.style.height = `${Math.max(220, (visualViewport?.height || innerHeight) - top - below)}px`;
+  if (keep) list.scrollTop = list.scrollHeight;
+}
+addEventListener('resize', fitChat);
+visualViewport?.addEventListener('resize', fitChat);
+
+function openChat() {
+  _chatShown = false;
+  if (!S.chat.loaded) loadChat().catch(console.error);
+  renderChat();
+}
+
+async function chatSend(text) {
+  const body = String(text ?? $('chat-input').value).trim();
+  if (!body || S.chat.busy) return;
+  if (body.length > 2000) return toast('A message can be at most 2,000 characters.', 'err');
+  S.chat.busy = true;
+  $('chat-send').disabled = true;
+  try {
+    const { data, error } = await S.sb.from('chat_messages').insert({ body }).select().single();
+    if (error) throw error;
+    if (text == null) { $('chat-input').value = ''; chatGrow(); }
+    if (data && !S.chat.msgs.some((m) => String(m.id) === String(data.id))) S.chat.msgs.push(data);
+    _chatShown = false;
+    renderChat();
+    // members who turned chat notifications on hear about it (the function sends each message once)
+    if (data?.id != null) S.sb.functions.invoke('check-tickets', { body: { push: 'chat', message_id: data.id }, region: 'ap-northeast-2' }).catch(() => {});
+  } catch (e) {
+    fail(/chat_messages|schema cache/.test(e.message || '') ? new Error('Chat needs the database update: run supabase/schema.sql again.') : e, 'Could not send.');
+  } finally {
+    S.chat.busy = false;
+    $('chat-send').disabled = false;
+  }
+}
+
+async function chatToggleReact(id, emoji) {
+  const mine = S.chat.reacts.find((r) => String(r.message_id) === String(id) && r.member === S.me.id && r.emoji === emoji);
+  const keep = S.chat.reacts;
+  S.chat.reacts = mine ? keep.filter((r) => r !== mine) : [...keep, { message_id: id, member: S.me.id, emoji }];
+  renderChat();
+  const msgId = /^\d+$/.test(String(id)) ? Number(id) : id;
+  const { error } = mine
+    ? await S.sb.from('chat_reactions').delete().eq('message_id', msgId).eq('member', S.me.id).eq('emoji', emoji)
+    : await S.sb.from('chat_reactions').insert({ message_id: msgId, emoji });
+  if (error && !/duplicate key/.test(error.message)) { S.chat.reacts = keep; renderChat(); fail(error); }
+}
+
+async function chatDelete(id) {
+  if (!confirm('Delete this message for everyone?')) return;
+  const msgId = /^\d+$/.test(String(id)) ? Number(id) : id;
+  const { error } = await S.sb.from('chat_messages').delete().eq('id', msgId);
+  if (error) return fail(error);
+  S.chat.msgs = S.chat.msgs.filter((m) => String(m.id) !== String(id));
+  renderChat();
+}
+
+/** The little bar of quick reactions next to a message (and Delete for its author or an admin). */
+function chatReactOpen(btn) {
+  const pop = $('chat-pop'), id = btn.dataset.id;
+  if (!pop.hidden && pop.dataset.id === id) { pop.hidden = true; return; }
+  const m = S.chat.msgs.find((x) => String(x.id) === id);
+  const canDelete = m && ((!m.bot && m.author === S.me.id) || isAdmin());
+  pop.dataset.id = id;
+  pop.innerHTML = QUICK_REACT.map((e) => `<button type="button" data-act="chat-react" data-id="${id}" data-e="${e}" aria-label="${e}">${e}</button>`).join('')
+    + `<button type="button" data-act="chat-react-more" data-id="${id}" title="More" aria-label="More">➕</button>`
+    + (canDelete ? `<button type="button" class="del" data-act="chat-delete" data-id="${id}">🗑 Delete</button>` : '');
+  pop.hidden = false;
+  const r = btn.getBoundingClientRect(), w = pop.offsetWidth, h = pop.offsetHeight;
+  pop.style.left = `${Math.max(8, Math.min(innerWidth - w - 8, r.left + r.width / 2 - w / 2))}px`;
+  pop.style.top = `${r.top - h - 6 < 8 ? r.bottom + 6 : r.top - h - 6}px`;
+}
+document.addEventListener('click', (e) => {
+  const pop = $('chat-pop');
+  if (pop && !pop.hidden && !e.target.closest('#chat-pop, [data-act=chat-react-open]')) pop.hidden = true;
+});
+$('chat-list')?.addEventListener('scroll', () => { if (!$('chat-pop').hidden) $('chat-pop').hidden = true; }, { passive: true });
+
+/** Emoji picker: puts the emoji in the message, or reacts with it (from ➕ next to a message). */
+function chatPicker(mode, id = null) {
+  const el = $('chat-picker');
+  if (!mode || (S.chat.picker?.mode === mode && S.chat.picker?.id === id)) {
+    S.chat.picker = null; el.hidden = true;
+    document.querySelector('.chat-emoji-btn').classList.remove('on');
+    fitChat();
+    return;
+  }
+  S.chat.picker = { mode, id };
+  el.innerHTML = (mode === 'react' ? '<div class="pk-hd"><span>Choose a reaction</span><button class="btn btn-ghost btn-sm" data-act="chat-emoji">✕</button></div>' : '')
+    + EMOJI_SETS.map(([name, list]) => `<h4>${name}</h4><div class="ep">${list.split(' ').map((e) => `<button type="button" data-act="chat-pick" data-e="${e}">${e}</button>`).join('')}</div>`).join('');
+  el.hidden = false;
+  document.querySelector('.chat-emoji-btn').classList.toggle('on', mode === 'send');
+  fitChat();
+}
+function chatPick(emoji) {
+  const P = S.chat.picker;
+  if (P?.mode === 'react') { chatPicker(null); return chatToggleReact(P.id, emoji); }
+  const inp = $('chat-input'), a = inp.selectionStart ?? inp.value.length, b = inp.selectionEnd ?? a;
+  inp.value = inp.value.slice(0, a) + emoji + inp.value.slice(b);
+  inp.selectionStart = inp.selectionEnd = a + emoji.length;
+  chatGrow();
+}
+function chatGrow() {
+  const inp = $('chat-input');
+  inp.style.height = 'auto';
+  inp.style.height = `${Math.min(140, inp.scrollHeight + 2)}px`;
+}
+$('chat-input')?.addEventListener('keydown', (e) => {
+  // Enter sends on a computer; on a phone it makes a new line (Send is right there). Never while a Korean/Vietnamese IME is composing.
+  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229 && !matchMedia('(pointer: coarse)').matches) { e.preventDefault(); chatSend(); }
+});
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && S.tab === 'chat') markChatSeen(); });
+
 // ─── Notifications (Web Push; sent by the check-tickets function after the draw) ─────────────────
 const pushSupported = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
 const isIos = () => /iPhone|iPad|iPod/.test(navigator.userAgent);
@@ -3665,7 +3952,7 @@ const PUSH_HELP = {
 /** What this device wants, as chosen on the settings page. */
 const pushChoice = () => ({
   mode: document.querySelector('#push-modes input:checked')?.value === 'off' ? 'none' : document.querySelector('#push-modes input:checked')?.value || 'none',
-  remind: $('push-remind').checked, tickets: $('push-tickets').checked,
+  remind: $('push-remind').checked, tickets: $('push-tickets').checked, chat: $('push-chat').checked,
 });
 
 function unb64url(text) {
@@ -3698,12 +3985,13 @@ async function renderPush() {
   radios.forEach((r) => { r.disabled = false; if (r.type === 'radio') r.checked = r.value === mode; });
   $('push-remind').checked = !!row?.remind;
   $('push-tickets').checked = !!row?.tickets;
+  $('push-chat').checked = !!row?.chat;
   $('push-test').hidden = !row;
   if (row && row.lang !== LANG) S.sb.from('push_subs').update({ lang: LANG }).eq('endpoint', row.endpoint).then(() => {});
   if (Notification.permission === 'denied') return status('Notifications are blocked for this site: allow them in the browser\'s site settings, then choose again.', true);
   if (!row) return status('Off on this device. Choose when you want to hear from us.');
-  const extra = [row.remind && 'before the draw', row.tickets && 'new ticket photos'].filter(Boolean);
-  status(`On: ${PUSH_HELP[row.mode]}${extra.length ? ` Also: ${extra.join(' and ')}.` : ''}`);
+  const extra = [row.remind && 'before the draw', row.tickets && 'new ticket photos', row.chat && 'chat messages'].filter(Boolean);
+  status(`On: ${PUSH_HELP[row.mode]}${extra.length ? ` Also: ${extra.join(', ')}.` : ''}`);
 }
 
 async function pushOff(quiet = false) {
@@ -3718,7 +4006,7 @@ async function pushOff(quiet = false) {
 /** Save this device's choice; nothing chosen at all turns notifications off here. */
 async function setPushMode() {
   const want = pushChoice();
-  if (want.mode === 'none' && !want.remind && !want.tickets) return pushOff();
+  if (want.mode === 'none' && !want.remind && !want.tickets && !want.chat) return pushOff();
   try {
     if (await Notification.requestPermission() !== 'granted') { toast('Allow notifications when the browser asks, then choose again.', 'err'); return renderPush(); }
     const reg = await navigator.serviceWorker.register('sw.js');
@@ -3772,7 +4060,7 @@ function openFromHash(hash = location.hash) {
   const h = String(hash || '').replace(/^#/, '');
   if (!h || h.startsWith('invite=') || !S.me) return;
   const [tab, sec] = h.split('-');
-  if (!['dashboard', 'weeks', 'tickets', 'picks', 'investors', 'charts', 'activity', 'settings'].includes(tab)) return;
+  if (!['dashboard', 'chat', 'weeks', 'tickets', 'picks', 'investors', 'charts', 'activity', 'settings'].includes(tab)) return;
   goTab(tab);
   if (tab === 'picks' && sec) setPicksSection(sec);
   history.replaceState(null, '', location.pathname + location.search);
@@ -4161,7 +4449,16 @@ const ACTIONS = {
   'live-official': () => liveOfficial(),
   'buy-start': () => startBuying(),
   'goto-buy': () => { goTab('picks'); setPicksSection('buy'); },
-  yt: () => {},   // a link: the browser opens it (and the bar it sits in doesn't jump to Live)
+  link: () => {},
+  'chat-send': () => chatSend(),
+  'chat-quick': (el) => chatSend(el.dataset.e),
+  'chat-react': (el) => { $('chat-pop').hidden = true; chatToggleReact(el.dataset.id, el.dataset.e); },
+  'chat-react-open': (el) => chatReactOpen(el),
+  'chat-react-more': (el) => { $('chat-pop').hidden = true; chatPicker('react', el.dataset.id); },
+  'chat-delete': (el) => { $('chat-pop').hidden = true; chatDelete(el.dataset.id); },
+  'chat-emoji': () => chatPicker(S.chat.picker ? null : 'send'),
+  'chat-pick': (el) => chatPick(el.dataset.e),
+  'chat-older': () => loadChat({ older: true }),   // a link: the browser opens it (and the card it sits on doesn't open)
   'update-check': () => checkUpdate({ manual: true }),
   'update-now': () => applyUpdate(),
   'update-later': () => { _updLater = true; renderUpdate(); },
@@ -4230,6 +4527,7 @@ const ACTIONS = {
 };
 
 const INPUTS = {
+  'chat-input': () => chatGrow(),
   'wm-preview': () => previewWeek(),
   'wm-date': () => refreshWeekPool(),
   'up-date': () => { $('up-round').value = drawNo($('up-date').value) || ''; upDateInfo(); },

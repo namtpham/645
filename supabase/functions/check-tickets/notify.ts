@@ -119,3 +119,19 @@ export function testMessage(lang: Lang) {
     vi: { title: '🔔 Đã bật thông báo 645', body: 'Bạn sẽ nhận kết quả thứ Bảy tại đây.' },
   }[lang] ?? { title: '🔔 645', body: 'Notifications are on.' };
 }
+
+/** A new chat message, for the members who asked for chat notifications. */
+export function chatMessage(name: string, text: string) {
+  const body = text.replace(/\s+/g, ' ').trim();
+  return { title: `💬 ${name}`, body: body.length > 140 ? body.slice(0, 139) + '…' : body, tag: 'chat', url: './#chat' };
+}
+
+/** What the result bot posts in 💬 Chat (the app shows it in each member's language from `meta`). */
+export function resultPost(s: Summary, d: DrawLite) {
+  const { title, body } = message(s, d, 'en');
+  return {
+    body: `${title}\n${body}`,
+    meta: { type: 'result', round: d.round, numbers: [...d.numbers].sort((a, b) => a - b), bonus: d.bonus,
+      games: s.games, ranks: s.ranks, best: s.best, won: s.won, gross: s.gross, estimated: s.estimated },
+  };
+}

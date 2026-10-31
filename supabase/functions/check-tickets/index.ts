@@ -23,13 +23,15 @@
 //   • { "push": "key" } → the public key browsers subscribe to notifications with;
 //     { "push": "test" } (member) → a test notification to that member's devices;
 //     { "push": "remind" } → before Saturday's draw (20:10–20:35 KST): "the draw starts in x minutes", once per device;
-//     { "push": "tickets", "ticket_ids": [...] } (the member who just uploaded them) → "new ticket photos" to the others.
+//     { "push": "tickets", "ticket_ids": [...] } (the member who just uploaded them) → "new ticket photos" to the others;
+//     { "push": "chat", "message_id": n } (its author, right after sending) → the message to members who want chat.
+// The result bot also posts each draw's result in 💬 Chat (once).
 // After every check, members who turned notifications on get the latest draw's result once
 // (every result, any win, or 4등 and better: their choice, in their language).
 
 import { createClient } from 'npm:@supabase/supabase-js@2.117.2';
 import { newVapidKeys, sendPush, type Vapid } from './push.ts';
-import { message, reminderMessage, shouldNotify, summarize, testMessage, ticketsMessage, type Lang, type Mode } from './notify.ts';
+import { chatMessage, message, reminderMessage, resultPost, shouldNotify, summarize, testMessage, ticketsMessage, type Lang, type Mode } from './notify.ts';
 
 // The service key is provided to every Edge Function automatically (legacy or new key format).
 function serviceKey(): string | undefined {
@@ -304,6 +306,10 @@ async function handle(req: Request): Promise<Response> {
     if (!memberId) return json({ error: 'Sign in first.' }, 401);
     return json(await sendTicketNews(memberId, Array.isArray(body.ticket_ids) ? body.ticket_ids.slice(0, 50).map(String) : []));
   }
+  if (body.push === 'chat') {
+    if (!memberId) return json({ error: 'Sign in first.' }, 401);
+    return json(await sendChatNews(memberId, Number(body.message_id)));
+  }
   const force = member && typeof body.ticket_id === 'string';
 
   let q = db.from('tickets').select('id, draw_date, qr_data').not('qr_data', 'is', null);
@@ -444,18 +450,49 @@ async function sendTicketNews(memberId: string, ids: string[]) {
   return { photos: photos.length, sent };
 }
 
+/** A chat message, sent once to the other members who turned chat notifications on. */
+async function sendChatNews(memberId: string, id: number) {
+  if (!Number.isFinite(id)) return { sent: 0 };
+  const since = new Date(Date.now() - 10 * 60e3).toISOString();
+  // claim it first, so a second call can't send it again
+  const { data: msg, error } = await db.from('chat_messages').update({ notified_at: new Date().toISOString() })
+    .eq('id', id).eq('author', memberId).is('notified_at', null).gte('created_at', since).select('id, body').maybeSingle();
+  if (error) return { error: error.message };
+  if (!msg) return { sent: 0 };
+  const { data: who } = await db.from('profiles').select('display_name').eq('id', memberId).maybeSingle();
+  const { data: subs } = await db.from('push_subs').select('*').eq('chat', true).neq('member', memberId);
+  const v = subs?.length ? await vapid() : null;
+  let sent = 0;
+  for (const sub of subs ?? []) {
+    const r = await sendPush(sub, chatMessage(who?.display_name ?? '?', msg.body), v!, 6 * 3600).catch(() => null);
+    if (r?.gone) await db.from('push_subs').delete().eq('endpoint', sub.endpoint);
+    else if (r?.ok) sent++;
+  }
+  return { sent };
+}
+
+/** The result bot: the draw's result in 💬 Chat, once (bot_key is unique). */
+async function postResult(s: ReturnType<typeof summarize>, draw: Draw) {
+  const { body, meta } = resultPost(s, draw);
+  const { error } = await db.from('chat_messages').upsert(
+    { author: null, bot: 'results', bot_key: `result-${draw.round}`, body, meta },
+    { onConflict: 'bot_key', ignoreDuplicates: true });
+  return error ? { error: error.message } : { ok: true };
+}
+
 /** Once per draw and device: the result of the latest finished draw, if the member wants it. */
 async function notifyResults(cache: Map<number, Draw | null>) {
   const kst = new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10);
   let sat = new Date(Date.parse(kst) - ((new Date(kst).getUTCDay() + 1) % 7) * 864e5).toISOString().slice(0, 10);
   if (!resultsOut(sat)) sat = new Date(Date.parse(sat) - 7 * 864e5).toISOString().slice(0, 10);
   const round = roundOf(sat);
-  const { data: subs, error } = await db.from('push_subs').select('*').neq('mode', 'none').or(`last_round.is.null,last_round.lt.${round}`);
-  if (error) return { round, error: error.message };
-  if (!subs?.length) return { round, sent: 0 };
   const draw = cache.get(round) ?? await getDraw(round, cache);
   if (!draw) return { round, sent: 0, waiting: 'winning numbers not published yet' };
   const s = summarize(await gamesFor(round), draw);
+  const chat = await postResult(s, draw).catch((e) => ({ error: (e as Error).message }));
+  const { data: subs, error } = await db.from('push_subs').select('*').neq('mode', 'none').or(`last_round.is.null,last_round.lt.${round}`);
+  if (error) return { round, chat, error: error.message };
+  if (!subs?.length) return { round, chat, sent: 0 };
   const v = await vapid();
   let sent = 0, skipped = 0, removed = 0;
   for (const sub of subs) {
@@ -468,5 +505,5 @@ async function notifyResults(cache: Map<number, Draw | null>) {
     if (r?.gone) { await db.from('push_subs').delete().eq('endpoint', sub.endpoint); removed++; }
     else if (r?.ok) sent++;
   }
-  return { round, games: s.games, best: s.best, sent, skipped, removed };
+  return { round, chat, games: s.games, best: s.best, sent, skipped, removed };
 }
