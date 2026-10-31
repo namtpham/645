@@ -88,6 +88,9 @@ begin
   end if;
 end $$;
 alter table public.investors alter column since set default '2025-05-17';
+-- The app account of this investor (a member), so 💰 Money knows who buys and who sends whom.
+alter table public.investors add column if not exists member uuid references public.profiles (id) on delete set null;
+create unique index if not exists investors_member_key on public.investors (member) where member is not null;
 -- A link to send this investor money (e.g. their KakaoPay 송금 link), shown on their card.
 alter table public.investors add column if not exists pay_url text;
 alter table public.investors drop constraint if exists investors_pay_url_check;
@@ -247,6 +250,31 @@ create table if not exists public.chat_reactions (
   created_at timestamptz not null default now(),
   primary key (message_id, member, emoji)
 );
+
+-- 💰 Money: who keeps the pool money. Set by hand once (as of the end of a draw); after that the app
+-- follows the weeks: pool money used comes from the holders, a prize added to the pool stays with
+-- whoever bought the winning tickets.
+create table if not exists public.pool_holders (
+  round   int primary key,                 -- as of the end of this draw
+  holders jsonb not null default '{}',     -- {investor_id: amount}
+  set_by  uuid references public.profiles (id) on delete set null default auth.uid(),
+  set_at  timestamptz not null default now()
+);
+
+-- 💰 Money: transfers between investors that were made (marked "Done"). What is still owed is worked
+-- out from each draw's buyers, fresh money and pool, minus these.
+create table if not exists public.money_transfers (
+  id       bigint generated always as identity primary key,
+  round    int not null,
+  kind     text not null check (kind in ('buy', 'prize')),   -- buy: tickets for this draw · prize: a shared prize paid out
+  from_inv text not null references public.investors (id) on delete cascade,
+  to_inv   text not null references public.investors (id) on delete cascade,
+  amount   numeric not null check (amount > 0),
+  done_by  uuid references public.profiles (id) on delete set null default auth.uid(),
+  done_at  timestamptz not null default now(),
+  check (from_inv <> to_inv)
+);
+create index if not exists money_transfers_round on public.money_transfers (round);
 
 -- 🔔 A member's own notifications (the bell): someone mentioned them in chat, or the bot announced a win.
 -- Made by the database itself (chat_notify below), so they arrive even when no app is open.
@@ -554,7 +582,7 @@ end $$;
 do $$
 declare t text;
 begin
-  foreach t in array array['investors', 'weeks', 'tickets', 'settings', 'profiles'] loop
+  foreach t in array array['investors', 'weeks', 'tickets', 'settings', 'profiles', 'money_transfers', 'pool_holders'] loop
     execute format('drop trigger if exists audit_%1$s on public.%1$I', t);
     execute format('create trigger audit_%1$s after insert or update or delete on public.%1$I
                     for each row execute function public.audit()', t);
@@ -604,6 +632,8 @@ alter table public.push_keys   enable row level security;
 alter table public.chat_messages  enable row level security;
 alter table public.chat_reactions enable row level security;
 alter table public.notifications  enable row level security;
+alter table public.pool_holders    enable row level security;
+alter table public.money_transfers enable row level security;
 
 do $$
 declare p record;
@@ -612,7 +642,7 @@ begin
            where schemaname = 'public'
              and tablename in ('profiles', 'invites', 'settings', 'investors', 'weeks', 'tickets', 'audit_log', 'draws',
                                'pick_plans', 'group_picks', 'live_picks', 'push_subs', 'push_keys', 'my_picks',
-                               'chat_messages', 'chat_reactions', 'notifications')
+                               'chat_messages', 'chat_reactions', 'notifications', 'pool_holders', 'money_transfers')
   loop
     execute format('drop policy %I on public.%I', p.policyname, p.tablename);
   end loop;
@@ -680,6 +710,17 @@ create policy "react"          on public.chat_reactions for insert to authentica
   with check (public.is_member() and member = auth.uid());
 create policy "take back a reaction" on public.chat_reactions for delete to authenticated
   using (public.is_member() and member = auth.uid());
+create policy "read pool holders" on public.pool_holders for select to authenticated using (public.is_member());
+create policy "set pool holders"  on public.pool_holders for insert to authenticated with check (public.is_member());
+create policy "fix pool holders"  on public.pool_holders for update to authenticated
+  using (public.is_member()) with check (public.is_member());
+create policy "read transfers" on public.money_transfers for select to authenticated using (public.is_member());
+-- the sender or the receiver (through their linked investor) marks a transfer as done, or an admin
+create policy "mark transfers" on public.money_transfers for insert to authenticated
+  with check (public.is_member() and done_by = auth.uid() and (public.is_admin() or exists (
+    select 1 from investors i where i.member = auth.uid() and i.id in (from_inv, to_inv))));
+create policy "undo transfers" on public.money_transfers for delete to authenticated
+  using (public.is_member() and (done_by = auth.uid() or public.is_admin()));
 create policy "own notifications" on public.notifications for all to authenticated
   using (member = auth.uid() and public.is_member()) with check (member = auth.uid() and public.is_member());
 create policy "read live picks" on public.live_picks for select to authenticated using (public.is_member());
@@ -706,6 +747,8 @@ grant select, delete                 on public.chat_messages  to authenticated;
 grant insert (body)                  on public.chat_messages  to authenticated;   -- author = auth.uid() by default; bot columns are the server's
 grant select, insert, delete         on public.chat_reactions to authenticated;
 grant select, delete                 on public.notifications  to authenticated;
+grant select, insert, update         on public.pool_holders    to authenticated;
+grant select, insert, delete         on public.money_transfers to authenticated;
 grant update (read_at)               on public.notifications  to authenticated;
 
 revoke execute on all functions in schema public from public, anon;
@@ -749,7 +792,7 @@ do $$
 declare t text;
 begin
   foreach t in array array['investors', 'weeks', 'tickets', 'settings', 'profiles', 'draws', 'pick_plans', 'group_picks', 'live_picks',
-                           'chat_messages', 'chat_reactions', 'notifications'] loop
+                           'chat_messages', 'chat_reactions', 'notifications', 'pool_holders', 'money_transfers'] loop
     if not exists (select 1 from pg_publication_tables
                    where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = t) then
       execute format('alter publication supabase_realtime add table public.%I', t);

@@ -48,6 +48,32 @@ with an invitation key from the admin.
   every draw's result (winning numbers, our 등수 and prize after tax) once, in each member's
   language. Tables `chat_messages` and `chat_reactions`; the latest 60 messages load, older ones
   on request.
+- **💰 Money** (tab): who sends whom how much, for every draw, and who keeps the pool money.
+  - **The rule:** the buyers pay at the shop (₩1,000 per group they buy, from 🛒 Buy). Everyone
+    with fresh money that week (the week entry) and whoever keeps the pool money used sends it to
+    the buyers. Per person: what they must put in − what they spend at the shop; that is settled
+    in as few transfers as possible (equal amounts pair up first, then biggest to biggest).
+    Someone who both invests and buys only sends or gets the difference.
+  - **The pool:** pool money used comes from its keepers, first from keepers who buy that week
+    themselves, then from the biggest keeper. A prize added to the pool stays with whoever bought
+    the winning tickets (the member whose photo has the winning QR code). A prize **shared** to the
+    investors is paid out by whoever keeps it: those transfers are listed with that draw.
+    **Who keeps the pool** is set by hand once (🏦 card → Set who keeps it, as of the last
+    finished draw; amounts must add up to the pool); after that the app follows the weeks, and it
+    warns when the books and the keepers disagree.
+  - **Done:** after sending, the sender (or the receiver, or an admin) taps **✓ Done**. Done
+    transfers are payments; what is still owed is worked out again from them, so changing the
+    plan later (more groups, another buyer) stays right. **Undo** takes a mark back. Everything
+    is in 📝 Activity.
+  - **Reminders:** transfers you still have to make show in 🔔, as a count on the 💰 tab and at the
+    top of the tab. **🔔 Remind** sends the sender a phone notification (if they allow 📣 Mentions).
+  - **KakaoPay:** **💛 Send B ₩5,000** opens KakaoPay with the amount filled in, when B's link is
+    `https://qr.kakaopay.com/` + their 24-digit id: the app adds the amount × 8 in hexadecimal and
+    4 more hex characters. Another link opens as it is (type the amount); no link → **Ask B in
+    chat** posts "@B please add your KakaoPay link".
+  - **Accounts:** members are linked to their investor (👥 Investors → ✏️ → App account, or
+    "Which investor are you?" on the tab; same names are suggested). Tables `pool_holders` and
+    `money_transfers`, column `investors.member`.
 - **🔔 Notifications in the app** (bell, top right, with a red count): someone mentioned you in
   chat, or the bot announced a win. Tap one to open it (it jumps to the message); **Mark all as
   read**. Made by the database itself (trigger `chat_notify`, table `notifications`, each member

@@ -153,3 +153,14 @@ export function resultPost(s: Summary, d: DrawLite) {
       games: s.games, ranks: s.ranks, best: s.best, won: s.won, gross: s.gross, estimated: s.estimated },
   };
 }
+
+/** 💰 A member reminds another to send money (from the Money tab). */
+export function moneyMessage(from: string, to: string, amount: number, round: number, lang: Lang) {
+  const m = money(amount, lang);
+  const t = {
+    en: { title: `💸 ${from}: please send ${to} ${m}`, body: `For draw #${round}. Then tap Done in 645 → Money.` },
+    ko: { title: `💸 ${from}: ${to} 님에게 ${m} 보내 주세요`, body: `제${round}회분입니다. 보낸 뒤 645 → 돈에서 완료를 눌러 주세요.` },
+    vi: { title: `💸 ${from}: hãy gửi ${to} ${m}`, body: `Cho kỳ #${round}. Sau đó chạm Xong trong 645 → Tiền.` },
+  }[lang] ?? { title: `💸 ${to} ${m}`, body: '' };
+  return { ...t, tag: `money-${round}`, url: './#money' };
+}

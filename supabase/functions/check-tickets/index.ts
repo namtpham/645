@@ -24,14 +24,15 @@
 //     { "push": "test" } (member) → a test notification to that member's devices;
 //     { "push": "remind" } → before Saturday's draw (20:10–20:35 KST): "the draw starts in x minutes", once per device;
 //     { "push": "tickets", "ticket_ids": [...] } (the member who just uploaded them) → "new ticket photos" to the others;
-//     { "push": "chat", "message_id": n } (its author, right after sending) → the message to members who want chat.
+//     { "push": "chat", "message_id": n } (its author, right after sending) → the message to members who want chat;
+//     { "push": "money", "member": id, "to": name, "amount": n, "round": n } (a member) → "please send …" to that member.
 // The result bot also posts each draw's result in 💬 Chat (once).
 // After every check, members who turned notifications on get the latest draw's result once
 // (every result, any win, or 4등 and better: their choice, in their language).
 
 import { createClient } from 'npm:@supabase/supabase-js@2.117.2';
 import { newVapidKeys, sendPush, type Vapid } from './push.ts';
-import { chatMessage, mentionedIds, mentionMessage, mentionText, message, reminderMessage, resultPost, shouldNotify, summarize, testMessage, ticketsMessage, type Lang, type Mode } from './notify.ts';
+import { chatMessage, mentionedIds, mentionMessage, mentionText, message, moneyMessage, reminderMessage, resultPost, shouldNotify, summarize, testMessage, ticketsMessage, type Lang, type Mode } from './notify.ts';
 
 // The service key is provided to every Edge Function automatically (legacy or new key format).
 function serviceKey(): string | undefined {
@@ -310,6 +311,10 @@ async function handle(req: Request): Promise<Response> {
     if (!memberId) return json({ error: 'Sign in first.' }, 401);
     return json(await sendChatNews(memberId, Number(body.message_id)));
   }
+  if (body.push === 'money') {
+    if (!memberId) return json({ error: 'Sign in first.' }, 401);
+    return json(await sendMoneyReminder(memberId, body));
+  }
   const force = member && typeof body.ticket_id === 'string';
 
   let q = db.from('tickets').select('id, draw_date, qr_data').not('qr_data', 'is', null);
@@ -478,6 +483,24 @@ async function sendChatNews(memberId: string, id: number) {
     else if (r?.ok) { sent++; if (isMention) mentions++; }
   }
   return { sent, mentions };
+}
+
+/** 💰 "Please send B ₩5,000": a member reminds another (who allows personal notifications, like mentions). */
+async function sendMoneyReminder(memberId: string, b: Record<string, unknown>) {
+  const target = String(b.member ?? ''), amount = Math.round(Number(b.amount)), round = Math.round(Number(b.round));
+  const to = String(b.to ?? '').slice(0, 40);
+  if (!/^[0-9a-f-]{36}$/.test(target) || target === memberId || !(amount > 0 && amount < 1e9) || !(round > 0)) return { error: 'Bad reminder.' };
+  const { data: who } = await db.from('profiles').select('display_name').eq('id', memberId).maybeSingle();
+  const { data: subs } = await db.from('push_subs').select('*').eq('member', target);
+  const v = subs?.length ? await vapid() : null;
+  let sent = 0;
+  for (const sub of subs ?? []) {
+    if (sub.mention === false) continue;
+    const r = await sendPush(sub, moneyMessage(who?.display_name ?? '?', to, amount, round, sub.lang as Lang), v!, 24 * 3600).catch(() => null);
+    if (r?.gone) await db.from('push_subs').delete().eq('endpoint', sub.endpoint);
+    else if (r?.ok) sent++;
+  }
+  return { ok: true, sent, devices: subs?.length ?? 0 };
 }
 
 /** The result bot: the draw's result in 💬 Chat, once (bot_key is unique). */

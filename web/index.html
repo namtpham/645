@@ -106,6 +106,7 @@
     <div class="nav-tab active" data-act="tab" data-tab="dashboard">📊 Dashboard</div>
     <div class="nav-tab" data-act="tab" data-tab="chat">💬 Chat<span class="nav-badge" id="chat-badge" hidden></span></div>
     <div class="nav-tab" data-act="tab" data-tab="weeks">📅 Weeks</div>
+    <div class="nav-tab" data-act="tab" data-tab="money">💰 Money<span class="nav-badge" id="money-badge" hidden></span></div>
     <div class="nav-tab" data-act="tab" data-tab="tickets">🎟️ Tickets</div>
     <div class="nav-tab" data-act="tab" data-tab="picks">🔮 Picks</div>
     <div class="nav-tab" data-act="tab" data-tab="investors">👥 Investors</div>
@@ -538,6 +539,14 @@
   </div>
 
   <!-- ═══ ACTIVITY ═════════════════════════════════════════════════════════ -->
+  <div class="tab-pane" id="tab-money">
+    <div class="row-hd">
+      <h2 class="sec-title">💰 Money</h2>
+      <span class="fhelp">Who sends whom, for each draw · who keeps the pool</span>
+    </div>
+    <div class="money-body" id="money-body"></div>
+  </div>
+
   <div class="tab-pane" id="tab-chat">
     <div class="card chat-card">
       <div class="card-hd">
@@ -810,8 +819,14 @@
       <p class="fhelp" style="margin-top:8px">The first and last draw this investor takes part in. Leave the end date
         empty while they are still in. Add/Edit Week only lists investors whose dates cover that week.</p>
       <div class="fgrp" style="margin-top:14px">
+        <label class="flbl" for="im-member">👤 App account</label>
+        <select class="fsel" id="im-member"></select>
+        <p class="fhelp" style="margin-top:4px">The member who is this investor, so 💰 Money knows what they buy, send and receive.</p>
+      </div>
+      <div class="fgrp" style="margin-top:14px">
         <label class="flbl" for="im-pay">💛 Link to send them money (optional)</label>
-        <input type="url" class="finp" id="im-pay" maxlength="500" placeholder="https://qr.kakaopay.com/…" inputmode="url" autocapitalize="off" autocomplete="off" spellcheck="false">
+        <input type="url" class="finp" id="im-pay" maxlength="500" placeholder="https://qr.kakaopay.com/…" inputmode="url" autocapitalize="off" autocomplete="off" spellcheck="false" data-on-input="im-pay">
+        <p class="fhelp" id="im-pay-hint" style="margin-top:4px"></p>
         <p class="fhelp" style="margin-top:6px">Their KakaoPay link (KakaoPay → 송금 → 송금코드 → share the link), or any https link.
           A <strong>Send money</strong> button then shows on their card.</p>
       </div>

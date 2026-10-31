@@ -535,6 +535,7 @@ async function enterApp() {
   startRealtime();
   loadChat();
   loadNotifs();
+  loadMoney();
   goTab(S.tab);
   openFromHash();
   syncLang();
@@ -625,6 +626,7 @@ let _reloadT = null, _boardT = null, _channel = null, _reloadTables = new Set();
 function scheduleBoardReload() {
   clearTimeout(_boardT);
   _boardT = setTimeout(() => loadBoard().then(() => { if (S.tab === 'picks') renderPicks(); else if (S.tab === 'dashboard') renderDuty(); }).catch(console.error), 250);
+  loadMoneySoon();   // buyers changed: who sends whom changes too
 }
 function scheduleReload(table) {
   clearTimeout(_reloadT);
@@ -646,7 +648,8 @@ function startRealtime() {
   _channel = S.sb.channel('db-changes')
     .on('postgres_changes', { event: '*', schema: 'public' },
       (p) => (p?.table === 'live_picks' ? scheduleLiveReload() : BOARD_TABLES.includes(p?.table) ? scheduleBoardReload()
-        : CHAT_TABLES.includes(p?.table) ? chatChange(p) : p?.table === 'notifications' ? loadNotifsSoon() : scheduleReload(p?.table)))
+        : CHAT_TABLES.includes(p?.table) ? chatChange(p) : p?.table === 'notifications' ? loadNotifsSoon()
+          : ['pool_holders', 'money_transfers'].includes(p?.table) ? loadMoneySoon() : scheduleReload(p?.table)))
     .subscribe((status) => $('syncDot').classList.toggle('off', status !== 'SUBSCRIBED'));
 }
 function stopRealtime() {
@@ -696,6 +699,7 @@ function renderCountdown(now = Date.now()) {
 setInterval(() => { renderTimebar(); if (S.me) maybeRemind(); }, 1000);
 
 function renderAll() {
+  if (S.money?.loaded) renderMoneyAll();
   document.body.classList.toggle('is-admin', isAdmin());
   document.title = S.settings.title || '645';
   $('nav-title').textContent = S.settings.title || '645';
@@ -722,6 +726,7 @@ function goTab(name) {
   if (name === 'tickets') hydrateImages($('tickets-list'));
   if (name === 'activity') loadActivity();
   if (name === 'chat') openChat();
+  if (name === 'money') renderMoney();
   if (name === 'settings' && isAdmin()) loadInvites();
   if (name === 'settings') { renderPush(); renderLock(); }
 }
@@ -3224,6 +3229,14 @@ function payButton(inv) {
     title="${esc(url)}">${kakao ? '💛 Send money · KakaoPay' : '💸 Send money'}</a>`;
 }
 
+/** Under the money link: can the app fill in amounts with it? */
+function payHint() {
+  const v = $('im-pay').value.trim();
+  $('im-pay-hint').textContent = !v ? '' : kakaoId(v) ? '✓ KakaoPay link: 💰 Money can fill in the exact amount.'
+    : safePayUrl(v) ? 'This link works, but the amount has to be typed in: a KakaoPay link like https://qr.kakaopay.com/ followed by 24 digits can fill it in.'
+      : 'The link must start with https://';
+}
+
 function openInvModal(id) {
   const inv = id ? S.investors.find((i) => i.id === id) : null;
   $('im-title').textContent = inv ? 'Edit Investor' : 'Add Investor';
@@ -3232,6 +3245,11 @@ function openInvModal(id) {
   $('im-start').value = inv ? invStart(inv) : START_DEFAULT;
   $('im-end').value = inv && invEnd(inv) !== NO_END ? invEnd(inv) : '';
   $('im-pay').value = inv?.pay_url || '';
+  $('im-member').innerHTML = `<option value="">— not in the app —</option>` + S.profiles.filter((p) => p.status === 'active').map((p) => {
+    const taken = S.investors.find((i) => i.member === p.id && i.id !== id);
+    return `<option value="${p.id}" ${inv?.member === p.id ? 'selected' : ''} ${taken ? 'disabled' : ''}>${esc(p.display_name)}${taken ? ` (${esc(taken.nickname)})` : ''}</option>`;
+  }).join('');
+  payHint();
   $('inv-overlay').classList.add('open');
   setTimeout(() => $('im-nick').focus(), 80);
 }
@@ -3247,10 +3265,12 @@ async function saveInvestor() {
   const pay = $('im-pay').value.trim();
   if (pay && !safePayUrl(pay)) return toast('The money link must be a web address starting with https://', 'err');
   if (pay || (old && old.pay_url != null)) row.pay_url = pay || null;   // a database without the column still saves the rest
+  const member = $('im-member').value || null;
+  if (member || (old && old.member != null)) row.member = member;
   const { error } = id
     ? await S.sb.from('investors').update(row).eq('id', id)
     : await S.sb.from('investors').insert(row);
-  if (error) return fail(/pay_url/.test(error.message) ? new Error('The database needs an update for money links: run supabase/schema.sql again.') : error);
+  if (error) return fail(/pay_url|member/.test(error.message) ? new Error('The database needs an update for money links: run supabase/schema.sql again.') : error);
   toast('Investor saved!', 'ok');
   closeModal('inv-overlay');
   await loadAll();
@@ -3679,6 +3699,394 @@ function renderCharts() {
   mk('wkly', { type: 'bar', data: { labels, datasets: payers.map((inv) => ({
     label: inv.nickname, data: weeks.map((w) => +w.investments?.[inv.id] || null), ...barStyle(invColor(inv), true), maxBarThickness: 22,
   })) }, options: tl(chartOpts({ stacked: true, hideZero: true, timeline: true })) });
+}
+
+// ─── 💰 Money: who sends whom how much ─────────────────────────────────────────────────────────
+// Parties are investors (they have the payment links). A member who buys is the investor linked to
+// their account (investors.member). For each draw:
+//   • every buyer spends ₩1,000 per group they buy at the shop
+//   • every fresh investor puts in their money; pool money comes from whoever keeps the pool
+//     (first from holders who buy that week themselves, then from the biggest holder)
+//   • owed − spent per person, minus transfers already marked done → the fewest transfers that settle it
+// A prize added to the pool stays with whoever bought the winning tickets (the photo uploader). A prize
+// shared to the investors is paid out by them. Who keeps the pool is set by hand once (pool_holders),
+// as of the end of a draw; from then on it follows the weeks.
+S.money = { snap: null, plans: {}, transfers: [], loaded: false, missing: false };
+
+const invOfMember = (memberId) => S.investors.find((i) => i.member && i.member === memberId) || null;
+const partyOfMember = (memberId) => invOfMember(memberId)?.id || `m:${memberId}`;
+function partyName(k) {
+  if (k === '?') return 'Unknown (who keeps it?)';
+  if (String(k).startsWith('m:')) return memberName(k.slice(2));
+  return invName(k);
+}
+const partyMember = (k) => (String(k).startsWith('m:') ? k.slice(2) : S.investors.find((i) => i.id === k)?.member || null);
+const roundAmt = (v) => Math.round(+v || 0);
+
+/** Fewest transfers: equal amounts pair up first, then the biggest debtor pays the biggest creditor. */
+function settle(net) {
+  const debt = [], cred = [];
+  for (const [k, v] of Object.entries(net)) {
+    const a = roundAmt(v);
+    if (a > 0) debt.push({ k, v: a }); else if (a < 0) cred.push({ k, v: -a });
+  }
+  const out = [];
+  for (const d of debt) {
+    const c = cred.find((x) => x.v > 0 && x.v === d.v);
+    if (c) { out.push({ from: d.k, to: c.k, amount: d.v }); c.v = 0; d.v = 0; }
+  }
+  for (;;) {
+    const d = debt.filter((x) => x.v > 0).sort((a, b) => b.v - a.v || (a.k < b.k ? -1 : 1))[0];
+    const c = cred.filter((x) => x.v > 0).sort((a, b) => b.v - a.v || (a.k < b.k ? -1 : 1))[0];
+    if (!d || !c) break;
+    const a = Math.min(d.v, c.v);
+    out.push({ from: d.k, to: c.k, amount: a });
+    d.v -= a; c.v -= a;
+  }
+  return out;
+}
+
+/** Which holders' pool money pays for the draw: buyers' own first (up to what they spend), then the biggest. */
+function allocatePool(holders, used, spend) {
+  const h = Object.fromEntries(Object.entries(holders).map(([k, v]) => [k, Math.max(0, roundAmt(v))]));
+  const take = {};
+  let left = roundAmt(used);
+  const order = Object.keys(h).filter((k) => h[k] > 0)
+    .sort((a, b) => (a === '?') - (b === '?') || (spend[b] > 0) - (spend[a] > 0) || h[b] - h[a] || (a < b ? -1 : 1));
+  const draw = (k, max) => { const t = Math.min(h[k], max, left); if (t > 0) { take[k] = (take[k] || 0) + t; h[k] -= t; left -= t; } };
+  for (const k of order) if (spend[k] > 0 && k !== '?') draw(k, spend[k]);
+  for (const k of order) draw(k, Infinity);
+  if (left > 0) take['?'] = (take['?'] || 0) + left;   // more than anyone is known to keep
+  return take;
+}
+
+/** Split an amount like the weights (whole won; the rounding goes to the biggest share). */
+function splitLike(amount, weights) {
+  const tot = sum(Object.values(weights));
+  if (!(tot > 0)) return {};
+  const out = Object.fromEntries(Object.entries(weights).map(([k, w]) => [k, Math.floor(amount * w / tot)]));
+  const big = Object.keys(weights).sort((a, b) => weights[b] - weights[a])[0];
+  out[big] += roundAmt(amount) - sum(Object.values(out));
+  return out;
+}
+
+/** Who keeps a draw's prize: whoever uploaded the photos with the winning QR codes, in proportion to them. */
+function prizeKeepers(round, amount) {
+  const by = {}, seen = new Set();
+  for (const t of S.tickets) for (const it of qrItems(t)) {
+    if ((it.round || drawNo(t.draw_date)) !== round || seen.has(it.url) || it.status !== 'win' || !(+it.prize > 0)) continue;
+    seen.add(it.url);
+    const k = partyOfMember(t.uploaded_by);
+    by[k] = (by[k] || 0) + +it.prize;
+  }
+  return Object.keys(by).length ? splitLike(amount, by) : { '?': roundAmt(amount) };
+}
+
+/**
+ * One draw's tickets: who spends, who puts in, and what is left to transfer.
+ * `x` = { groups, buyers: [{ party, n }], fresh: {party: amount}, poolUsed, holders: {party: amount}, done: [{from, to, amount}] }
+ */
+function buyLedger(x) {
+  const spend = {};
+  for (const b of x.buyers) if (b.party) spend[b.party] = (spend[b.party] || 0) + b.n * TICKET_PRICE;
+  const fresh = Object.fromEntries(Object.entries(x.fresh || {}).filter(([, v]) => +v > 0).map(([k, v]) => [k, roundAmt(v)]));
+  const poolUse = allocatePool(x.holders || {}, x.poolUsed || 0, spend);
+  const net = {};
+  const add = (k, v) => { net[k] = (net[k] || 0) + v; };
+  for (const [k, v] of Object.entries(fresh)) add(k, v);
+  for (const [k, v] of Object.entries(poolUse)) add(k, v);
+  for (const [k, v] of Object.entries(spend)) add(k, -v);
+  for (const d of x.done || []) { add(d.from, -d.amount); add(d.to, +d.amount); }
+  const cost = (x.groups || 0) * TICKET_PRICE, spent = sum(Object.values(spend));
+  const moneyIn = sum(Object.values(fresh)) + roundAmt(x.poolUsed);
+  const warnings = [];
+  if (spent < cost) warnings.push({ k: 'unbought', amount: cost - spent });
+  if (moneyIn !== spent && spent) warnings.push({ k: moneyIn > spent ? 'over' : 'short', amount: Math.abs(moneyIn - spent), moneyIn, spent });
+  if (poolUse['?']) warnings.push({ k: 'pool-unknown', amount: poolUse['?'] });
+  return { spend, fresh, poolUse, net, open: settle(net), cost, spent, moneyIn, warnings };
+}
+
+/** A shared prize: whoever keeps it pays each investor their share. */
+function prizeLedger(x) {
+  const net = {};
+  const add = (k, v) => { net[k] = (net[k] || 0) + v; };
+  for (const [k, v] of Object.entries(x.keepers)) add(k, v);
+  for (const [k, v] of Object.entries(x.shares)) add(k, -v);
+  for (const d of x.done || []) { add(d.from, -d.amount); add(d.to, +d.amount); }
+  return { net, open: settle(net) };
+}
+
+/** Everything 💰 Money shows, from the data loaded (weeks, plans, tickets, holders, transfers). */
+function computeMoney() {
+  const M = S.money, next = drawNo(currentDraw());
+  const start = M.snap ? M.snap.round : next - 1;   // without a starting point: from the coming draw on
+  let holders = M.snap ? Object.fromEntries(Object.entries(M.snap.holders || {}).map(([k, v]) => [k, roundAmt(v)])) : {};
+  const rounds = [];
+  let beforeNext = { ...holders };
+  for (let r = start + 1; r <= next; r++) {
+    if (r === next) beforeNext = { ...holders };
+    const date = drawDate(r), week = S.weeks.find((w) => w.result_date === date), plan = M.plans[r];
+    const done = M.transfers.filter((t) => t.round === r);
+    const doneBuy = done.filter((t) => t.kind === 'buy').map((t) => ({ ...t, from: t.from_inv, to: t.to_inv, amount: +t.amount }));
+    const groups = plan?.groups || 0;
+    const buyers = normBuyers(plan?.buyers, groups).map((b) => ({ ...b, n: b.to - b.from + 1, party: b.by ? partyOfMember(b.by) : null }));
+    const before = { ...holders };
+    const L = buyLedger({ groups, buyers, fresh: week?.investments, poolUsed: +week?.pool_used || 0, holders: before, done: doneBuy });
+    const item = { r, date, week, plan, groups, buyers, holdersBefore: before, buy: L, doneBuy };
+    if (!buyers.some((b) => b.by)) L.warnings.unshift({ k: 'no-buyers' });
+    if (!week) L.warnings.unshift({ k: 'no-week' });
+    // the pool after this draw: what was used leaves its holders, a prize added to the pool stays with its buyers
+    for (const [k, v] of Object.entries(L.poolUse)) if (k !== '?') holders[k] = (holders[k] || 0) - v;
+    const prize = +week?.prize_won || 0;
+    if (week && prize > 0 && resultsOut(date)) {
+      const keepers = prizeKeepers(r, prize);
+      if (!week.big_win) for (const [k, v] of Object.entries(keepers)) holders[k] = (holders[k] || 0) + v;
+      else {
+        const pcts = S.ledger.perWeek[week.id]?.pcts || {};
+        const shares = splitLike(prize, pcts);
+        const donePrize = done.filter((t) => t.kind === 'prize').map((t) => ({ ...t, from: t.from_inv, to: t.to_inv, amount: +t.amount }));
+        item.prize = { amount: prize, keepers, shares, done: donePrize, ...prizeLedger({ keepers, shares, done: donePrize }) };
+      }
+    }
+    for (const k of Object.keys(holders)) if (!holders[k]) delete holders[k];
+    if (week || plan || done.length) rounds.push(item);
+  }
+  // compare with the pool in the books (now, after the coming draw's tickets): what nobody is known to keep is "unknown"
+  const nowInBooks = roundAmt(replay(S.weeks.filter((w) => w.result_date <= drawDate(next))).pool.total);
+  const known = sum(Object.entries(holders).filter(([k]) => k !== '?').map(([, v]) => Math.max(0, v)));
+  // the editor sets who keeps it after the last finished draw (before the coming draw's tickets)
+  const inBooks = roundAmt(poolBefore(drawDate(next)).total);
+  const pool = { holders, nowInBooks, inBooks, unknown: nowInBooks - known, asOf: start, set: !!M.snap,
+    before: Object.fromEntries(Object.entries(beforeNext).filter(([k, v]) => k !== '?' && v > 0)) };
+  // my part: transfers I still have to make, and money still coming to me
+  const me = invOfMember(S.me?.id)?.id || `m:${S.me?.id}`;
+  const mine = [];
+  for (const it of rounds) {
+    for (const t of it.buy.open) if (t.from === me || t.to === me) mine.push({ ...t, round: it.r, kind: 'buy' });
+    for (const t of it.prize?.open || []) if (t.from === me || t.to === me) mine.push({ ...t, round: it.r, kind: 'prize' });
+  }
+  return { next, start, rounds, pool, me, mine, toSend: mine.filter((t) => t.from === me) };
+}
+
+/** A KakaoPay link for an exact amount: https://qr.kakaopay.com/{24-digit id}{hex(amount × 8)}{4 hex characters}. */
+const kakaoId = (url) => /^https:\/\/qr\.kakaopay\.com\/(\d{24})/i.exec(String(url || ''))?.[1] || null;
+function kakaoAmountUrl(url, amount, salt = '') {
+  const id = kakaoId(url);
+  if (!id || !(amount > 0)) return null;
+  let h = 0x2f1d;
+  for (const c of `${salt}:${amount}`) h = (h * 31 + c.charCodeAt(0)) & 0xffff;
+  return `https://qr.kakaopay.com/${id}${(Math.round(amount) * 8).toString(16)}${h.toString(16).padStart(4, '0')}`;
+}
+
+// ── loading and drawing 💰 Money
+let _moneyT = null;
+async function loadMoney() {
+  if (!S.me) return;
+  const snap = await S.sb.from('pool_holders').select('*').order('round', { ascending: false }).limit(1).maybeSingle();
+  if (snap.error) {
+    S.money = { ...S.money, loaded: true, missing: /pool_holders|schema cache|does not exist/.test(snap.error.message) };
+    return renderMoneyAll();
+  }
+  const start = snap.data ? snap.data.round : drawNo(currentDraw()) - 1;
+  const [pl, tr] = await Promise.all([
+    S.sb.from('pick_plans').select('*').gt('round', start),
+    S.sb.from('money_transfers').select('*').gt('round', start).order('done_at'),
+  ]);
+  S.money = { ...S.money, snap: snap.data || null, loaded: true, missing: !!tr.error,
+    plans: Object.fromEntries((pl.data || []).map((p) => [p.round, p])),
+    transfers: (tr.data || []).map((t) => ({ ...t, amount: +t.amount })) };
+  renderMoneyAll();
+}
+const loadMoneySoon = () => { clearTimeout(_moneyT); _moneyT = setTimeout(() => loadMoney().catch(console.error), 300); };
+
+/** Recompute after any change (weeks, tickets, investors, plans, transfers): tab badge, 🔔 and the tab. */
+function renderMoneyAll() {
+  S.moneyView = S.money.loaded && !S.money.missing && S.me ? computeMoney() : null;
+  const n = S.moneyView?.toSend.length || 0;
+  $('money-badge').hidden = !n;
+  $('money-badge').textContent = String(n);
+  renderBell();
+  if (S.tab === 'money') renderMoney();
+}
+
+const TRANSFER_SALT = (round, kind, t) => `${round}-${kind}-${t.from}-${t.to}`;
+/** "Send B ₩5,000": an exact-amount KakaoPay link when B's link has their 24-digit id, else B's own link, else ask B for one. */
+function payControl(t, round, kind) {
+  const inv = S.investors.find((i) => i.id === t.to), name = partyName(t.to);
+  const exact = kakaoAmountUrl(inv?.pay_url, t.amount, TRANSFER_SALT(round, kind, t));
+  if (exact) return `<a class="pay-btn" data-act="link" href="${esc(exact)}" target="_blank" rel="noopener noreferrer">💛 Send ${esc(name)} ${esc(money(t.amount))}</a>`;
+  const plain = safePayUrl(inv?.pay_url);
+  if (plain) return `<a class="pay-btn other" data-act="link" href="${esc(plain)}" target="_blank" rel="noopener noreferrer">💸 Open ${esc(name)}'s payment link</a>
+    <span class="fhelp">type ${esc(money(t.amount))} yourself (this link can't fill in the amount)</span>`;
+  const m = partyMember(t.to);
+  return `<span class="fhelp warn-txt">${esc(name)} has no KakaoPay link yet.</span>
+    ${m && m !== S.me.id ? `<button type="button" class="btn btn-ghost btn-sm" data-act="money-ask-link" data-member="${esc(m)}">💬 Ask ${esc(name)} in chat</button>` : ''}`;
+}
+
+function transferRow(t, round, kind, V) {
+  const iSend = t.from === V.me, iGet = t.to === V.me;
+  const real = ![t.from, t.to].some((k) => k === '?' || String(k).startsWith('m:'));
+  const canMark = real && (iSend || iGet || isAdmin());
+  const fromM = partyMember(t.from);
+  return `<div class="mt-row ${iSend ? 'me-send' : iGet ? 'me-get' : ''}">
+    <div class="mt-what"><strong>${esc(partyName(t.from))}</strong> → <strong>${esc(partyName(t.to))}</strong> <span class="mt-amt">${esc(money(t.amount))}</span>
+      ${iSend ? '<span class="badge bg-red">you send</span>' : iGet ? '<span class="badge qr-win">you get</span>' : ''}</div>
+    <div class="mt-acts">
+      ${iSend || (isAdmin() && real) ? payControl(t, round, kind) : ''}
+      ${canMark ? `<button type="button" class="btn btn-primary btn-sm" data-act="money-done" data-round="${round}" data-kind="${kind}" data-from="${esc(t.from)}" data-to="${esc(t.to)}" data-amount="${t.amount}">✓ Done</button>` : ''}
+      ${!iSend && fromM && fromM !== S.me.id && real ? `<button type="button" class="btn btn-ghost btn-sm" data-act="money-remind" data-member="${esc(fromM)}" data-to="${esc(partyName(t.to))}" data-amount="${t.amount}" data-round="${round}" title="Send ${esc(partyName(t.from))} a notification">🔔 Remind</button>` : ''}
+    </div>
+  </div>`;
+}
+function doneRow(t) {
+  const canUndo = t.done_by === S.me.id || isAdmin();
+  return `<div class="mt-row done"><div class="mt-what"><strong>${esc(partyName(t.from))}</strong> → <strong>${esc(partyName(t.to))}</strong> <span class="mt-amt">${esc(money(t.amount))}</span>
+    <span class="badge qr-win">✓ done</span> <span class="fhelp">marked by ${esc(userName(t.done_by))} · ${esc(ago(t.done_at))}</span></div>
+    ${canUndo ? `<div class="mt-acts"><button type="button" class="btn btn-ghost btn-sm" data-act="money-undo" data-id="${t.id}">Undo</button></div>` : ''}</div>`;
+}
+
+const WARN = {
+  'no-week': (it) => `No week entry for this draw yet: add who puts in fresh money and how much comes from the pool.
+    <button type="button" class="btn btn-secondary btn-sm" data-act="week-add-date" data-date="${it.date}">＋ Add the week</button>`,
+  'no-buyers': (it) => `Nobody has said they buy yet.${it.r === S.moneyView.next ? ' <button type="button" class="btn btn-secondary btn-sm" data-act="goto-buy">🛒 Choose buyers</button>' : ''}`,
+  unbought: (it, w) => `${money(w.amount)} of the groups have no buyer yet.`,
+  over: (it, w) => `Money in (${money(w.moneyIn)}) is more than the buyers spend (${money(w.spent)}): ${money(w.amount)} stays with whoever put it in.`,
+  short: (it, w) => `The buyers spend ${money(w.spent)} but only ${money(w.moneyIn)} comes in (fresh money + pool): ${money(w.amount)} is missing. Fix the week entry or the number of groups.`,
+  'pool-unknown': (it, w) => `${money(w.amount)} of the pool money has no known keeper: set who keeps the pool below.`,
+};
+
+function roundCard(it, V) {
+  const L = it.buy, openN = L.open.length + (it.prize?.open.length || 0);
+  const ready = !L.warnings.some((w) => w.k === 'no-week' || w.k === 'no-buyers');
+  const status = !ready ? '<span class="badge bg-gray">⏳ not decided yet</span>'
+    : openN ? `<span class="badge bg-red">${openN} transfer${openN === 1 ? '' : 's'} to make</span>` : '<span class="badge qr-win">✓ all settled</span>';
+  const unlinked = [...new Set(Object.keys({ ...L.spend, ...L.net }).filter((k) => String(k).startsWith('m:')))];
+  const buyers = it.buyers.filter((b) => b.by).map((b) => `${esc(memberName(b.by))} <span class="fhelp">(${b.from === b.to ? `group ${b.from}` : `groups ${b.from}–${b.to}`}, ${esc(money(b.n * TICKET_PRICE))})</span>`).join(' · ');
+  const fresh = Object.entries(L.fresh).map(([k, v]) => `${esc(partyName(k))} ${esc(money(v))}`).join(' · ');
+  const pool = Object.entries(L.poolUse).map(([k, v]) => `${esc(partyName(k))} ${esc(money(v))}`).join(' · ');
+  const donePrize = it.prize?.done || [];
+  return `<div class="card money-round">
+    <div class="card-hd"><div class="card-title">🛒 Draw #${it.r} <span class="fhelp">${esc(fmtD(it.date))}</span></div>${status}</div>
+    <div class="mr-facts">
+      <div><span>Tickets</span><strong>${it.groups} group${it.groups === 1 ? '' : 's'} · ${esc(money(L.cost))}</strong></div>
+      <div><span>Buyers</span><div>${buyers || '—'}</div></div>
+      <div><span>Fresh money</span><div>${fresh || '—'}</div></div>
+      <div><span>From the pool</span><div>${pool ? `${esc(money(sum(Object.values(L.poolUse))))}: ${pool}` : '—'}</div></div>
+    </div>
+    ${L.warnings.map((w) => `<div class="money-warn">⚠️ ${WARN[w.k](it, w)}</div>`).join('')}
+    ${unlinked.map((k) => `<div class="money-warn">⚠️ ${esc(partyName(k))} buys but is not linked to an investor: 👥 Investors → ✏️ → App account.</div>`).join('')}
+    ${ready ? `<div class="mt-list">${L.open.map((t) => transferRow(t, it.r, 'buy', V)).join('')}
+      ${it.doneBuy.map(doneRow).join('')}
+      ${!L.open.length && !it.doneBuy.length && L.spent ? '<p class="fhelp">✓ Nothing to transfer: every buyer pays with their own money.</p>' : ''}</div>` : ''}
+    ${it.prize ? `<div class="mr-prize">
+      <div class="mr-sub">🎉 Shared prize ${esc(money(it.prize.amount))} · kept by ${Object.entries(it.prize.keepers).map(([k, v]) => `${esc(partyName(k))} ${esc(money(v))}`).join(', ')}</div>
+      <div class="fhelp">Shares: ${Object.entries(it.prize.shares).map(([k, v]) => `${esc(partyName(k))} ${esc(money(v))}`).join(' · ')}</div>
+      <div class="mt-list">${it.prize.open.map((t) => transferRow(t, it.r, 'prize', V)).join('')}${donePrize.map(doneRow).join('')}</div></div>` : ''}
+  </div>`;
+}
+
+let _poolEdit = false;
+function poolCard(V) {
+  const P = V.pool, last = V.next - 1;
+  const list = Object.entries(P.holders).filter(([k, v]) => k !== '?' && v).sort((a, b) => b[1] - a[1]);
+  const editable = S.investors.filter((i) => invState(i) === 'active' || P.holders[i.id] || P.before[i.id]);
+  return `<div class="card">
+    <div class="card-hd"><div class="card-title">🏦 Who keeps the pool</div><span class="fhelp">${esc(money(P.nowInBooks))} in the pool now</span></div>
+    ${!P.set ? '<div class="money-warn">⚠️ Not set yet: tell the app who keeps the pool money now. From then on it follows the weeks by itself.</div>' : ''}
+    <div class="mr-facts">${list.map(([k, v]) => `<div><span>${esc(partyName(k))}</span><strong>${esc(money(v))}</strong></div>`).join('') || '<div><span>Nobody</span><strong>—</strong></div>'}</div>
+    ${Math.abs(P.unknown) >= 1 && (P.set || P.nowInBooks) ? `<div class="money-warn">⚠️ ${P.unknown > 0 ? `${esc(money(P.unknown))} of the pool has no known keeper` : `the keepers hold ${esc(money(-P.unknown))} more than the pool`}: correct it below.</div>` : ''}
+    <p class="fhelp">Pool money used for tickets comes from its keepers (first from those who buy that week). A prize added to the pool stays with whoever bought the winning tickets.
+      ${P.set ? `Set as of draw #${P.asOf}.` : ''}</p>
+    ${_poolEdit ? `<div class="pool-edit">
+      <p class="fhelp">Who keeps the pool money now, after draw #${last}? The amounts must add up to ${esc(money(P.inBooks))}.</p>
+      ${editable.map((i) => `<label class="pe-row"><span>${esc(i.nickname)}</span><input class="finp" type="text" inputmode="numeric" data-amount data-on-input="pool-amt" data-pool-inv="${esc(i.id)}" value="${P.before[i.id] > 0 ? fmtAmt(P.before[i.id]) : ''}" placeholder="0"></label>`).join('')}
+      <div class="pe-foot"><span class="fhelp" id="pool-edit-sum"></span>
+        <button type="button" class="btn btn-ghost btn-sm" data-act="pool-edit">Cancel</button>
+        <button type="button" class="btn btn-primary btn-sm" data-act="pool-save">Save</button></div>
+      <p class="fhelp">Saving starts the money tracking after draw #${last}: transfers of earlier draws are no longer listed.</p>
+    </div>` : `<button type="button" class="btn btn-secondary btn-sm" data-act="pool-edit">✏️ ${P.set ? 'Correct who keeps it' : 'Set who keeps it'}</button>`}
+  </div>`;
+}
+
+function renderMoney() {
+  const el = $('money-body');
+  if (!el) return;
+  if (S.money.missing) { el.innerHTML = '<div class="card"><p class="form-error">💰 Money needs the database update: run supabase/schema.sql again in the Supabase SQL editor.</p></div>'; return; }
+  if (!S.money.loaded || !S.moneyView) { el.innerHTML = '<div class="card"><div class="spinner" style="margin:20px auto"></div></div>'; return; }
+  const V = S.moneyView, mineInv = invOfMember(S.me.id);
+  // link accounts and investors: me first, then name matches
+  const free = S.investors.filter((i) => !i.member);
+  const guesses = free.map((i) => ({ i, p: S.profiles.find((p) => p.status === 'active' && !invOfMember(p.id) && p.display_name?.trim().toLowerCase() === i.nickname.trim().toLowerCase()) })).filter((x) => x.p);
+  const setup = !mineInv ? `<div class="card"><div class="card-title">👤 Which investor are you?</div>
+      <p class="fhelp">Link your account to your investor, so 💰 Money knows what you buy, send and receive.</p>
+      <div class="link-me">${free.map((i) => `<button type="button" class="btn btn-secondary btn-sm" data-act="money-link" data-inv="${esc(i.id)}" data-member="${S.me.id}">${esc(i.nickname)}</button>`).join('') || '<span class="fhelp">Every investor is linked already: add yourself in 👥 Investors.</span>'}</div></div>` : '';
+  const others = guesses.filter((x) => x.p.id !== S.me.id);
+  const suggest = others.length ? `<div class="card"><div class="card-title">🔗 Link accounts</div>
+      <p class="fhelp">These members and investors have the same name. Link them?</p>
+      ${others.map((x) => `<button type="button" class="btn btn-secondary btn-sm" data-act="money-link" data-inv="${esc(x.i.id)}" data-member="${x.p.id}">${esc(x.p.display_name)} ↔ ${esc(x.i.nickname)}</button>`).join(' ')}</div>` : '';
+  const sendN = V.toSend.length, getN = V.mine.length - sendN;
+  const mine = mineInv ? `<div class="card money-mine">
+      <div class="card-hd"><div class="card-title">💸 Your transfers</div><span class="fhelp">as ${esc(mineInv.nickname)}</span></div>
+      ${V.mine.length ? V.mine.map((t) => `<div class="fhelp mt-round">Draw #${t.round}${t.kind === 'prize' ? ' · shared prize' : ''}</div>${transferRow(t, t.round, t.kind, V)}`).join('')
+        : '<p class="fhelp">✓ Nothing to send or receive right now.</p>'}
+      ${sendN ? '<p class="fhelp">After sending, tap ✓ Done so everyone knows.</p>' : getN ? '<p class="fhelp">When the money arrives, you can tap ✓ Done too.</p>' : ''}
+      ${mineInv && !safePayUrl(mineInv.pay_url) ? '<div class="money-warn">⚠️ You have no KakaoPay link yet, so nobody can send you money with one tap: 👥 Investors → ✏️ on your card → 💛 Link to send them money.</div>' : ''}
+    </div>` : '';
+  const rounds = [...V.rounds].reverse();
+  // a live update while someone types in the pool editor keeps what they typed
+  const typed = Object.fromEntries([...document.querySelectorAll('[data-pool-inv]')].map((e) => [e.dataset.poolInv, e.value]));
+  el.innerHTML = `${setup}${mine}${rounds.map((it) => roundCard(it, V)).join('') || `<div class="card"><p class="fhelp">Nothing to settle since draw #${V.start}.</p></div>`}${suggest}${poolCard(V)}
+    <p class="fhelp money-help">How it works: the buyers pay at the shop. Everyone who puts in fresh money, and whoever keeps the pool money used,
+      sends it to the buyers, in as few transfers as possible. Tap 💛 to open KakaoPay with the amount filled in, then ✓ Done.</p>`;
+  if (_poolEdit) {
+    for (const e of document.querySelectorAll('[data-pool-inv]')) if (e.dataset.poolInv in typed) e.value = typed[e.dataset.poolInv];
+    poolEditSum();
+  }
+}
+
+function poolEditSum() {
+  const tot = sum([...document.querySelectorAll('[data-pool-inv]')].map((e) => amt(e.value)));
+  const want = S.moneyView.pool.inBooks;
+  $('pool-edit-sum').textContent = `${money(tot)} of ${money(want)}${tot === want ? ' ✓' : ''}`;
+  $('pool-edit-sum').classList.toggle('red', tot !== want);
+}
+async function savePoolHolders() {
+  const V = S.moneyView, holders = {};
+  for (const e of document.querySelectorAll('[data-pool-inv]')) { const v = amt(e.value); if (v > 0) holders[e.dataset.poolInv] = v; }
+  const tot = sum(Object.values(holders));
+  if (tot !== V.pool.inBooks) return toast(`The amounts add up to ${money(tot)}, but the pool has ${money(V.pool.inBooks)}.`, 'err');
+  const { error } = await S.sb.from('pool_holders').upsert({ round: V.next - 1, holders }, { onConflict: 'round' });
+  if (error) return fail(error);
+  _poolEdit = false;
+  toast('🏦 Saved who keeps the pool.', 'ok');
+  loadMoney();
+}
+
+async function markTransfer(el) {
+  const row = { round: +el.dataset.round, kind: el.dataset.kind, from_inv: el.dataset.from, to_inv: el.dataset.to, amount: +el.dataset.amount };
+  if (!confirm(`${partyName(row.from_inv)} sent ${partyName(row.to_inv)} ${money(row.amount)} for draw #${row.round}?`)) return;
+  el.disabled = true;
+  const { error } = await S.sb.from('money_transfers').insert(row);
+  if (error) { el.disabled = false; return fail(error); }
+  toast('✓ Marked as done.', 'ok');
+  loadMoney();
+}
+async function undoTransfer(id) {
+  if (!confirm('Undo this? It goes back to the transfers still to make.')) return;
+  const { error } = await S.sb.from('money_transfers').delete().eq('id', /^\d+$/.test(id) ? Number(id) : id);
+  if (error) return fail(error);
+  loadMoney();
+}
+async function linkInvestor(invId, memberId) {
+  const { error } = await S.sb.from('investors').update({ member: memberId }).eq('id', invId);
+  if (error) return fail(/member/.test(error.message) ? new Error('The database needs an update: run supabase/schema.sql again.') : error);
+  toast('🔗 Linked.', 'ok');
+  await loadAll({ draws: false });
+}
+async function remindTransfer(el) {
+  const { data, error } = await S.sb.functions.invoke('check-tickets', { body: { push: 'money', member: el.dataset.member, to: el.dataset.to, amount: +el.dataset.amount, round: +el.dataset.round }, region: 'ap-northeast-2' });
+  if (error || !data?.ok) return toast('Could not send the reminder.', 'err');
+  toast(data.sent ? `🔔 Reminder sent to ${memberName(el.dataset.member)}.` : `${memberName(el.dataset.member)} has no phone notifications on: tell them in 💬 Chat.`, data.sent ? 'ok' : 'err');
 }
 
 // ─── 💬 Chat ──────────────────────────────────────────────────────────────────────────────────
@@ -4111,18 +4519,22 @@ function notifText(n) {
     body: d.estimated ? `${list} · prize amount to follow` : `${money(d.won)}${d.won < d.gross ? ' after tax' : ''} · ${list}` };
 }
 function renderBell() {
-  const unread = S.notifs.filter((n) => !n.read_at).length;
+  const owe = S.moneyView?.toSend || [];
+  const unread = S.notifs.filter((n) => !n.read_at).length + owe.length;
   $('bell-badge').hidden = !unread;
   $('bell-badge').textContent = unread > 9 ? '9+' : String(unread);
   $('bell').classList.toggle('on', !$('bell-panel').hidden);
   $('bell-read-all').disabled = !unread;
   if ($('bell-panel').hidden) return;
-  $('bell-list').innerHTML = S.notifs.length ? S.notifs.map((n) => {
+  const oweHtml = owe.map((t) => `<button type="button" class="bn-item unread" data-act="goto-money">
+      <span class="bn-ico">💸</span><span class="bn-main"><div class="bn-title">Send ${esc(partyName(t.to))} ${esc(money(t.amount))}</div>
+      <div class="bn-body">Draw #${t.round}${t.kind === 'prize' ? ' (shared prize)' : ''}: send it, then tap ✓ Done in 💰 Money</div></span></button>`).join('');
+  $('bell-list').innerHTML = oweHtml + (S.notifs.length ? S.notifs.map((n) => {
     const t = notifText(n);
     return `<button type="button" class="bn-item ${n.read_at ? '' : 'unread'}" data-act="notif-open" data-id="${n.id}">
       <span class="bn-ico">${t.ico}</span><span class="bn-main"><div class="bn-title">${esc(t.title)}</div>
       ${t.body ? `<div class="bn-body" ${n.kind === 'mention' ? 'data-no-i18n' : ''}>${esc(t.body)}</div>` : ''}<div class="bn-time">${esc(ago(n.created_at))}</div></span></button>`;
-  }).join('') : '<div class="bn-empty">No notifications yet. You get one when someone mentions you in 💬 Chat or when we win.</div>';
+  }).join('') : owe.length ? '' : '<div class="bn-empty">No notifications yet. You get one when someone mentions you in 💬 Chat or when we win.</div>');
 }
 function toggleBell(open = $('bell-panel').hidden) {
   $('bell-panel').hidden = !open;
@@ -4269,7 +4681,7 @@ function openFromHash(hash = location.hash) {
   const h = String(hash || '').replace(/^#/, '');
   if (!h || h.startsWith('invite=') || !S.me) return;
   const [tab, sec] = h.split('-');
-  if (!['dashboard', 'chat', 'weeks', 'tickets', 'picks', 'investors', 'charts', 'activity', 'settings'].includes(tab)) return;
+  if (!['dashboard', 'chat', 'weeks', 'money', 'tickets', 'picks', 'investors', 'charts', 'activity', 'settings'].includes(tab)) return;
   goTab(tab);
   if (tab === 'picks' && sec) setPicksSection(sec);
   history.replaceState(null, '', location.pathname + location.search);
@@ -4284,7 +4696,8 @@ async function pushTest() {
 }
 
 // ─── Activity log ─────────────────────────────────────────────────────────────
-const TABLE_LABEL = { weeks: 'week', investors: 'investor', tickets: 'ticket photo', settings: 'settings', profiles: 'member' };
+const TABLE_LABEL = { weeks: 'week', investors: 'investor', tickets: 'ticket photo', settings: 'settings', profiles: 'member',
+  money_transfers: 'money transfer', pool_holders: 'pool keepers' };
 const SKIP_FIELDS = new Set(['updated_at', 'updated_by', 'created_at', 'created_by', 'id', 'lang', 'prefs']);
 /** An edit that changed nothing the group cares about (logged before the database learned to skip these). */
 function quietChange(r) {
@@ -4320,6 +4733,8 @@ function describeChange(r) {
   else if (r.table_name === 'investors') subject = row.nickname;
   else if (r.table_name === 'tickets') subject = `draw ${drawLabel(row.draw_date)} ${fmtD(row.draw_date)}`;
   else if (r.table_name === 'profiles') subject = `${row.display_name} (@${row.username})`;
+  else if (r.table_name === 'money_transfers') subject = `${invName(row.from_inv)} → ${invName(row.to_inv)} ${money(row.amount)} (draw #${row.round})`;
+  else if (r.table_name === 'pool_holders') subject = `${Object.entries(row.holders || {}).map(([k, v]) => `${invName(k)} ${money(v)}`).join(', ') || 'nobody'} (after draw #${row.round})`;
 
   const verb = { INSERT: 'added', UPDATE: 'changed', DELETE: 'deleted' }[r.action] || r.action;
   if (r.table_name === 'profiles' && r.action === 'INSERT') return { head: `joined the group`, subject: '', detail: '', self: row.id };
@@ -4659,6 +5074,14 @@ const ACTIONS = {
   'buy-start': () => startBuying(),
   'goto-buy': () => { goTab('picks'); setPicksSection('buy'); },
   link: () => {},
+  'goto-money': () => { toggleBell(false); goTab('money'); },
+  'money-done': (el) => markTransfer(el),
+  'money-undo': (el) => undoTransfer(el.dataset.id),
+  'money-remind': (el) => remindTransfer(el),
+  'money-link': (el) => linkInvestor(el.dataset.inv, el.dataset.member),
+  'money-ask-link': (el) => { goTab('chat'); chatSend(`<@${el.dataset.member}> please add your KakaoPay link (👥 Investors → ✏️ on your card → 💛 Link to send them money), so we can send you money from 💰 Money 🙏`); },
+  'pool-edit': () => { _poolEdit = !_poolEdit; document.querySelectorAll('[data-pool-inv]').forEach((e) => e.remove()); renderMoney(); },
+  'pool-save': () => savePoolHolders(),
   'chat-send': () => chatSend(),
   'chat-quick': (el) => chatSend(el.dataset.e),
   'chat-react': (el) => { $('chat-pop').hidden = true; chatToggleReact(el.dataset.id, el.dataset.e); },
@@ -4743,6 +5166,8 @@ const ACTIONS = {
 };
 
 const INPUTS = {
+  'im-pay': () => payHint(),
+  'pool-amt': () => poolEditSum(),
   'chat-input': (el, e) => { if (e.type === 'input') { chatGrow(); chatMentionCheck(); } },
   'chat-q': () => { clearTimeout(_chatQT); _chatQT = setTimeout(chatSearch, 300); },
   'wm-preview': () => previewWeek(),

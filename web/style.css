@@ -1161,3 +1161,37 @@ table.bt td, table.bt th { padding: 8px 10px; }
 .chat-results .cr-none { padding: 14px; color: var(--muted); font-size: 13px; text-align: center; }
 .chat-latest { display: block; margin: 0 auto 6px; }
 .chat-search input::-webkit-search-cancel-button { display: none; }
+
+/* 💰 Money */
+.money-body { display: flex; flex-direction: column; gap: 16px; max-width: 860px; }
+.money-body .card { margin: 0; }
+.mr-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px 16px; margin: 4px 0 10px; }
+.mr-facts > div { display: flex; flex-direction: column; gap: 2px; font-size: 13.5px; }
+.mr-facts > div > span:first-child { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; }
+.money-warn { margin: 8px 0; padding: 8px 12px; border-radius: 10px; background: rgba(245,158,11,.08); border: 1px solid rgba(245,158,11,.3); font-size: 13px; }
+.money-warn .btn { margin-left: 6px; }
+.warn-txt { color: #fbbf24; }
+.mt-list { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.mt-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; padding: 10px 12px; border-radius: 12px;
+  border: 1px solid var(--border); background: rgba(255,255,255,.03); }
+.mt-row.me-send { border-color: rgba(239,68,68,.45); background: rgba(239,68,68,.06); }
+.mt-row.me-get { border-color: rgba(34,197,94,.4); background: rgba(34,197,94,.05); }
+.mt-row.done { opacity: .7; }
+.mt-what { font-size: 14px; }
+.mt-amt { font: 600 15px var(--mono); margin-left: 4px; }
+.mt-acts { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.mt-acts .pay-btn { margin-top: 0; }
+.mt-round { margin: 10px 0 4px; }
+.mr-prize { margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--border); }
+.mr-sub { font-weight: 600; margin-bottom: 2px; }
+.link-me { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.pool-edit { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }
+.pe-row { display: grid; grid-template-columns: 1fr 160px; align-items: center; gap: 10px; font-size: 14px; }
+.pe-foot { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+.pe-foot .fhelp { margin-right: auto; }
+.money-help { margin: 0 4px; }
+@media (max-width: 640px) {
+  .mt-row { padding: 10px; }
+  .mt-acts { width: 100%; }
+  .pe-row { grid-template-columns: 1fr 130px; }
+}
