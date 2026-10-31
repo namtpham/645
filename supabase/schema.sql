@@ -52,7 +52,8 @@ create table if not exists public.settings (
 );
 insert into public.settings (id) values (1) on conflict (id) do nothing;
 -- ⏸ An admin can pause every phone notification (e.g. while testing). Paused at first.
-alter table public.settings add column if not exists push_paused boolean not null default true;
+alter table public.settings add column if not exists push_paused boolean not null default false;
+alter table public.settings alter column push_paused set default false;
 
 create or replace function public.valid_amounts(j jsonb)
 returns boolean language sql immutable as $$
@@ -146,6 +147,7 @@ alter table public.draws add column if not exists prizes jsonb;
 alter table public.profiles add column if not exists lang text check (lang in ('en', 'ko', 'vi'));   -- same language on every device
 alter table public.profiles add column if not exists prefs jsonb not null default '{}';               -- the member's own settings (e.g. 🎫 My QR tab)
 alter table public.tickets add column if not exists notified_at timestamptz;   -- "new ticket photos" sent
+alter table public.tickets add column if not exists photo_deleted_at timestamptz;   -- the photo file was deleted (no win; approved by the members)
 alter table public.draws add column if not exists raw jsonb;
 
 create table if not exists public.audit_log (
@@ -205,6 +207,7 @@ alter table public.push_subs add column if not exists tickets boolean not null d
 alter table public.push_subs add column if not exists last_remind int;
 alter table public.push_subs add column if not exists chat boolean not null default false;   -- new chat messages
 alter table public.push_subs add column if not exists mention boolean not null default true;  -- someone wrote @me or @everyone
+alter table public.push_subs add column if not exists last_buy_remind int;   -- last draw this device's member was reminded to buy / upload
 alter table public.push_subs drop constraint if exists push_subs_mode_check;
 alter table public.push_subs add constraint push_subs_mode_check check (mode in ('all', 'win', 'big', 'none'));
 
@@ -282,6 +285,32 @@ create table if not exists public.money_transfers (
 create index if not exists money_transfers_round on public.money_transfers (round);
 alter table public.money_transfers drop constraint if exists money_transfers_kind_check;
 alter table public.money_transfers add constraint money_transfers_kind_check check (kind in ('buy', 'prize', 'pool'));
+
+-- 🧹 Photos of a draw that won nothing: a week later the bot proposes deleting them; once more than
+-- half of the members approve, check-tickets deletes the files (the QR results stay).
+create table if not exists public.photo_cleanups (
+  round      int primary key,
+  ticket_ids uuid[] not null,
+  approvals  uuid[] not null default '{}',   -- members who said yes
+  created_at timestamptz not null default now(),
+  done_at    timestamptz,
+  deleted    int not null default 0
+);
+
+create or replace function public.approve_cleanup(p_round int, p_yes boolean default true)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare c photo_cleanups;
+begin
+  if not is_member() then raise exception 'Members only'; end if;
+  update photo_cleanups
+     set approvals = case when p_yes then array_append(array_remove(approvals, auth.uid()), auth.uid())
+                          else array_remove(approvals, auth.uid()) end
+   where round = p_round and done_at is null
+  returning * into c;
+  if c is null then raise exception 'There is nothing to approve for draw %', p_round; end if;
+  return jsonb_build_object('approvals', cardinality(c.approvals),
+                            'members', (select count(*) from profiles where status = 'active'));
+end $$;
 
 -- 🔔 A member's own notifications (the bell): someone mentioned them in chat, or the bot announced a win.
 -- Made by the database itself (chat_notify below), so they arrive even when no app is open.
@@ -653,6 +682,7 @@ alter table public.chat_reactions enable row level security;
 alter table public.notifications  enable row level security;
 alter table public.pool_holders    enable row level security;
 alter table public.money_transfers enable row level security;
+alter table public.photo_cleanups  enable row level security;
 
 do $$
 declare p record;
@@ -661,7 +691,7 @@ begin
            where schemaname = 'public'
              and tablename in ('profiles', 'invites', 'settings', 'investors', 'weeks', 'tickets', 'audit_log', 'draws',
                                'pick_plans', 'group_picks', 'live_picks', 'push_subs', 'push_keys', 'my_picks',
-                               'chat_messages', 'chat_reactions', 'notifications', 'pool_holders', 'money_transfers')
+                               'chat_messages', 'chat_reactions', 'notifications', 'pool_holders', 'money_transfers', 'photo_cleanups')
   loop
     execute format('drop policy %I on public.%I', p.policyname, p.tablename);
   end loop;
@@ -729,6 +759,7 @@ create policy "react"          on public.chat_reactions for insert to authentica
   with check (public.is_member() and member = auth.uid());
 create policy "take back a reaction" on public.chat_reactions for delete to authenticated
   using (public.is_member() and member = auth.uid());
+create policy "read photo cleanups" on public.photo_cleanups for select to authenticated using (public.is_member());
 create policy "read pool holders" on public.pool_holders for select to authenticated using (public.is_member());
 create policy "set pool holders"  on public.pool_holders for insert to authenticated with check (public.is_member());
 create policy "fix pool holders"  on public.pool_holders for update to authenticated
@@ -767,6 +798,7 @@ grant insert (body)                  on public.chat_messages  to authenticated; 
 grant select, insert, delete         on public.chat_reactions to authenticated;
 grant select, delete                 on public.notifications  to authenticated;
 grant select, insert, update         on public.pool_holders    to authenticated;
+grant select                         on public.photo_cleanups  to authenticated;   -- votes: approve_cleanup()
 grant select, insert, delete         on public.money_transfers to authenticated;
 grant update (read_at)               on public.notifications  to authenticated;
 
@@ -780,6 +812,7 @@ grant execute on function public.is_member(), public.is_admin(), public.normaliz
 grant execute on function public.move_ticket_to_qr_draw(uuid) to authenticated;
 grant execute on function public.delete_ticket(uuid, text) to authenticated;
 grant execute on function public.clear_group_picks(int) to authenticated;
+grant execute on function public.approve_cleanup(int, boolean) to authenticated;
 grant execute on function public.check_invite(text), public.username_available(text, text),
                           public.ping()
   to anon, authenticated;
@@ -812,7 +845,7 @@ do $$
 declare t text;
 begin
   foreach t in array array['investors', 'weeks', 'tickets', 'settings', 'profiles', 'draws', 'pick_plans', 'group_picks', 'live_picks',
-                           'chat_messages', 'chat_reactions', 'notifications', 'pool_holders', 'money_transfers'] loop
+                           'chat_messages', 'chat_reactions', 'notifications', 'pool_holders', 'money_transfers', 'photo_cleanups'] loop
     if not exists (select 1 from pg_publication_tables
                    where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = t) then
       execute format('alter publication supabase_realtime add table public.%I', t);

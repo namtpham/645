@@ -103,20 +103,20 @@
 <nav class="navbar">
   <div class="nav-logo" id="nav-title">645</div>
   <div class="nav-tabs" id="nav-tabs">
-    <div class="nav-tab active" data-act="tab" data-tab="dashboard">📊 Dashboard</div>
-    <div class="nav-tab" data-act="tab" data-tab="chat">💬 Chat<span class="nav-badge" id="chat-badge" hidden></span></div>
-    <div class="nav-tab" data-act="tab" data-tab="weeks">📅 Weeks</div>
-    <div class="nav-tab" data-act="tab" data-tab="money">💰 Money<span class="nav-badge" id="money-badge" hidden></span></div>
-    <div class="nav-tab" data-act="tab" data-tab="tickets">🎟️ Tickets</div>
-    <div class="nav-tab" data-act="tab" data-tab="picks">🔮 Picks</div>
-    <div class="nav-tab" data-act="tab" data-tab="investors">👥 Investors</div>
-    <div class="nav-tab" data-act="tab" data-tab="charts">📈 Charts</div>
-    <div class="nav-tab" data-act="tab" data-tab="activity">📝 Activity</div>
-    <div class="nav-tab" data-act="tab" data-tab="settings">⚙️ Settings</div>
+    <div class="nav-tab active" data-act="tab" data-tab="dashboard"><span class="ti">📊</span><span class="tl">Dashboard</span></div>
+    <div class="nav-tab" data-act="tab" data-tab="chat"><span class="ti">💬</span><span class="tl">Chat</span><span class="nav-badge" id="chat-badge" hidden></span></div>
+    <div class="nav-tab" data-act="tab" data-tab="weeks"><span class="ti">📅</span><span class="tl">Weeks</span></div>
+    <div class="nav-tab" data-act="tab" data-tab="money"><span class="ti">💰</span><span class="tl">Money</span><span class="nav-badge" id="money-badge" hidden></span></div>
+    <div class="nav-tab" data-act="tab" data-tab="tickets"><span class="ti">🎟️</span><span class="tl">Tickets</span></div>
+    <div class="nav-tab" data-act="tab" data-tab="picks"><span class="ti">🔮</span><span class="tl">Picks</span></div>
+    <div class="nav-tab" data-act="tab" data-tab="investors"><span class="ti">👥</span><span class="tl">Investors</span></div>
+    <div class="nav-tab" data-act="tab" data-tab="charts"><span class="ti">📈</span><span class="tl">Charts</span></div>
+    <div class="nav-tab nav-settings" data-act="tab" data-tab="settings"><span class="ti">⚙️</span><span class="tl">Settings</span></div>
   </div>
   <div class="nav-right">
     <div class="sync-dot off" id="syncDot" title="Live sync"></div>
     <button type="button" class="bell" id="bell" data-act="bell" title="Notifications" aria-label="Notifications">🔔<span class="nav-badge" id="bell-badge" hidden></span></button>
+    <button type="button" class="bell nav-gear" data-act="tab" data-tab="settings" title="Settings" aria-label="Settings">⚙️</button>
     <span class="nav-user" id="nav-user"></span>
     <button class="btn-logout" data-act="logout">Sign out</button>
   </div>
@@ -196,6 +196,7 @@
     <div class="row-hd">
       <h2 class="sec-title">Ticket Photos</h2>
     </div>
+    <div id="tickets-cleanups"></div>
 
     <div class="card" id="upload-card">
       <div class="card-hd">
@@ -561,14 +562,6 @@
     <div class="chat-pop" id="chat-pop" hidden></div>
   </div>
 
-  <div class="tab-pane" id="tab-activity">
-    <div class="row-hd">
-      <h2 class="sec-title">Activity Log</h2>
-      <span class="fhelp">Every change by every member is recorded here and can't be edited.</span>
-    </div>
-    <div class="card"><div id="activity-list"></div></div>
-  </div>
-
   <!-- ═══ SETTINGS ═════════════════════════════════════════════════════════ -->
   <div class="tab-pane" id="tab-settings">
     <h2 class="sec-title">Settings</h2>
@@ -580,6 +573,9 @@
           <div class="fgrp"><label class="flbl" for="me-name">Display name</label><input class="finp" id="me-name" maxlength="40"></div>
           <label class="lock-toggle"><input type="checkbox" id="me-sim" data-on-input="me-sim"> <span><strong>🕰️ Simulation tab in Picks</strong><small>Try the suggestions on a past week and see what they would have won</small></span></label>
           <label class="lock-toggle"><input type="checkbox" id="me-myqr" data-on-input="me-myqr"> <span><strong>🎫 My QR tab in Picks</strong><small>Pick numbers and make QR codes for tickets of your own (only you see them)</small></span></label>
+          <div class="fgrp"><label class="flbl" for="me-tz">Time zone of the clock</label>
+            <select class="finp" id="me-tz" data-on-input="me-tz" data-no-i18n></select>
+            <p class="fhelp" style="margin-top:4px">For the clock at the top. Saved on your account, so every device shows the same.</p></div>
           <div class="fgrp"><label class="flbl" for="me-lang">Language</label>
             <select class="finp" id="me-lang" data-on-input="lang" data-no-i18n>
               <option value="en">English</option><option value="ko">한국어 (Korean)</option><option value="vi">Tiếng Việt (Vietnamese)</option>
@@ -704,6 +700,11 @@
         </div>
       </div>
     </div>
+    <div class="row-hd" id="activity" style="margin-top:24px">
+      <h2 class="sec-title">📝 Activity log</h2>
+      <span class="fhelp">Every change by every member is recorded here and can't be edited.</span>
+    </div>
+    <div class="card"><div id="activity-list"></div></div>
   </div>
 
 </main>
@@ -914,6 +915,7 @@
     <div class="lb-stage" id="lb-stage">
       <button class="lb-nav prev" id="lb-prev" data-act="lb-prev" title="Previous ticket (←)">‹</button>
       <img id="lb-img" alt="Ticket photo">
+      <div class="lb-gone" id="lb-gone" hidden>🗑️ This photo was deleted: the draw won nothing and the members approved. Its QR codes and results stay.</div>
       <button class="lb-nav next" id="lb-next" data-act="lb-next" title="Next ticket (→)">›</button>
     </div>
     <div class="qr-panel" id="lb-qr"></div>

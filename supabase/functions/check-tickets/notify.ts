@@ -164,3 +164,24 @@ export function moneyMessage(from: string, to: string, amount: number, round: nu
   }[lang] ?? { title: `💸 ${to} ${m}`, body: '' };
   return { ...t, tag: `money-${round}`, url: './#money' };
 }
+
+/** 🛒 Saturday morning (12 hours before the draw): a buyer has no ticket photos for the draw yet. */
+export function buyerMessage(round: number, from: number, to: number, lang: Lang) {
+  const g = from === to ? `${from}` : `${from}–${to}`, n = to - from + 1;
+  const t = {
+    en: { title: `🛒 Draw #${round}: you buy group${n > 1 ? 's' : ''} ${g} today`, body: `${n} game${n > 1 ? 's' : ''}, ${money(n * 1000, lang)}. Sales close at 20:00 KST: upload the ticket photos once bought.` },
+    ko: { title: `🛒 제${round}회: 오늘 ${g}번 조합을 사 주세요`, body: `${n}게임, ${money(n * 1000, lang)}. 판매는 20:00에 마감됩니다: 산 뒤 복권 사진을 올려 주세요.` },
+    vi: { title: `🛒 Kỳ #${round}: hôm nay bạn mua bộ ${g}`, body: `${n} vé, ${money(n * 1000, lang)}. Bán đến 20:00 giờ Hàn Quốc: mua xong hãy tải ảnh vé lên.` },
+  }[lang] ?? { title: `🛒 #${round}: ${g}`, body: '' };
+  return { ...t, tag: `buy-${round}`, url: './#picks-buy' };
+}
+
+/** 🧹 The bot proposes deleting the photos of a draw that won nothing. */
+export function cleanupMessage(round: number, photos: number, lang: Lang) {
+  const t = {
+    en: { title: `🧹 Delete ${photos} ticket photo${photos === 1 ? '' : 's'} of draw #${round}?`, body: 'They won nothing. More than half of us need to approve: tap to vote in 645 → Tickets.' },
+    ko: { title: `🧹 제${round}회 복권 사진 ${photos}장을 지울까요?`, body: '당첨되지 않았습니다. 회원 과반수가 찬성해야 합니다: 645 → 복권에서 투표하세요.' },
+    vi: { title: `🧹 Xóa ${photos} ảnh vé của kỳ #${round}?`, body: 'Không trúng gì. Cần hơn một nửa thành viên đồng ý: chạm để bỏ phiếu trong 645 → Vé.' },
+  }[lang] ?? { title: `🧹 #${round}`, body: '' };
+  return { ...t, tag: `cleanup-${round}`, url: './#tickets' };
+}

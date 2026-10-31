@@ -1,10 +1,13 @@
 name: Check ticket results
 
 # After each Saturday draw, ask the check-tickets Edge Function to read the result page of every
-# ticket QR code that is still waiting, and to send the result notifications. Members opening the site trigger the same check, so this
+# ticket QR code that is still waiting, and to send the result notifications (and photo clean-ups). Saturday morning it
+# reminds the buyers who haven't uploaded their ticket photos. Members opening the site trigger the same check, so this
 # is only a safety net for weeks when nobody looks.
 on:
   schedule:
+    - cron: '37 23 * * 5'   # Sat 08:37 KST: buyers without ticket photos 12 hours before the draw
+    - cron: '7 4 * * 6'     # Sat 13:07 KST: the same, in case the morning run was skipped
     - cron: '17 11 * * 6'   # Sat 20:17 KST: "the draw starts in x minutes" (GitHub may start it late,
     - cron: '27 11 * * 6'   # Sat 20:27 KST   so twice; each device is reminded once)
     - cron: '57 11 * * 6'   # Sat 20:57 KST (results and notifications as soon as they are out)
@@ -31,5 +34,7 @@ jobs:
           NOW=$(TZ=Asia/Seoul date +%u%H%M)
           BODY='{}'
           if [ "$NOW" -ge 62010 ] && [ "$NOW" -lt 62035 ]; then BODY='{"push":"remind"}'; fi
+          # 08:35–20:00 KST on Saturday: buyers who haven't uploaded their ticket photos yet
+          if [ "$NOW" -ge 60835 ] && [ "$NOW" -lt 62000 ]; then BODY='{"push":"buyers"}'; fi
           curl -fsS -X POST "$URL/functions/v1/check-tickets" \
             -H "apikey: $KEY" -H "x-region: ap-northeast-2" -H "Content-Type: application/json" -d "$BODY"

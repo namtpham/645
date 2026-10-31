@@ -268,8 +268,9 @@ async function hydrateImages(root = document) {
   } catch (e) { console.error(e); }
 }
 
-const thumbImg = (t, cls = 'thumb thumb-sm') =>
-  `<img class="${cls}" data-path="${esc(t.thumb_path || t.storage_path)}" data-act="ticket-open" data-id="${esc(t.id)}" alt="Ticket photo" loading="lazy">`;
+const thumbImg = (t, cls = 'thumb thumb-sm') => (t.photo_deleted_at
+  ? `<span class="${cls} thumb-gone" data-act="ticket-open" data-id="${esc(t.id)}" title="Photo deleted (no win)">🗑️</span>`
+  : `<img class="${cls}" data-path="${esc(t.thumb_path || t.storage_path)}" data-act="ticket-open" data-id="${esc(t.id)}" alt="Ticket photo" loading="lazy">`);
 
 function uploadBadge(t) {
   const before = new Date(t.created_at) < kstAt(t.draw_date, DRAW_TIME);
@@ -536,6 +537,7 @@ async function enterApp() {
   loadChat();
   loadNotifs();
   loadMoney();
+  loadCleanups();
   goTab(S.tab);
   openFromHash();
   syncLang();
@@ -638,7 +640,7 @@ function scheduleReload(table) {
     try {
       await loadSome(tables);
       if (!S.me || S.me.status !== 'active') { stopRealtime(); showView('revoked'); return; }
-      if (S.tab === 'activity') loadActivity();
+      if (S.tab === 'settings') loadActivity();
     } catch (e) { console.error(e); }
   }, 400);
 }
@@ -649,7 +651,8 @@ function startRealtime() {
     .on('postgres_changes', { event: '*', schema: 'public' },
       (p) => (p?.table === 'live_picks' ? scheduleLiveReload() : BOARD_TABLES.includes(p?.table) ? scheduleBoardReload()
         : CHAT_TABLES.includes(p?.table) ? chatChange(p) : p?.table === 'notifications' ? loadNotifsSoon()
-          : ['pool_holders', 'money_transfers'].includes(p?.table) ? loadMoneySoon() : scheduleReload(p?.table)))
+          : ['pool_holders', 'money_transfers'].includes(p?.table) ? loadMoneySoon()
+            : p?.table === 'photo_cleanups' ? loadCleanups() : scheduleReload(p?.table)))
     .subscribe((status) => $('syncDot').classList.toggle('off', status !== 'SUBSCRIBED'));
 }
 function stopRealtime() {
@@ -669,10 +672,35 @@ function ago(ts) {
 function renderTimebar() {
   if (!$('tb-clock')) return;
   const now = new Date();
-  const local = now.toLocaleString(LOCALE, { weekday: 'short', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
-  const kst = LOCAL_TZ === TZ ? '' : ` · Korea ${now.toLocaleTimeString(LOCALE, { timeZone: TZ, hour: '2-digit', minute: '2-digit', hour12: false })}`;
-  $('tb-clock').textContent = `🕒 ${local} (${LOCAL_TZ.replace('_', ' ')})${kst}`;
+  $('tb-clock').textContent = `🕒 ${now.toLocaleString(LOCALE, { timeZone: clockTz(), weekday: 'short', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })}`;
   renderCountdown(now.getTime());
+}
+
+/** The clock's time zone: chosen in Settings (on the account), else this device's. */
+function clockTz() {
+  const tz = S.me?.prefs?.tz;
+  try { if (tz) { new Intl.DateTimeFormat('en', { timeZone: tz }); return tz; } } catch { /* unknown zone */ }
+  return LOCAL_TZ;
+}
+const TZ_COMMON = ['Asia/Seoul', 'Asia/Ho_Chi_Minh', 'Asia/Tokyo', 'Asia/Shanghai', 'Asia/Singapore', 'Australia/Sydney', 'Europe/London', 'Europe/Paris', 'America/New_York', 'America/Los_Angeles', 'UTC'];
+function renderTzSelect() {
+  const el = $('me-tz');
+  if (!el) return;
+  const all = (Intl.supportedValuesOf?.('timeZone') || TZ_COMMON).filter((z) => !TZ_COMMON.includes(z));
+  const cur = S.me?.prefs?.tz || '', offset = (z) => { try { return new Intl.DateTimeFormat('en', { timeZone: z, timeZoneName: 'shortOffset' }).formatToParts().find((p) => p.type === 'timeZoneName')?.value || ''; } catch { return ''; } };
+  const opt = (z) => `<option value="${z}" ${z === cur ? 'selected' : ''}>${z.replace(/_/g, ' ')} (${offset(z)})</option>`;
+  el.innerHTML = `<option value="" ${cur ? '' : 'selected'}>${esc(I18N?.t?.('Automatic') || 'Automatic')}: ${LOCAL_TZ.replace(/_/g, ' ')} (${offset(LOCAL_TZ)})</option>
+    <optgroup label="—">${TZ_COMMON.map(opt).join('')}</optgroup><optgroup label="—">${all.map(opt).join('')}</optgroup>`;
+  el.disabled = !('prefs' in (S.me || {}));
+}
+async function setTz(tz) {
+  const prefs = { ...(S.me.prefs || {}), tz: tz || undefined };
+  if (!tz) delete prefs.tz;
+  const { error } = await S.sb.from('profiles').update({ prefs }).eq('id', S.me.id);
+  if (error) { fail(error); return renderTzSelect(); }
+  S.me.prefs = prefs;
+  renderTimebar();
+  toast('🕒 Time zone saved.', 'ok');
 }
 
 const hms = (ms) => { const t = Math.max(0, Math.floor(ms / 1000)); return [t / 3600, (t % 3600) / 60, t % 60].map((x) => String(Math.floor(x)).padStart(2, '0')).join(':'); };
@@ -719,15 +747,14 @@ function goTab(name) {
   updateWakeLock();
   if (_focusKey) setFocus(null);
   document.querySelectorAll('.tab-pane').forEach((el) => el.classList.toggle('active', el.id === 'tab-' + name));
-  document.querySelectorAll('.nav-tab').forEach((el) => el.classList.toggle('active', el.dataset.tab === name));
+  document.querySelectorAll('.nav-tab, .nav-gear').forEach((el) => el.classList.toggle('active', el.dataset.tab === name));
   if (name === 'charts') setTimeout(renderCharts, 60);
   if (name === 'dashboard') { renderDuty(); setTimeout(renderDashChart, 60); }
   if (name === 'picks') setTimeout(renderPicks, 30);
   if (name === 'tickets') hydrateImages($('tickets-list'));
-  if (name === 'activity') loadActivity();
   if (name === 'chat') openChat();
   if (name === 'money') renderMoney();
-  if (name === 'settings' && isAdmin()) loadInvites();
+  if (name === 'settings') { if (isAdmin()) loadInvites(); loadActivity(); }
   if (name === 'settings') { renderPush(); renderLock(); }
 }
 
@@ -1548,7 +1575,8 @@ function renderTickets() {
       </div>
       <div class="ticket-grid">${ts.map((t) => `
         <div class="ticket" data-act="ticket-open" data-id="${esc(t.id)}">
-          <img class="thumb" data-path="${esc(t.thumb_path || t.storage_path)}" alt="Ticket photo" loading="lazy">
+          ${t.photo_deleted_at ? '<span class="thumb thumb-gone" title="Photo deleted (no win)">🗑️<small>photo deleted (no win)</small></span>'
+            : `<img class="thumb" data-path="${esc(t.thumb_path || t.storage_path)}" alt="Ticket photo" loading="lazy">`}
           <div class="meta">
             <strong>${esc(userName(t.uploaded_by))}</strong>
             <span>${esc(fmtKST(t.created_at))}</span>
@@ -1690,6 +1718,10 @@ async function openTicket(id) {
     ${t.game_count ? ` · ${t.game_count} games` : ''}${t.note ? ` · ${esc(t.note)}` : ''}`;
   renderLbQr();
   $('lb-overlay').classList.add('open');
+  $('lb-img').hidden = !!t.photo_deleted_at;
+  $('lb-open').hidden = !!t.photo_deleted_at;
+  $('lb-gone').hidden = !t.photo_deleted_at;
+  if (t.photo_deleted_at) return;   // the photo was deleted (no win); its QR results above stay
   try {
     const map = await signedUrls([t.storage_path]);
     $('lb-img').src = map[t.storage_path];
@@ -3814,6 +3846,48 @@ function renderCharts() {
   })) }, options: tl(chartOpts({ stacked: true, hideZero: true, timeline: true })) });
 }
 
+// ─── 🧹 Photo clean-ups: the bot proposes deleting the photos of a draw that won nothing (a week on);
+// more than half of the active members approve, then check-tickets deletes the files (the results stay).
+S.cleanups = [];
+let _cleanupRunAt = 0;
+async function loadCleanups() {
+  if (!S.me) return;
+  const { data, error } = await S.sb.from('photo_cleanups').select('*').order('round', { ascending: false }).limit(10);
+  S.cleanups = error ? [] : (data || []).map((c) => ({ ...c, approvals: c.approvals || [], ticket_ids: c.ticket_ids || [] }));
+  renderCleanups();
+  // now and then (and right after a vote) the function proposes due clean-ups and deletes approved ones
+  if (!error && Date.now() - _cleanupRunAt > 6 * 3600e3) {
+    _cleanupRunAt = Date.now();
+    S.sb.functions.invoke('check-tickets', { body: { cleanup: 'run' }, region: 'ap-northeast-2' }).catch(() => {});
+  }
+}
+const cleanupNeeds = () => Math.floor(S.profiles.filter((p) => p.status === 'active').length / 2) + 1;   // more than half
+const cleanupsToVote = () => S.cleanups.filter((c) => !c.done_at && !c.approvals.includes(S.me?.id));
+async function voteCleanup(round, yes) {
+  const { error } = await S.sb.rpc('approve_cleanup', { p_round: round, p_yes: yes });
+  if (error) return fail(error);
+  toast(yes ? '✓ Approved.' : 'Your approval is taken back.', 'ok');
+  await loadCleanups();
+  if (yes) S.sb.functions.invoke('check-tickets', { body: { cleanup: 'run' }, region: 'ap-northeast-2' })
+    .then(() => Promise.all([loadCleanups(), loadAll({ draws: false })])).catch(() => {});
+}
+function cleanupCard(c) {
+  const n = cleanupNeeds(), mine = c.approvals.includes(S.me.id);
+  if (c.done_at) return `<div class="cleanup done">🗑️ The ${c.deleted} photos of draw #${c.round} were deleted (no win; approved by ${c.approvals.map((id) => esc(memberName(id))).join(', ')}). Their results stay.</div>`;
+  return `<div class="cleanup">
+    <div><strong>🧹 Delete the ${c.ticket_ids.length} ticket photos of draw #${c.round}?</strong>
+      <div class="fhelp">They won nothing. The QR results stay. More than half of the members must approve: ${c.approvals.length} of ${n} needed so far${c.approvals.length ? ` (${c.approvals.map((id) => esc(memberName(id))).join(', ')})` : ''}.</div></div>
+    ${mine ? `<button type="button" class="btn btn-ghost btn-sm" data-act="cleanup-vote" data-round="${c.round}" data-no="1">↩ Take back my approval</button>`
+      : `<button type="button" class="btn btn-primary btn-sm" data-act="cleanup-vote" data-round="${c.round}">✓ Approve</button>`}
+  </div>`;
+}
+function renderCleanups() {
+  const el = $('tickets-cleanups');
+  if (el) el.innerHTML = S.cleanups.filter((c) => !c.done_at || Date.now() - new Date(c.done_at) < 7 * 864e5).map(cleanupCard).join('');
+  renderBell();
+  if (S.tab === 'chat') renderChat();
+}
+
 // ─── 💰 Money: who sends whom how much ─────────────────────────────────────────────────────────
 // Parties are investors (they have the payment links). A member who buys is the investor linked to
 // their account (investors.member). For each draw:
@@ -4383,6 +4457,11 @@ function chatText(body) {
 /** The result bot's post, in this member's language (from its data, not the stored English text). */
 function botPost(m) {
   const d = m.meta || {};
+  if (d.type === 'cleanup') {
+    const c = S.cleanups.find((x) => x.round === d.round);
+    return c ? cleanupCard(c) : esc(m.body);
+  }
+  if (d.type === 'cleanup-done') return `🗑️ Deleted the ${d.photos} ticket photos of draw #${d.round} (no win). Their results stay.`;
   if (d.type !== 'result') return esc(m.body);
   const list = Object.keys(d.ranks || {}).map(Number).sort((a, b) => a - b).map((r) => `${d.ranks[r]}× ${r}등`).join(', ');
   const g = d.games || 0, games = `${g} game${g === 1 ? '' : 's'}`;
@@ -4714,13 +4793,16 @@ function notifText(n) {
 const oweKey = (t) => `${t.round}-${t.kind}-${t.from}-${t.to}-${t.amount}`;
 function oweSeen() { try { return new Set(JSON.parse(localStorage.getItem('645-owe-seen') || '[]')); } catch { return new Set(); } }
 function markOweSeen(keys) {
-  const seen = oweSeen(), now = new Set((S.moneyView?.toSend || []).map(oweKey));
+  const seen = oweSeen(), d = myBuyDuty();
+  const now = new Set([...(S.moneyView?.toSend || []).map(oweKey), ...(d ? [`buy-${d.round}`] : []), ...cleanupsToVote().map((c) => `cleanup-${c.round}`)]);
   keys.forEach((k) => seen.add(k));
   try { localStorage.setItem('645-owe-seen', JSON.stringify([...seen].filter((k) => now.has(k)))); } catch { /* private mode */ }
 }
 function renderBell() {
-  const owe = S.moneyView?.toSend || [], seen = oweSeen();
-  const unread = S.notifs.filter((n) => !n.read_at).length + owe.filter((t) => !seen.has(oweKey(t))).length;
+  const owe = S.moneyView?.toSend || [], seen = oweSeen(), duty = myBuyDuty(), votes = cleanupsToVote();
+  const dutyKey = duty ? `buy-${duty.round}` : '';
+  const unread = S.notifs.filter((n) => !n.read_at).length + owe.filter((t) => !seen.has(oweKey(t))).length
+    + (duty && !seen.has(dutyKey) ? 1 : 0) + votes.filter((c) => !seen.has(`cleanup-${c.round}`)).length;
   $('bell-badge').hidden = !unread;
   $('bell-badge').textContent = unread > 9 ? '9+' : String(unread);
   $('bell').classList.toggle('on', !$('bell-panel').hidden);
@@ -4729,12 +4811,18 @@ function renderBell() {
   const oweHtml = owe.map((t) => `<button type="button" class="bn-item ${seen.has(oweKey(t)) ? '' : 'unread'}" data-act="goto-money" data-key="${esc(oweKey(t))}">
       <span class="bn-ico">💸</span><span class="bn-main"><div class="bn-title">Send ${esc(partyName(t.to))} ${esc(money(t.amount))}</div>
       <div class="bn-body">Draw #${t.round}${t.kind === 'prize' ? ' (shared prize)' : ''}: send it, then tap ✓ Done in 💰 Money</div></span></button>`).join('');
-  $('bell-list').innerHTML = oweHtml + (S.notifs.length ? S.notifs.map((n) => {
+  const dutyHtml = duty ? `<button type="button" class="bn-item ${seen.has(dutyKey) ? '' : 'unread'}" data-act="goto-buy-bell" data-key="${dutyKey}">
+      <span class="bn-ico">🛒</span><span class="bn-main"><div class="bn-title">You buy group${duty.games > 1 ? 's' : ''} ${esc(duty.ranges)} for draw #${duty.round} today</div>
+      <div class="bn-body">Sales close at ${SALES_CLOSE} KST: upload the ticket photos once bought</div></span></button>` : '';
+  const voteHtml = votes.map((c) => `<button type="button" class="bn-item ${seen.has(`cleanup-${c.round}`) ? '' : 'unread'}" data-act="goto-cleanup" data-key="cleanup-${c.round}">
+      <span class="bn-ico">🧹</span><span class="bn-main"><div class="bn-title">Delete the ${c.ticket_ids.length} ticket photos of draw #${c.round}?</div>
+      <div class="bn-body">They won nothing · ${c.approvals.length} of ${cleanupNeeds()} needed approve: vote in 🎟️ Tickets</div></span></button>`).join('');
+  $('bell-list').innerHTML = dutyHtml + voteHtml + oweHtml + (S.notifs.length ? S.notifs.map((n) => {
     const t = notifText(n);
     return `<button type="button" class="bn-item ${n.read_at ? '' : 'unread'}" data-act="notif-open" data-id="${n.id}">
       <span class="bn-ico">${t.ico}</span><span class="bn-main"><div class="bn-title">${esc(t.title)}</div>
       ${t.body ? `<div class="bn-body" ${n.kind === 'mention' ? 'data-no-i18n' : ''}>${esc(t.body)}</div>` : ''}<div class="bn-time">${esc(ago(n.created_at))}</div></span></button>`;
-  }).join('') : owe.length ? '' : '<div class="bn-empty">No notifications yet. You get one when someone mentions you in 💬 Chat or when we win.</div>');
+  }).join('') : owe.length || duty || votes.length ? '' : '<div class="bn-empty">No notifications yet. You get one when someone mentions you in 💬 Chat or when we win.</div>');
 }
 function toggleBell(open = $('bell-panel').hidden) {
   $('bell-panel').hidden = !open;
@@ -4864,8 +4952,25 @@ async function setPushMode() {
 // Before Saturday's draw, any member's open app asks the function to send the "starts in x minutes"
 // reminder too (the scheduled run may start late); each device still gets it only once.
 let _remindAsked = 0;
+let _buyRemindAsked = 0;
+/** Saturday 08:35–20:00 KST: I buy groups for today's draw and have no ticket photo for it yet. */
+function myBuyDuty() {
+  const d = kstToday(), B = S.board;
+  if (!S.me || weekday(d) !== 6 || B.round !== drawNo(d) || !B.groups) return null;
+  const now = Date.now(), at = kstAt(d, DRAW_TIME).getTime();
+  if (now < at - 12 * 3600e3 || now >= kstAt(d, SALES_CLOSE).getTime()) return null;
+  const mine = buyerList().filter((b) => b.by === S.me.id && !b.forgot);
+  if (!mine.length || S.tickets.some((t) => t.uploaded_by === S.me.id && t.draw_date === d)) return null;
+  return { round: B.round, ranges: mine.map((b) => (b.from === b.to ? `${b.from}` : `${b.from}–${b.to}`)).join(', '), games: sum(mine.map((b) => b.to - b.from + 1)) };
+}
+
 function maybeRemind() {
   const now = Date.now(), d = kstToday();
+  // 12 hours before the draw, an open app asks the function to remind the buyers (each device once)
+  if (weekday(d) === 6 && _buyRemindAsked !== drawNo(d) && now >= kstAt(d, DRAW_TIME).getTime() - 12 * 3600e3 && now < kstAt(d, SALES_CLOSE).getTime()) {
+    _buyRemindAsked = drawNo(d);
+    S.sb.functions.invoke('check-tickets', { body: { push: 'buyers' }, region: 'ap-northeast-2' }).catch(() => {});
+  }
   if (weekday(d) !== 6 || _remindAsked === drawNo(d)) return;
   const at = kstAt(d, DRAW_TIME).getTime();
   if (now < at - 25 * 60e3 || now >= at) return;
@@ -4894,6 +4999,7 @@ function openFromHash(hash = location.hash) {
   if (!h || h.startsWith('invite=') || !S.me) return;
   const [tab, sec] = h.split('-');
   if (!['dashboard', 'chat', 'weeks', 'money', 'tickets', 'picks', 'investors', 'charts', 'activity', 'settings'].includes(tab)) return;
+  if (tab === 'activity') { goTab('settings'); setTimeout(() => $('activity')?.scrollIntoView({ block: 'start' }), 80); history.replaceState(null, '', location.pathname + location.search); return; }   // Activity is in Settings now
   goTab(tab);
   if (tab === 'picks' && sec) setPicksSection(sec);
   history.replaceState(null, '', location.pathname + location.search);
@@ -5008,6 +5114,7 @@ let _curDraft = null;
 
 function renderSettings() {
   renderUpdate();
+  renderTzSelect();
   $('me-username').value = '@' + S.me.username;
   $('me-myqr').checked = showsTab('myqr');
   $('me-sim').checked = showsTab('sim');
@@ -5294,6 +5401,9 @@ const ACTIONS = {
   'buy-start': () => startBuying(),
   'goto-buy': () => { goTab('picks'); setPicksSection('buy'); },
   link: () => {},
+  'goto-buy-bell': (el) => { markOweSeen([el.dataset.key]); toggleBell(false); goTab('picks'); setPicksSection('buy'); },
+  'goto-cleanup': (el) => { markOweSeen([el.dataset.key]); toggleBell(false); goTab('tickets'); },
+  'cleanup-vote': (el) => voteCleanup(+el.dataset.round, !el.dataset.no),
   'goto-money': (el) => { if (el.dataset.key) markOweSeen([el.dataset.key]); toggleBell(false); goTab('money'); },
   'money-done': (el) => markTransfer(el),
   'money-undo': (el) => undoTransfer(el.dataset.id),
@@ -5319,7 +5429,7 @@ const ACTIONS = {
   'chat-jump': (el) => { chatSearchToggle(); chatJump(el.dataset.id); },
   'chat-latest': () => { _chatShown = false; loadChat(); },
   bell: () => toggleBell(),
-  'bell-read-all': () => { markOweSeen((S.moneyView?.toSend || []).map(oweKey)); markNotifs(S.notifs.filter((n) => !n.read_at).map((n) => String(n.id))); renderBell(); },
+  'bell-read-all': () => { markOweSeen([...(S.moneyView?.toSend || []).map(oweKey), ...(myBuyDuty() ? [`buy-${myBuyDuty().round}`] : []), ...cleanupsToVote().map((c) => `cleanup-${c.round}`)]); markNotifs(S.notifs.filter((n) => !n.read_at).map((n) => String(n.id))); renderBell(); },
   'notif-open': (el) => openNotif(el.dataset.id),   // a link: the browser opens it (and the card it sits on doesn't open)
   'update-check': () => checkUpdate({ manual: true }),
   'update-now': () => applyUpdate(),
@@ -5391,6 +5501,7 @@ const ACTIONS = {
 const INPUTS = {
   'im-pay': () => payHint(),
   'pool-amt': () => poolEditSum(),
+  'me-tz': (el, e) => { if (e.type === 'change') setTz(el.value); },
   'pool-give-field': (el, e) => {
     if (!_poolGive) return;
     _poolGive[el.dataset.k] = el.dataset.k === 'amount' ? amt(el.value) : el.value;

@@ -25,14 +25,17 @@
 //     { "push": "remind" } → before Saturday's draw (20:10–20:35 KST): "the draw starts in x minutes", once per device;
 //     { "push": "tickets", "ticket_ids": [...] } (the member who just uploaded them) → "new ticket photos" to the others;
 //     { "push": "chat", "message_id": n } (its author, right after sending) → the message to members who want chat;
-//     { "push": "money", "member": id, "to": name, "amount": n, "round": n } (a member) → "please send …" to that member.
+//     { "push": "money", "member": id, "to": name, "amount": n, "round": n } (a member) → "please send …" to that member;
+//     { "push": "buyers" } → Saturday from 08:35 KST (12 h before the draw): buyers without ticket photos yet, once per device;
+//     { "cleanup": "run" } → photo clean-ups: propose deleting the photos of draws that won nothing (a week on), and
+//       delete those more than half of the members approved (also done after every result check).
 // The result bot also posts each draw's result in 💬 Chat (once).
 // After every check, members who turned notifications on get the latest draw's result once
 // (every result, any win, or 4등 and better: their choice, in their language).
 
 import { createClient } from 'npm:@supabase/supabase-js@2.117.2';
 import { newVapidKeys, sendPush, type Vapid } from './push.ts';
-import { chatMessage, mentionedIds, mentionMessage, mentionText, message, moneyMessage, reminderMessage, resultPost, shouldNotify, summarize, testMessage, ticketsMessage, type Lang, type Mode } from './notify.ts';
+import { buyerMessage, cleanupMessage, chatMessage, mentionedIds, mentionMessage, mentionText, message, moneyMessage, reminderMessage, resultPost, shouldNotify, summarize, testMessage, ticketsMessage, type Lang, type Mode } from './notify.ts';
 
 // The service key is provided to every Edge Function automatically (legacy or new key format).
 function serviceKey(): string | undefined {
@@ -311,6 +314,8 @@ async function handle(req: Request): Promise<Response> {
     if (!memberId) return json({ error: 'Sign in first.' }, 401);
     return json(await sendChatNews(memberId, Number(body.message_id)));
   }
+  if (body.push === 'buyers') return json(await remindBuyers());
+  if (body.cleanup === 'run') return json(await photoCleanups());
   if (body.push === 'money') {
     if (!memberId) return json({ error: 'Sign in first.' }, 401);
     return json(await sendMoneyReminder(memberId, body));
@@ -357,9 +362,10 @@ async function handle(req: Request): Promise<Response> {
   }
   let history = 0, historyError: string | undefined;
   try { history = await backfillHistory(body.prizes === true); } catch (e) { historyError = (e as Error).message; }
-  let notified: unknown;
+  let notified: unknown, cleanups: unknown;
   try { notified = await notifyResults(cache); } catch (e) { notified = { error: (e as Error).message }; }
-  return json({ ok: true, checked, draws: [...cache.values()].filter(Boolean).map((d) => d!.round), history, historyError, updated, notified });
+  try { cleanups = await photoCleanups(); } catch (e) { cleanups = { error: (e as Error).message }; }
+  return json({ ok: true, checked, draws: [...cache.values()].filter(Boolean).map((d) => d!.round), history, historyError, updated, notified, cleanups });
 }
 
 // ─── Notifications ──────────────────────────────────────────────────────────────
@@ -492,6 +498,120 @@ async function sendChatNews(memberId: string, id: number) {
     else if (r?.ok) { sent++; if (isMention) mentions++; }
   }
   return { sent, mentions };
+}
+
+/** Every device that turned notifications on (any kind), for news the whole group should see. */
+async function pushAll(payload: (lang: Lang) => Record<string, unknown>, ttl = 24 * 3600) {
+  if (await pushPaused()) return { sent: 0, paused: true };
+  const { data: subs } = await db.from('push_subs').select('*');
+  const v = subs?.length ? await vapid() : null;
+  let sent = 0;
+  for (const sub of subs ?? []) {
+    const r = await sendPush(sub, payload(sub.lang as Lang), v!, ttl).catch(() => null);
+    if (r?.gone) await db.from('push_subs').delete().eq('endpoint', sub.endpoint);
+    else if (r?.ok) sent++;
+  }
+  return { sent };
+}
+
+/** The buyers' group ranges of a plan, as the app keeps them ([{by, to, forgot}] → from/to). */
+function buyerRanges(buyers: { by?: string | null; to?: number; forgot?: boolean }[], m: number) {
+  const out: { by: string | null; from: number; to: number; forgot: boolean }[] = [];
+  let from = 1;
+  for (const b of buyers ?? []) {
+    if (from > m) break;
+    const to = Math.max(from, Math.min(m, Number(b.to) || m));
+    out.push({ by: b.by ?? null, from, to, forgot: !!b.forgot });
+    from = to + 1;
+  }
+  if (out.length) out[out.length - 1].to = m;
+  return out;
+}
+
+/** 🛒 Saturday 08:35–20:00 KST: buyers who have no ticket photos for today's draw yet hear about it (once per device). */
+async function remindBuyers() {
+  const kst = new Date(Date.now() + 9 * 3600e3), day = kst.toISOString().slice(0, 10);
+  const left = (new Date(`${day}T${DRAW_TIME}:00+09:00`).getTime() - Date.now()) / 3600e3;
+  const closes = new Date(`${day}T20:00:00+09:00`).getTime();
+  if (kst.getUTCDay() !== 6 || left > 12 || Date.now() >= closes) return { sent: 0, note: 'only on Saturday from 08:35 to 20:00 KST' };
+  if (await pushPaused()) return { sent: 0, paused: true };
+  const round = roundOf(day);
+  const { data: plan } = await db.from('pick_plans').select('groups, buyers').eq('round', round).maybeSingle();
+  if (!plan?.groups) return { round, sent: 0, note: 'no plan' };
+  const ranges = buyerRanges(Array.isArray(plan.buyers) ? plan.buyers : [], plan.groups).filter((b) => b.by && !b.forgot);
+  let sent = 0;
+  const v = await vapid();
+  for (const b of ranges) {
+    const { count } = await db.from('tickets').select('id', { count: 'exact', head: true }).eq('uploaded_by', b.by!).eq('draw_date', day);
+    if (count) continue;   // photos are in: nothing to remind
+    const { data: subs } = await db.from('push_subs').select('*').eq('member', b.by!).or(`last_buy_remind.is.null,last_buy_remind.lt.${round}`);
+    for (const sub of subs ?? []) {
+      const { data: claimed } = await db.from('push_subs').update({ last_buy_remind: round })
+        .eq('endpoint', sub.endpoint).or(`last_buy_remind.is.null,last_buy_remind.lt.${round}`).select('endpoint');
+      if (!claimed?.length) continue;
+      const r = await sendPush(sub, buyerMessage(round, b.from, b.to, sub.lang as Lang), v, 12 * 3600).catch(() => null);
+      if (r?.gone) await db.from('push_subs').delete().eq('endpoint', sub.endpoint);
+      else if (r?.ok) sent++;
+    }
+  }
+  return { round, buyers: ranges.length, sent };
+}
+
+/**
+ * 🧹 Photos of draws that won nothing: a week after the draw the bot proposes deleting them (chat + a notification
+ * to everyone); once more than half of the active members approve, the files are deleted. The tickets, their QR
+ * codes and results stay, so history and statistics don't change.
+ */
+async function photoCleanups() {
+  const today = new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10);
+  const weekAgo = new Date(Date.parse(today) - 7 * 864e5).toISOString().slice(0, 10);
+  const since = new Date(Date.parse(today) - 70 * 864e5).toISOString().slice(0, 10);
+  const proposed: number[] = [], deleted: Record<number, number> = {};
+  // 1. propose: every photo of the draw has QR results, all "no win", and the week records no prize
+  const { data: tickets } = await db.from('tickets').select('id, draw_date, qr_data, storage_path, thumb_path, photo_deleted_at')
+    .gte('draw_date', since).lte('draw_date', weekAgo);
+  const byDate = new Map<string, any[]>();
+  for (const t of tickets ?? []) byDate.set(t.draw_date, [...(byDate.get(t.draw_date) ?? []), t]);
+  for (const [date, list] of byDate) {
+    const live = list.filter((t) => !t.photo_deleted_at);
+    if (!live.length || !resultsOut(date)) continue;
+    const items = list.flatMap((t) => (Array.isArray(t.qr_data) ? t.qr_data : []) as QrItem[]);
+    const allLose = list.every((t) => Array.isArray(t.qr_data) && t.qr_data.length) && items.every((i) => i.status === 'lose');
+    if (!allLose) continue;
+    const { data: week } = await db.from('weeks').select('prize_won').eq('result_date', date).maybeSingle();
+    if (Number(week?.prize_won) > 0) continue;
+    const round = roundOf(date);
+    const { data: made } = await db.from('photo_cleanups').upsert({ round, ticket_ids: live.map((t) => t.id) },
+      { onConflict: 'round', ignoreDuplicates: true }).select('round');
+    if (!made?.length) continue;   // proposed before
+    proposed.push(round);
+    await db.from('chat_messages').upsert({ author: null, bot: 'cleanup', bot_key: `cleanup-${round}`,
+      body: `🧹 The ${live.length} ticket photos of draw #${round} won nothing. Delete them?`, meta: { type: 'cleanup', round, photos: live.length } },
+    { onConflict: 'bot_key', ignoreDuplicates: true });
+    await pushAll((lang) => cleanupMessage(round, live.length, lang));
+  }
+  // 2. delete what more than half of the active members approved
+  const { count: members } = await db.from('profiles').select('id', { count: 'exact', head: true }).eq('status', 'active');
+  const { data: open } = await db.from('photo_cleanups').select('*').is('done_at', null);
+  for (const c of open ?? []) {
+    if (!members || (c.approvals?.length ?? 0) * 2 <= members) continue;
+    const { data } = await db.from('tickets').select('id, storage_path, thumb_path, qr_data').in('id', c.ticket_ids).is('photo_deleted_at', null);
+    const ts = (data ?? []) as { id: string; storage_path: string; thumb_path: string | null; qr_data: QrItem[] | null }[];
+    // only photos that still won nothing (a corrected result keeps its photo)
+    const gone = ts.filter((t) => (Array.isArray(t.qr_data) ? t.qr_data : []).every((i) => i.status === 'lose'));
+    const paths = gone.flatMap((t) => [t.storage_path, t.thumb_path].filter((x): x is string => !!x));
+    if (paths.length) {
+      const { error } = await db.storage.from('tickets').remove(paths);
+      if (error) continue;   // try again on the next run
+      await db.from('tickets').update({ photo_deleted_at: new Date().toISOString() }).in('id', gone.map((t) => t.id));
+    }
+    await db.from('photo_cleanups').update({ done_at: new Date().toISOString(), deleted: gone.length }).eq('round', c.round);
+    await db.from('chat_messages').upsert({ author: null, bot: 'cleanup', bot_key: `cleanup-done-${c.round}`,
+      body: `🗑️ Deleted ${gone.length} ticket photos of draw #${c.round}.`, meta: { type: 'cleanup-done', round: c.round, photos: gone.length } },
+    { onConflict: 'bot_key', ignoreDuplicates: true });
+    deleted[c.round] = gone.length;
+  }
+  return { proposed, deleted };
 }
 
 /** 💰 "Please send B ₩5,000": a member reminds another (who allows personal notifications, like mentions). */

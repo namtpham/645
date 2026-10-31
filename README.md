@@ -48,6 +48,19 @@ with an invitation key from the admin.
   every draw's result (winning numbers, our 등수 and prize after tax) once, in each member's
   language. Tables `chat_messages` and `chat_reactions`; the latest 60 messages load, older ones
   on request.
+- **Menu on phones:** two rows of four tabs (icon above the name); Settings is the ⚙️ next to 🔔 in
+  the top row. **📝 Activity** is at the bottom of Settings.
+- **Clock:** the time at the top, without a time-zone label, in the time zone chosen in Settings →
+  My Account (saved on the account; automatic = the device's).
+- **🛒 Buyer reminder:** on Saturday from 08:35 KST (12 hours before the draw) until sales close at
+  20:00, a buyer with no ticket photo for the draw yet gets a phone notification (once per device;
+  the scheduled workflow at 08:37 and 13:07 KST, and any open app) and a 🔔 item.
+- **🧹 Photo clean-up:** a week after a draw whose photos all won nothing (every QR code "no win",
+  no prize in the week), the bot proposes deleting them, in 💬 Chat and with a phone notification
+  to everyone. Members approve in 🎟️ Tickets (or the chat post, or 🔔); once **more than half** of
+  the active members approve, the photo files are deleted. The tickets, their QR codes and results
+  stay (the photo shows as 🗑️). Table `photo_cleanups`, function `approve_cleanup()`, column
+  `tickets.photo_deleted_at`; the deleting is done by `check-tickets`.
 - **A small sum before important changes** (e.g. 7 × 8 = ?, answered on a number pad): saving
   changes to or deleting a week entry, saving changes to an investor, deleting a ticket photo,
   correcting the pool keepers, undoing a transfer, clearing all numbers, and the admin's member

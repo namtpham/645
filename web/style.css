@@ -1215,3 +1215,30 @@ table.bt td, table.bt th { padding: 8px 10px; }
 .picks-asof .asof { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin: -2px 0 12px; padding: 10px 14px; border-radius: 10px; font-size: 13.5px; font-weight: 600; }
 .picks-asof .asof.ok { background: rgba(34,197,94,.12); border: 1px solid rgba(34,197,94,.45); color: #86efac; }
 .picks-asof .asof.warn { background: rgba(245,158,11,.12); border: 1px solid rgba(245,158,11,.5); color: #fcd34d; }
+
+/* 🧹 photos deleted after a draw that won nothing */
+.thumb-gone { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; background: rgba(255,255,255,.04);
+  color: var(--muted); font-size: 26px; border: 1px dashed var(--border); }
+.thumb-gone small { font-size: 11px; }
+.thumb-sm.thumb-gone { font-size: 18px; }
+.lb-gone { padding: 40px 20px; text-align: center; color: var(--muted); }
+.cleanup { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 14px; margin: 0 0 14px; padding: 12px 14px;
+  border-radius: 12px; border: 1px solid rgba(245,158,11,.45); background: rgba(245,158,11,.08); }
+.cleanup.done { border-color: var(--border); background: rgba(255,255,255,.03); color: var(--dim); font-size: 13px; }
+.cm-bubble .cleanup { margin: 0; background: none; border: none; padding: 0; }
+
+/* ⚙️ next to 🔔 on phones only */
+.nav-gear { display: none; }
+.nav-gear.active { border-color: var(--gold); background: var(--gold-bg); }
+.nav-tab .ti { margin-right: 4px; }
+
+/* phones: the tabs in two rows of four (icon above a short label); Settings is the ⚙️ in the top row */
+@media (max-width: 640px) {
+  .nav-gear { display: inline-block; }
+  .nav-tab.nav-settings { display: none; }
+  .nav-tabs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; overflow: visible; }
+  .nav-tab { position: relative; display: flex; flex-direction: column; align-items: center; gap: 1px; padding: 5px 2px; font-size: 11px; text-align: center; }
+  .nav-tab .ti { margin: 0; font-size: 17px; line-height: 1.2; }
+  .nav-tab .tl { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+  .nav-tab .nav-badge { position: absolute; top: 1px; right: 8px; margin: 0; }
+}
