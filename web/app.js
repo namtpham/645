@@ -534,6 +534,7 @@ async function enterApp() {
   navigator.storage?.persist?.().catch(() => {});   // keep the login even when storage is tight
   startRealtime();
   loadChat();
+  loadNotifs();
   goTab(S.tab);
   openFromHash();
   syncLang();
@@ -645,7 +646,7 @@ function startRealtime() {
   _channel = S.sb.channel('db-changes')
     .on('postgres_changes', { event: '*', schema: 'public' },
       (p) => (p?.table === 'live_picks' ? scheduleLiveReload() : BOARD_TABLES.includes(p?.table) ? scheduleBoardReload()
-        : CHAT_TABLES.includes(p?.table) ? chatChange(p) : scheduleReload(p?.table)))
+        : CHAT_TABLES.includes(p?.table) ? chatChange(p) : p?.table === 'notifications' ? loadNotifsSoon() : scheduleReload(p?.table)))
     .subscribe((status) => $('syncDot').classList.toggle('off', status !== 'SUBSCRIBED'));
 }
 function stopRealtime() {
@@ -689,7 +690,7 @@ function renderCountdown(now = Date.now()) {
   if (!$('tb-yt').hidden) {
     const n = drawNo(currentDraw());
     $('tb-yt-title').textContent = drawing ? `🔴 Draw #${n} is on now: watch it live` : `Watch draw #${n} live on YouTube`;
-    $('tb-yt-sub').textContent = drawing ? '동행복권 YouTube · results at 20:50 KST' : `동행복권 · Saturday 20:35 KST · starts in ${hms(left)}`;
+    $('tb-yt-sub').textContent = drawing ? '동행복권 YouTube · results at 20:50 KST' : '동행복권 · Saturday 20:35 KST';
   }
 }
 setInterval(() => { renderTimebar(); if (S.me) maybeRemind(); }, 1000);
@@ -3720,6 +3721,7 @@ async function loadChat({ older = false } = {}) {
   if (error) { S.chat.missing = /chat_messages|schema cache|does not exist/.test(error.message); S.chat.loaded = true; renderChat(); return; }
   const page = (data || []).reverse();
   S.chat.missing = false;
+  if (!older) S.chat.gap = false;
   S.chat.more = page.length === CHAT_PAGE;
   S.chat.msgs = older ? [...page, ...S.chat.msgs] : page;
   const ids = page.map((m) => m.id);
@@ -3733,6 +3735,7 @@ async function loadChat({ older = false } = {}) {
 /** A realtime change: messages and reactions arrive with the row itself; anything else reloads the latest page. */
 function chatChange(p) {
   const n = p?.new, o = p?.old;
+  if (S.chat.gap && p?.table === 'chat_messages') return;   // looking at older messages: "Back to the latest" brings the new ones
   if (p?.table === 'chat_messages' && p.eventType === 'INSERT' && n?.id != null) {
     if (!S.chat.msgs.some((m) => String(m.id) === String(n.id))) S.chat.msgs.push(n);
     return renderChat();
@@ -3752,10 +3755,28 @@ function chatChange(p) {
 }
 
 const EMOJI_ONLY = /^(?:\p{Extended_Pictographic}|\p{Emoji_Modifier}|\p{Regional_Indicator}|‍|️|\s)+$/u;
+// Mentions are stored in the message as <@member-id> or <@everyone> (so a later name change still shows the right
+// person); the app shows them as @Name. The database turns them into 🔔 notifications.
+const MENTION_RE = /<@(everyone|[0-9a-f-]{36})>/g;
+const mentionName = (id) => (id === 'everyone' ? 'everyone' : memberName(id));
+const plainMentions = (body) => String(body || '').replace(MENTION_RE, (_, id) => `@${mentionName(id)}`);
+const mentionsMe = (body) => String(body || '').includes('<@everyone>') || String(body || '').includes(`<@${S.me?.id}>`);
+const escRe = (t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/** What was typed (@Name, @everyone) → what is stored (<@id>, <@everyone>). Longest names first, so "Min Jun" wins over "Min". */
+function encodeMentions(text) {
+  let out = String(text).replace(/(^|[^\p{L}\p{N}_<])@everyone(?![\p{L}\p{N}_])/giu, '$1<@everyone>');
+  const people = S.profiles.filter((p) => p.display_name && p.status === 'active').sort((a, b) => b.display_name.length - a.display_name.length);
+  for (const p of people) out = out.replace(new RegExp(`(^|[^\\p{L}\\p{N}_<])@${escRe(p.display_name)}(?![\\p{L}\\p{N}_])`, 'giu'), `$1<@${p.id}>`);
+  return out;
+}
+
 function chatText(body) {
   const t = String(body || '');
   const big = EMOJI_ONLY.test(t) && [...t.replace(/\s/g, '')].filter((c) => /\p{Extended_Pictographic}/u.test(c)).length <= 3;
-  const html = esc(t).replace(/https?:\/\/[^\s<>"']+/g, (u) => `<a href="${u}" target="_blank" rel="noopener noreferrer" data-act="link">${u}</a>`);
+  const html = esc(t)
+    .replace(/&lt;@(everyone|[0-9a-f-]{36})&gt;/g, (_, id) => `<span class="mention ${id === 'everyone' || id === S.me?.id ? 'me' : ''}">@${esc(mentionName(id))}</span>`)
+    .replace(/https?:\/\/[^\s<>"']+/g, (u) => `<a href="${u}" target="_blank" rel="noopener noreferrer" data-act="link">${u}</a>`);
   return { html, big };
 }
 
@@ -3774,10 +3795,11 @@ function botPost(m) {
     <div>${esc(line)}</div>`;
 }
 
-function renderChat({ keepTop = false } = {}) {
+function renderChat({ keepTop = false, noScroll = false } = {}) {
   renderChatBadge();
   const list = $('chat-list');
   if (!list || S.tab !== 'chat') return;
+  $('chat-latest').hidden = !S.chat.gap;
   if (!$('chat-quick').childElementCount) $('chat-quick').innerHTML = QUICK_SEND.map((e) => `<button type="button" data-act="chat-quick" data-e="${e}" aria-label="Send ${e}">${e}</button>`).join('');
   if (S.chat.missing) { list.innerHTML = '<div class="chat-empty">💬 Chat needs the database update: run supabase/schema.sql again in the Supabase SQL editor.</div>'; return; }
   if (!S.chat.loaded) { list.innerHTML = '<div class="chat-empty"><div class="spinner" style="margin:0 auto"></div></div>'; return; }
@@ -3802,7 +3824,7 @@ function renderChat({ keepTop = false } = {}) {
     const reacts = [...(byMsg.get(String(m.id)) || new Map())].map(([e, who]) =>
       `<button type="button" class="cm-r ${who.includes(S.me.id) ? 'on' : ''}" data-act="chat-react" data-id="${m.id}" data-e="${esc(e)}"
         title="${esc(who.map((w) => (w === S.me.id ? 'you' : memberName(w))).join(', '))}">${esc(e)}<small>${who.length}</small></button>`).join('');
-    html += `<div class="cm ${mine ? 'mine' : ''} ${bot ? 'bot' : ''} ${cont ? 'cont' : ''}" data-id="${m.id}">
+    html += `<div class="cm ${mine ? 'mine' : ''} ${bot ? 'bot' : ''} ${cont ? 'cont' : ''} ${!mine && !bot && mentionsMe(m.body) ? 'at-me' : ''} ${S.chat.flash?.id === String(m.id) && S.chat.flash.until > Date.now() ? 'flash' : ''}" data-id="${m.id}">
       ${cont ? '' : `<div class="cm-hd" style="--c:${clr}">${mine ? '' : `<span class="cm-av" style="--c:${clr}">${bot ? '🤖' : esc(ini(name))}</span><strong ${bot ? '' : 'data-no-i18n'}>${esc(name)}</strong>`}
         <span class="cm-time">${at.toLocaleTimeString(LOCALE, { hour: '2-digit', minute: '2-digit', hour12: false })}</span></div>`}
       <div class="cm-line"><div class="cm-bubble ${big ? 'big' : ''}" ${bot ? '' : 'data-no-i18n'}>${text}</div>
@@ -3814,7 +3836,8 @@ function renderChat({ keepTop = false } = {}) {
   list.innerHTML = html || '<div class="chat-empty">No messages yet. Say hello 👋</div>';
   fitChat();
   if (keepTop) list.scrollTop = list.scrollHeight - prevH + prevTop;
-  else if (atBottom || !_chatShown) list.scrollTop = list.scrollHeight;
+  else if (noScroll) list.scrollTop = prevTop;
+  else if (!S.chat.gap && (atBottom || !_chatShown)) list.scrollTop = list.scrollHeight;
   _chatShown = true;
   markChatSeen();
 }
@@ -3824,7 +3847,7 @@ let _chatShown = false;
 function fitChat() {
   const list = $('chat-list');
   if (!list || S.tab !== 'chat') return;
-  const below = ['chat-quick', 'chat-picker'].reduce((h, id) => h + ($(id).hidden ? 0 : $(id).offsetHeight), 0)
+  const below = ['chat-quick', 'chat-picker', 'chat-mentions'].reduce((h, id) => h + ($(id).hidden ? 0 : $(id).offsetHeight), 0)
     + document.querySelector('.chat-compose').offsetHeight + 40;
   const top = list.getBoundingClientRect().top + scrollY;
   const keep = list.scrollHeight - list.scrollTop - list.clientHeight < 80;
@@ -3841,9 +3864,11 @@ function openChat() {
 }
 
 async function chatSend(text) {
-  const body = String(text ?? $('chat-input').value).trim();
+  const body = encodeMentions(String(text ?? $('chat-input').value).trim());
   if (!body || S.chat.busy) return;
   if (body.length > 2000) return toast('A message can be at most 2,000 characters.', 'err');
+  hideMentions();
+  if (S.chat.gap) await loadChat();   // sending from an older part of the chat: back to the latest first
   S.chat.busy = true;
   $('chat-send').disabled = true;
   try {
@@ -3935,10 +3960,193 @@ function chatGrow() {
   inp.style.height = `${Math.min(140, inp.scrollHeight + 2)}px`;
 }
 $('chat-input')?.addEventListener('keydown', (e) => {
+  const M = S.chat.mention;
+  if (M && !$('chat-mentions').hidden) {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); M.sel = (M.sel + (e.key === 'ArrowDown' ? 1 : -1) + M.list.length) % M.list.length; return renderMentions(); }
+    if ((e.key === 'Enter' || e.key === 'Tab') && !e.isComposing) { e.preventDefault(); return chatMentionPick(M.sel); }
+    if (e.key === 'Escape') { e.preventDefault(); return hideMentions(); }
+  }
   // Enter sends on a computer; on a phone it makes a new line (Send is right there). Never while a Korean/Vietnamese IME is composing.
   if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229 && !matchMedia('(pointer: coarse)').matches) { e.preventDefault(); chatSend(); }
 });
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && S.tab === 'chat') markChatSeen(); });
+
+// ── @mentions: typing @ suggests everyone and the members
+function chatMentionCheck() {
+  const inp = $('chat-input'), before = inp.value.slice(0, inp.selectionStart ?? inp.value.length);
+  const m = before.match(/(?:^|\s)@([^\s@]{0,30})$/u);
+  if (!m) return hideMentions();
+  const q = m[1].toLowerCase();
+  const all = [{ id: 'everyone', name: 'everyone', sub: 'Everyone in the group' },
+    ...S.profiles.filter((p) => p.status === 'active' && p.id !== S.me.id && p.display_name).map((p) => ({ id: p.id, name: p.display_name }))];
+  const list = [...all.filter((x) => x.name.toLowerCase().startsWith(q)), ...all.filter((x) => !x.name.toLowerCase().startsWith(q) && x.name.toLowerCase().includes(q))].slice(0, 8);
+  if (!list.length) return hideMentions();
+  S.chat.mention = { start: before.length - m[1].length - 1, end: before.length, list, sel: 0 };
+  renderMentions();
+}
+function renderMentions() {
+  const M = S.chat.mention, el = $('chat-mentions');
+  el.innerHTML = M.list.map((x, i) => `<button type="button" class="${i === M.sel ? 'sel' : ''}" data-act="chat-mention" data-i="${i}">
+    <span class="cm-av" style="--c:${x.id === 'everyone' ? 'var(--gold)' : memberColor(x.id)}">${x.id === 'everyone' ? '📣' : esc(ini(x.name))}</span>
+    <span data-no-i18n>@${esc(x.name)}</span>${x.sub ? ` <small>${esc(x.sub)}</small>` : ''}</button>`).join('');
+  const wasHidden = el.hidden;
+  el.hidden = false;
+  if (wasHidden) fitChat();
+}
+// tapping a suggestion keeps the cursor in the message (no blur, so the list isn't redrawn under the finger)
+$('chat-mentions')?.addEventListener('mousedown', (e) => e.preventDefault());
+$('chat-input')?.addEventListener('blur', () => setTimeout(() => { if (document.activeElement !== $('chat-input')) hideMentions(); }, 150));
+function hideMentions() {
+  if (!S.chat.mention && $('chat-mentions').hidden) return;
+  S.chat.mention = null;
+  $('chat-mentions').hidden = true;
+  fitChat();
+}
+function chatMentionPick(i) {
+  const M = S.chat.mention, x = M?.list[i], inp = $('chat-input');
+  if (!x) return;
+  const ins = `@${x.name} `;
+  inp.value = inp.value.slice(0, M.start) + ins + inp.value.slice(M.end);
+  inp.selectionStart = inp.selectionEnd = M.start + ins.length;
+  hideMentions();
+  inp.focus();
+  chatGrow();
+}
+
+// ── jump to a message (from 🔔 or a search result): it, a little before, and what came after
+async function chatJump(id) {
+  if (S.tab !== 'chat') goTab('chat');
+  const find = () => $('chat-list').querySelector(`.cm[data-id="${CSS.escape(String(id))}"]`);
+  if (!find()) {
+    const msgId = /^\d+$/.test(String(id)) ? Number(id) : id;
+    const { data: m } = await S.sb.from('chat_messages').select('*').eq('id', msgId).maybeSingle();
+    if (!m) return toast('That message was deleted.', 'err');
+    const [b, a] = await Promise.all([
+      S.sb.from('chat_messages').select('*').lt('created_at', m.created_at).order('created_at', { ascending: false }).limit(20),
+      S.sb.from('chat_messages').select('*').gte('created_at', m.created_at).order('created_at', { ascending: true }).limit(200),
+    ]);
+    const before = (b.data || []).reverse(), after = a.data || [];
+    S.chat.msgs = [...before, ...after];
+    S.chat.more = before.length === 20;
+    S.chat.gap = after.length === 200;   // not up to the latest yet
+    const ids = S.chat.msgs.map((x) => x.id);
+    const { data: rs } = ids.length ? await S.sb.from('chat_reactions').select('*').in('message_id', ids) : { data: [] };
+    S.chat.reacts = rs || [];
+    S.chat.loaded = true;
+    renderChat({ noScroll: true });
+  }
+  const el = find();
+  if (!el) return;
+  S.chat.flash = { id: String(id), until: Date.now() + 2000 };   // stays highlighted through a redraw
+  el.scrollIntoView({ block: 'center' });
+  el.classList.remove('flash');
+  void el.offsetWidth;
+  el.classList.add('flash');
+}
+
+// ── search: in all messages on the server (text, or @name for the messages that mention them)
+let _chatQT = null;
+function chatSearchToggle() {
+  const open = $('chat-search').hidden;
+  $('chat-search').hidden = !open;
+  $('chat-results').hidden = true;
+  if (open) $('chat-q').focus(); else $('chat-q').value = '';
+  fitChat();
+}
+async function chatSearch() {
+  const raw = $('chat-q').value.trim(), el = $('chat-results');
+  if (raw.length < 2) { el.hidden = true; return fitChat(); }
+  const like = (t) => `%${t.replace(/[\\%_]/g, (c) => '\\' + c)}%`;
+  const name = raw.replace(/^@/, '').toLowerCase();
+  const who = name === 'everyone' ? { id: 'everyone' } : S.profiles.find((p) => p.display_name?.toLowerCase() === name);
+  const qs = [];
+  if (!raw.startsWith('@') || !who) qs.push(S.sb.from('chat_messages').select('*').ilike('body', like(raw)).order('created_at', { ascending: false }).limit(50));
+  if (who) qs.push(S.sb.from('chat_messages').select('*').ilike('body', like(`<@${who.id}>`)).order('created_at', { ascending: false }).limit(50));
+  const res = await Promise.all(qs);
+  if (raw !== $('chat-q').value.trim()) return;   // typed on meanwhile
+  const err = res.find((r) => r.error)?.error;
+  if (err) return fail(err);
+  const seen = new Set(), hits = [];
+  for (const r of res) for (const m of r.data || []) if (!seen.has(String(m.id))) { seen.add(String(m.id)); hits.push(m); }
+  hits.sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
+  const hl = (text) => {
+    const terms = [raw, who && who.id !== 'everyone' ? `@${S.profiles.find((p) => p.id === who.id).display_name}` : null, who?.id === 'everyone' ? '@everyone' : null].filter(Boolean);
+    const re = new RegExp(`(${terms.map(escRe).join('|')})`, 'gi');
+    return text.split(re).map((part, i) => (i % 2 ? `<mark>${esc(part)}</mark>` : esc(part))).join('');
+  };
+  el.innerHTML = hits.length ? hits.slice(0, 50).map((m) => {
+    const bot = !!m.bot, text = plainMentions(m.body), cut = text.length > 220 ? text.slice(0, 219) + '…' : text;
+    const at = new Date(m.created_at);
+    return `<button type="button" class="cr" data-act="chat-jump" data-id="${m.id}">
+      <div class="cr-hd" style="--c:${bot ? '#60a5fa' : memberColor(m.author)}"><strong ${bot ? '' : 'data-no-i18n'}>${esc(bot ? '645 bot' : memberName(m.author))}</strong> ·
+        ${esc(at.toLocaleString(LOCALE, { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }))}</div>
+      <div class="cr-body" data-no-i18n>${hl(cut)}</div></button>`;
+  }).join('') : '<div class="cr-none">No messages found.</div>';
+  el.hidden = false;
+  fitChat();
+}
+
+// ─── 🔔 Notifications in the app (the bell): someone mentioned me, the bot announced a win ────────
+S.notifs = [];
+let _notifT = null, _notifSeen = null;
+async function loadNotifs() {
+  if (!S.me) return;
+  const { data, error } = await S.sb.from('notifications').select('*').order('created_at', { ascending: false }).limit(40);
+  S.notifs = error ? [] : data || [];
+  // a new mention while the app is open: a short heads-up too
+  if (_notifSeen) for (const n of S.notifs) if (!_notifSeen.has(String(n.id)) && !n.read_at) toast(notifText(n).title, 'ok');
+  _notifSeen = new Set(S.notifs.map((n) => String(n.id)));
+  renderBell();
+}
+const loadNotifsSoon = () => { clearTimeout(_notifT); _notifT = setTimeout(() => loadNotifs().catch(console.error), 300); };
+
+function notifText(n) {
+  const d = n.data || {};
+  if (n.kind === 'mention') {
+    const who = memberName(d.author);
+    return { ico: '📣', title: d.everyone ? `${who} mentioned everyone` : `${who} mentioned you`, body: plainMentions(d.excerpt || '') };
+  }
+  const list = Object.keys(d.ranks || {}).map(Number).sort((a, b) => a - b).map((r) => `${d.ranks[r]}× ${r}등`).join(', ');
+  return { ico: '🎉', title: `We won in draw #${d.round}!`,
+    body: d.estimated ? `${list} · prize amount to follow` : `${money(d.won)}${d.won < d.gross ? ' after tax' : ''} · ${list}` };
+}
+function renderBell() {
+  const unread = S.notifs.filter((n) => !n.read_at).length;
+  $('bell-badge').hidden = !unread;
+  $('bell-badge').textContent = unread > 9 ? '9+' : String(unread);
+  $('bell').classList.toggle('on', !$('bell-panel').hidden);
+  $('bell-read-all').disabled = !unread;
+  if ($('bell-panel').hidden) return;
+  $('bell-list').innerHTML = S.notifs.length ? S.notifs.map((n) => {
+    const t = notifText(n);
+    return `<button type="button" class="bn-item ${n.read_at ? '' : 'unread'}" data-act="notif-open" data-id="${n.id}">
+      <span class="bn-ico">${t.ico}</span><span class="bn-main"><div class="bn-title">${esc(t.title)}</div>
+      ${t.body ? `<div class="bn-body" ${n.kind === 'mention' ? 'data-no-i18n' : ''}>${esc(t.body)}</div>` : ''}<div class="bn-time">${esc(ago(n.created_at))}</div></span></button>`;
+  }).join('') : '<div class="bn-empty">No notifications yet. You get one when someone mentions you in 💬 Chat or when we win.</div>';
+}
+function toggleBell(open = $('bell-panel').hidden) {
+  $('bell-panel').hidden = !open;
+  if (open) loadNotifs().catch(console.error);
+  renderBell();
+}
+document.addEventListener('click', (e) => {
+  if (!$('bell-panel').hidden && !e.target.closest('#bell-panel, #bell')) toggleBell(false);
+});
+async function markNotifs(ids) {
+  if (!ids.length) return;
+  const at = new Date().toISOString();
+  for (const n of S.notifs) if (ids.includes(String(n.id))) n.read_at = at;
+  renderBell();
+  await S.sb.from('notifications').update({ read_at: at }).in('id', ids.map((i) => (/^\d+$/.test(i) ? Number(i) : i)));
+}
+async function openNotif(id) {
+  const n = S.notifs.find((x) => String(x.id) === String(id));
+  if (!n) return;
+  toggleBell(false);
+  markNotifs([String(n.id)]);
+  if (n.data?.message_id != null) chatJump(n.data.message_id);
+  else goTab(n.kind === 'win' ? 'dashboard' : 'chat');
+}
 
 // ─── Notifications (Web Push; sent by the check-tickets function after the draw) ─────────────────
 const pushSupported = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
@@ -3952,7 +4160,7 @@ const PUSH_HELP = {
 /** What this device wants, as chosen on the settings page. */
 const pushChoice = () => ({
   mode: document.querySelector('#push-modes input:checked')?.value === 'off' ? 'none' : document.querySelector('#push-modes input:checked')?.value || 'none',
-  remind: $('push-remind').checked, tickets: $('push-tickets').checked, chat: $('push-chat').checked,
+  remind: $('push-remind').checked, tickets: $('push-tickets').checked, chat: $('push-chat').checked, mention: $('push-mention').checked,
 });
 
 function unb64url(text) {
@@ -3986,11 +4194,12 @@ async function renderPush() {
   $('push-remind').checked = !!row?.remind;
   $('push-tickets').checked = !!row?.tickets;
   $('push-chat').checked = !!row?.chat;
+  if (row) $('push-mention').checked = row.mention !== false;   // starts ticked (index.html); otherwise as last chosen
   $('push-test').hidden = !row;
   if (row && row.lang !== LANG) S.sb.from('push_subs').update({ lang: LANG }).eq('endpoint', row.endpoint).then(() => {});
   if (Notification.permission === 'denied') return status('Notifications are blocked for this site: allow them in the browser\'s site settings, then choose again.', true);
   if (!row) return status('Off on this device. Choose when you want to hear from us.');
-  const extra = [row.remind && 'before the draw', row.tickets && 'new ticket photos', row.chat && 'chat messages'].filter(Boolean);
+  const extra = [row.remind && 'before the draw', row.tickets && 'new ticket photos', row.chat && 'chat messages', row.mention !== false && 'mentions'].filter(Boolean);
   status(`On: ${PUSH_HELP[row.mode]}${extra.length ? ` Also: ${extra.join(', ')}.` : ''}`);
 }
 
@@ -4006,7 +4215,7 @@ async function pushOff(quiet = false) {
 /** Save this device's choice; nothing chosen at all turns notifications off here. */
 async function setPushMode() {
   const want = pushChoice();
-  if (want.mode === 'none' && !want.remind && !want.tickets && !want.chat) return pushOff();
+  if (want.mode === 'none' && !want.remind && !want.tickets && !want.chat && !want.mention) return pushOff();
   try {
     if (await Notification.requestPermission() !== 'granted') { toast('Allow notifications when the browser asks, then choose again.', 'err'); return renderPush(); }
     const reg = await navigator.serviceWorker.register('sw.js');
@@ -4458,7 +4667,14 @@ const ACTIONS = {
   'chat-delete': (el) => { $('chat-pop').hidden = true; chatDelete(el.dataset.id); },
   'chat-emoji': () => chatPicker(S.chat.picker ? null : 'send'),
   'chat-pick': (el) => chatPick(el.dataset.e),
-  'chat-older': () => loadChat({ older: true }),   // a link: the browser opens it (and the card it sits on doesn't open)
+  'chat-older': () => loadChat({ older: true }),
+  'chat-mention': (el) => chatMentionPick(+el.dataset.i),
+  'chat-search': () => chatSearchToggle(),
+  'chat-jump': (el) => { chatSearchToggle(); chatJump(el.dataset.id); },
+  'chat-latest': () => { _chatShown = false; loadChat(); },
+  bell: () => toggleBell(),
+  'bell-read-all': () => markNotifs(S.notifs.filter((n) => !n.read_at).map((n) => String(n.id))),
+  'notif-open': (el) => openNotif(el.dataset.id),   // a link: the browser opens it (and the card it sits on doesn't open)
   'update-check': () => checkUpdate({ manual: true }),
   'update-now': () => applyUpdate(),
   'update-later': () => { _updLater = true; renderUpdate(); },
@@ -4527,7 +4743,8 @@ const ACTIONS = {
 };
 
 const INPUTS = {
-  'chat-input': () => chatGrow(),
+  'chat-input': (el, e) => { if (e.type === 'input') { chatGrow(); chatMentionCheck(); } },
+  'chat-q': () => { clearTimeout(_chatQT); _chatQT = setTimeout(chatSearch, 300); },
   'wm-preview': () => previewWeek(),
   'wm-date': () => refreshWeekPool(),
   'up-date': () => { $('up-round').value = drawNo($('up-date').value) || ''; upDateInfo(); },

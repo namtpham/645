@@ -31,7 +31,7 @@
 
 import { createClient } from 'npm:@supabase/supabase-js@2.117.2';
 import { newVapidKeys, sendPush, type Vapid } from './push.ts';
-import { chatMessage, message, reminderMessage, resultPost, shouldNotify, summarize, testMessage, ticketsMessage, type Lang, type Mode } from './notify.ts';
+import { chatMessage, mentionedIds, mentionMessage, mentionText, message, reminderMessage, resultPost, shouldNotify, summarize, testMessage, ticketsMessage, type Lang, type Mode } from './notify.ts';
 
 // The service key is provided to every Edge Function automatically (legacy or new key format).
 function serviceKey(): string | undefined {
@@ -459,16 +459,25 @@ async function sendChatNews(memberId: string, id: number) {
     .eq('id', id).eq('author', memberId).is('notified_at', null).gte('created_at', since).select('id, body').maybeSingle();
   if (error) return { error: error.message };
   if (!msg) return { sent: 0 };
-  const { data: who } = await db.from('profiles').select('display_name').eq('id', memberId).maybeSingle();
-  const { data: subs } = await db.from('push_subs').select('*').eq('chat', true).neq('member', memberId);
+  const { data } = await db.from('profiles').select('id, display_name, status');
+  const people = (data ?? []) as { id: string; display_name: string; status: string }[];
+  const names = Object.fromEntries(people.map((p) => [p.id, p.display_name]));
+  const name = names[memberId] ?? '?', text = mentionText(msg.body, names);
+  // mentioned members (@them or @everyone) get "mentioned you" on devices that allow it; the others who want chat get the message
+  const m = mentionedIds(msg.body);
+  const mentioned = new Set(people.filter((p) => p.status === 'active' && p.id !== memberId && (m.everyone || m.ids.includes(p.id))).map((p) => p.id));
+  const { data: subs } = await db.from('push_subs').select('*').neq('member', memberId).or('chat.eq.true,mention.eq.true');
   const v = subs?.length ? await vapid() : null;
-  let sent = 0;
+  let sent = 0, mentions = 0;
   for (const sub of subs ?? []) {
-    const r = await sendPush(sub, chatMessage(who?.display_name ?? '?', msg.body), v!, 6 * 3600).catch(() => null);
+    const isMention = mentioned.has(sub.member) && sub.mention !== false;
+    if (!isMention && !sub.chat) continue;
+    const payload = isMention ? mentionMessage(name, text, m.everyone && !m.ids.includes(sub.member), sub.lang as Lang) : chatMessage(name, text);
+    const r = await sendPush(sub, payload, v!, 6 * 3600).catch(() => null);
     if (r?.gone) await db.from('push_subs').delete().eq('endpoint', sub.endpoint);
-    else if (r?.ok) sent++;
+    else if (r?.ok) { sent++; if (isMention) mentions++; }
   }
-  return { sent };
+  return { sent, mentions };
 }
 
 /** The result bot: the draw's result in 💬 Chat, once (bot_key is unique). */

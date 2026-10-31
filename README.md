@@ -39,10 +39,19 @@ with an invitation key from the admin.
 - **💬 Chat** (tab): every member can write; links open in a new tab. A row of quick emoji sends
   one with a single tap, and 😊 opens a full emoji picker. Tap ☺ next to a message to react
   (👍 ❤️ 😂 😮 😢 🎉 🍀, or ➕ for any emoji); tap a reaction again to take it back. Authors (and
-  admins) can delete a message. Unread messages show a red count on the tab. **🤖 645 bot** posts
+  admins) can delete a message. Unread messages show a red count on the tab. Type **@** to
+  mention someone (or **@everyone**): a list of members comes up, and the mentioned members get a
+  🔔 notification (and a phone notification, if they allow 📣 Mentions). Mentions are stored as
+  the member's id, so they follow name changes. **🔍** searches every message on the server
+  (text, or **@name** for the messages that mention them); tapping a result opens the chat at
+  that message. **🤖 645 bot** posts
   every draw's result (winning numbers, our 등수 and prize after tax) once, in each member's
   language. Tables `chat_messages` and `chat_reactions`; the latest 60 messages load, older ones
   on request.
+- **🔔 Notifications in the app** (bell, top right, with a red count): someone mentioned you in
+  chat, or the bot announced a win. Tap one to open it (it jumps to the message); **Mark all as
+  read**. Made by the database itself (trigger `chat_notify`, table `notifications`, each member
+  sees only their own, kept four months), so they arrive even when nobody has the app open.
 - **Investors**: per-person invested / won / net P/L, plus a leaderboard. Each investor has a
   **start date** (default 17 May 2025) and an **end date** (empty = still in). Add/Edit Week only
   lists investors whose dates cover that week. An investor can have a **link to send them money**
@@ -189,8 +198,9 @@ with an invitation key from the admin.
   Two more, each on or off per device: **📺 Before the draw** (Saturday about 20:30 KST: "the
   draw starts in x minutes", time to watch it live; sent by the scheduled workflow at 20:17 and
   20:27 KST and by any member's open app from 20:10, each device once) and **🎟️ New ticket
-  photos** (when someone uploads tickets; the uploader isn't told about their own) and **💬 Chat
-  messages** (each message once, to everyone but its author). Tapping a notification opens the
+  photos** (when someone uploads tickets; the uploader isn't told about their own), **💬 Chat
+  messages** (each message once, to everyone but its author) and **📣 Mentions** (on by default:
+  "Nam mentioned you", instead of the plain chat message). Tapping a notification opens the
   right place (Picks → Live, Tickets, Chat, Dashboard).
 - **App lock** (Settings → 🔐 App lock, per device): 645 asks for Face ID / Touch ID on iPhone, or
   the fingerprint / face unlock / screen lock on Android, when it opens and when you come back

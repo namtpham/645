@@ -196,6 +196,7 @@ alter table public.push_subs add column if not exists remind boolean not null de
 alter table public.push_subs add column if not exists tickets boolean not null default false;
 alter table public.push_subs add column if not exists last_remind int;
 alter table public.push_subs add column if not exists chat boolean not null default false;   -- new chat messages
+alter table public.push_subs add column if not exists mention boolean not null default true;  -- someone wrote @me or @everyone
 alter table public.push_subs drop constraint if exists push_subs_mode_check;
 alter table public.push_subs add constraint push_subs_mode_check check (mode in ('all', 'win', 'big', 'none'));
 
@@ -246,6 +247,18 @@ create table if not exists public.chat_reactions (
   created_at timestamptz not null default now(),
   primary key (message_id, member, emoji)
 );
+
+-- 🔔 A member's own notifications (the bell): someone mentioned them in chat, or the bot announced a win.
+-- Made by the database itself (chat_notify below), so they arrive even when no app is open.
+create table if not exists public.notifications (
+  id         bigint generated always as identity primary key,
+  member     uuid not null references public.profiles (id) on delete cascade,
+  kind       text not null check (kind in ('mention', 'win')),
+  data       jsonb not null default '{}',   -- mention: message_id, author, everyone · win: the result (round, ranks, won …)
+  read_at    timestamptz,
+  created_at timestamptz not null default now()
+);
+create index if not exists notifications_member on public.notifications (member, created_at desc);
 
 -- ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -548,6 +561,30 @@ begin
   end loop;
 end $$;
 
+-- Chat mentions are written <@member-id> or <@everyone> in the message (the app shows them as @Name).
+create or replace function public.chat_notify()
+returns trigger language plpgsql security definer set search_path = public as $$
+declare everyone boolean := position('<@everyone>' in new.body) > 0;
+begin
+  if new.bot is null and new.author is not null then
+    insert into notifications (member, kind, data)
+    select p.id, 'mention', jsonb_build_object('message_id', new.id, 'author', new.author, 'everyone', everyone,
+                                             'excerpt', left(new.body, 300))
+      from profiles p
+     where p.status = 'active' and p.id <> new.author
+       and (everyone or p.id::text in (select (regexp_matches(new.body, '<@([0-9a-f-]{36})>', 'g'))[1]));
+  elsif new.bot = 'results' and coalesce((new.meta ->> 'best')::int, 0) > 0 then
+    insert into notifications (member, kind, data)
+    select p.id, 'win', new.meta || jsonb_build_object('message_id', new.id)
+      from profiles p where p.status = 'active';
+  end if;
+  delete from notifications where created_at < now() - interval '120 days';   -- the bell keeps four months
+  return new;
+end $$;
+drop trigger if exists chat_notify on public.chat_messages;
+create trigger chat_notify after insert on public.chat_messages
+  for each row execute function public.chat_notify();
+
 -- ─── Row Level Security ─────────────────────────────────────────────────────
 
 alter table public.profiles  enable row level security;
@@ -566,6 +603,7 @@ alter table public.my_picks    enable row level security;
 alter table public.push_keys   enable row level security;
 alter table public.chat_messages  enable row level security;
 alter table public.chat_reactions enable row level security;
+alter table public.notifications  enable row level security;
 
 do $$
 declare p record;
@@ -574,7 +612,7 @@ begin
            where schemaname = 'public'
              and tablename in ('profiles', 'invites', 'settings', 'investors', 'weeks', 'tickets', 'audit_log', 'draws',
                                'pick_plans', 'group_picks', 'live_picks', 'push_subs', 'push_keys', 'my_picks',
-                               'chat_messages', 'chat_reactions')
+                               'chat_messages', 'chat_reactions', 'notifications')
   loop
     execute format('drop policy %I on public.%I', p.policyname, p.tablename);
   end loop;
@@ -642,6 +680,8 @@ create policy "react"          on public.chat_reactions for insert to authentica
   with check (public.is_member() and member = auth.uid());
 create policy "take back a reaction" on public.chat_reactions for delete to authenticated
   using (public.is_member() and member = auth.uid());
+create policy "own notifications" on public.notifications for all to authenticated
+  using (member = auth.uid() and public.is_member()) with check (member = auth.uid() and public.is_member());
 create policy "read live picks" on public.live_picks for select to authenticated using (public.is_member());
 create policy "add live picks"  on public.live_picks for insert to authenticated with check (public.is_member());
 create policy "edit live picks" on public.live_picks for update to authenticated
@@ -665,6 +705,8 @@ grant select, insert, update, delete on public.my_picks    to authenticated;
 grant select, delete                 on public.chat_messages  to authenticated;
 grant insert (body)                  on public.chat_messages  to authenticated;   -- author = auth.uid() by default; bot columns are the server's
 grant select, insert, delete         on public.chat_reactions to authenticated;
+grant select, delete                 on public.notifications  to authenticated;
+grant update (read_at)               on public.notifications  to authenticated;
 
 revoke execute on all functions in schema public from public, anon;
 grant execute on function public.is_member(), public.is_admin(), public.normalize_invite(text),
@@ -707,7 +749,7 @@ do $$
 declare t text;
 begin
   foreach t in array array['investors', 'weeks', 'tickets', 'settings', 'profiles', 'draws', 'pick_plans', 'group_picks', 'live_picks',
-                           'chat_messages', 'chat_reactions'] loop
+                           'chat_messages', 'chat_reactions', 'notifications'] loop
     if not exists (select 1 from pg_publication_tables
                    where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = t) then
       execute format('alter publication supabase_realtime add table public.%I', t);

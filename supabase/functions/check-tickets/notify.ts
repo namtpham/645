@@ -120,10 +120,28 @@ export function testMessage(lang: Lang) {
   }[lang] ?? { title: '🔔 645', body: 'Notifications are on.' };
 }
 
+/** Mentions are stored as <@member-id> / <@everyone>: shown as @Name. */
+export function mentionText(text: string, names: Record<string, string>) {
+  return text.replace(/<@(everyone|[0-9a-f-]{36})>/g, (_, id) => `@${id === 'everyone' ? 'everyone' : names[id] ?? '?'}`);
+}
+export function mentionedIds(text: string): { ids: string[]; everyone: boolean } {
+  return { ids: [...new Set([...text.matchAll(/<@([0-9a-f-]{36})>/g)].map((m) => m[1]))], everyone: text.includes('<@everyone>') };
+}
+const short = (text: string) => { const b = text.replace(/\s+/g, ' ').trim(); return b.length > 140 ? b.slice(0, 139) + '…' : b; };
+
 /** A new chat message, for the members who asked for chat notifications. */
 export function chatMessage(name: string, text: string) {
-  const body = text.replace(/\s+/g, ' ').trim();
-  return { title: `💬 ${name}`, body: body.length > 140 ? body.slice(0, 139) + '…' : body, tag: 'chat', url: './#chat' };
+  return { title: `💬 ${name}`, body: short(text), tag: 'chat', url: './#chat' };
+}
+
+/** Someone wrote @you (or @everyone) in chat. */
+export function mentionMessage(name: string, text: string, everyone: boolean, lang: Lang) {
+  const title = {
+    en: everyone ? `📣 ${name} mentioned everyone` : `📣 ${name} mentioned you`,
+    ko: everyone ? `📣 ${name} 님이 모두를 언급했습니다` : `📣 ${name} 님이 회원님을 언급했습니다`,
+    vi: everyone ? `📣 ${name} đã nhắc đến mọi người` : `📣 ${name} đã nhắc đến bạn`,
+  }[lang] ?? `📣 ${name}`;
+  return { title, body: short(text), tag: 'mention', url: './#chat' };
 }
 
 /** What the result bot posts in 💬 Chat (the app shows it in each member's language from `meta`). */
