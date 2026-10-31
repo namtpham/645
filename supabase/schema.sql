@@ -163,13 +163,16 @@ create index if not exists audit_log_at_idx on public.audit_log (at desc);
 -- Our own numbers for a coming draw (Picks tab): how many groups of 6, and who picked which number.
 create table if not exists public.pick_plans (
   round      int primary key,
-  groups     int not null check (groups between 1 and 100),
+  groups     int not null,   -- from the draw's week entry (0 when it has none), see the check below
   buyers     jsonb not null default '[]',   -- who buys which groups: [{"by": member id, "from": 1, "to": 13}, …]
   updated_by uuid references public.profiles (id) on delete set null default auth.uid(),
   updated_at timestamptz not null default now()
 );
 
 alter table public.pick_plans add column if not exists buyers jsonb not null default '[]';
+-- 0 groups: the draw has no week entry (yet, or any more)
+alter table public.pick_plans drop constraint if exists pick_plans_groups_check;
+alter table public.pick_plans add constraint pick_plans_groups_check check (groups between 0 and 100);
 
 create table if not exists public.group_picks (
   round      int not null,

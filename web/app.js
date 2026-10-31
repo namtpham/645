@@ -1153,6 +1153,7 @@ async function saveWeek() {
     big_win: prize_won > 0 && _wmShare,
     notes: $('wm-notes').value.trim(),
   };
+  if (id && !(await mathCheck(`Save the changes to the week of ${fmtD(result_date)} (draw #${drawNo(result_date)})?`))) return;
   $('wm-save-btn').disabled = true;
   try {
     const q = id ? S.sb.from('weeks').update(row).eq('id', id) : S.sb.from('weeks').insert(row);
@@ -1169,7 +1170,7 @@ async function saveWeek() {
 
 async function deleteWeek(id) {
   const w = S.weeks.find((x) => x.id === id);
-  if (!w || !confirm(`Delete the week of ${fmtD(w.result_date)}? The prize pool will be recalculated.`)) return;
+  if (!w || !(await mathCheck(`Delete the week of ${fmtD(w.result_date)} (draw #${drawNo(w.result_date)})? The prize pool will be recalculated.`))) return;
   const { error } = await S.sb.from('weeks').delete().eq('id', id);
   if (error) return fail(error);
   toast('Week deleted.', 'ok');
@@ -1716,6 +1717,7 @@ async function confirmDeleteTicket() {
   const err = (m) => { $('del-err').textContent = m; $('del-err').hidden = false; };
   if (!t) return;
   if (!reason) return err(document.querySelector('#del-reasons input:checked') ? 'Write the reason.' : 'Choose why the photo is deleted.');
+  if (!(await mathCheck('Delete this ticket photo for good?'))) return;
   $('del-btn').disabled = true;
   try {
     const { error } = await S.sb.rpc('delete_ticket', { p_ticket: t.id, p_reason: reason });
@@ -1845,7 +1847,7 @@ function renderPicksAsOf(hist, latestOut) {
     _latestAsked = latestOut;   // results are out but not here yet: ask the result checker once
     checkResults().then(() => loadAll()).then(() => S.tab === 'picks' && renderPicks()).catch(console.error);
   }
-  el.innerHTML = `<p class="fhelp ${missing ? 'warn-txt' : ''}">${missing
+  el.innerHTML = `<p class="asof ${missing ? 'warn' : 'ok'}">${missing
     ? `⚠️ Made from the draws up to #${last.round} (${esc(fmtD(last.draw_date || drawDate(last.round)))}): draw #${latestOut} is not in yet${out ? '' : ` (its results come at ${RESULTS_TIME} KST)`}.
        <button type="button" class="btn btn-ghost btn-sm" data-act="picks-refresh">↻ Get the latest draw</button>`
     : `✓ Made from all ${hist.length.toLocaleString(LOCALE)} draws up to #${last.round} (${esc(fmtD(last.draw_date || drawDate(last.round)))}), the latest one.`}</p>`;
@@ -2220,7 +2222,9 @@ async function syncGroups(round) {
   if (_groupsSynced === key) return;
   _groupsSynced = key;
   const { error } = await S.sb.from('pick_plans').upsert({ round, groups: n }, { onConflict: 'round' });
-  if (error) { _groupsSynced = ''; return console.error(error); }
+  if (error) {   // once per value: the next week change tries again
+    return fail(/groups_check/.test(error.message) ? new Error(`Draw #${round} could not change to ${n} groups: the database needs an update (run supabase/schema.sql again).`) : error);
+  }
   if (round === S.board.round) { S.board.groups = n; if (S.tab === 'picks') renderPicks(); }
 }
 
@@ -2246,11 +2250,12 @@ function openRoundWeek(round) {
 
 /** A question with a number answer in a small box (a number pad on phones); null when cancelled. */
 let _ask = null;
-function askNumber(text) {
+function askNumber(text, question = '') {
   if (_ask) _ask(null);
   return new Promise((resolve) => {
     _ask = resolve;
     $('ask-text').textContent = text;
+    $('ask-q').textContent = question;
     $('ask-input').value = '';
     $('ask-overlay').classList.add('open');
     setTimeout(() => $('ask-input').focus(), 60);
@@ -2264,15 +2269,22 @@ function answerAsk(ok) {
 }
 $('ask-input')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); answerAsk(true); } });
 
+/** Before something that is hard to undo: what it is, and a small sum to answer (elementary school level). */
+async function mathCheck(what) {
+  const a = 2 + Math.floor(Math.random() * 8), b = 2 + Math.floor(Math.random() * 8), times = Math.random() < 0.5;
+  const answer = await askNumber(what, `To go ahead, answer: ${a} ${times ? '×' : '+'} ${b} = ?`);
+  if (answer == null) return false;
+  if (parseInt(String(answer).trim(), 10) === (times ? a * b : a + b)) return true;
+  toast('That is not the right answer: nothing was changed.', 'err');
+  return false;
+}
+
 /** 🧹 Clear every number of this draw, after a small sum (so it isn't done by accident). */
 async function clearBoard() {
   const B = S.board, n = B.picks.length;
   if (!n) return;
   if (buyersLocked(B.round)) return toast('The buyers are set for this draw: the numbers can no longer be cleared.', 'err');
-  const a = 2 + Math.floor(Math.random() * 8), b = 2 + Math.floor(Math.random() * 8), times = Math.random() < 0.5;
-  const answer = await askNumber(`To clear all ${n} numbers picked for draw #${B.round}, answer: ${a} ${times ? '×' : '+'} ${b} = ?`);
-  if (answer == null) return;
-  if (parseInt(String(answer).trim(), 10) !== (times ? a * b : a + b)) return toast('That is not the right answer: nothing was cleared.', 'err');
+  if (!(await mathCheck(`Clear all ${n} numbers picked for draw #${B.round}?`))) return;
   const { error } = await S.sb.rpc('clear_group_picks', { p_round: B.round });
   if (error) return fail(/clear_group_picks/.test(error.message) ? new Error('The database needs an update: run supabase/schema.sql again.') : error);
   B.picks = [];
@@ -3364,6 +3376,7 @@ async function saveInvestor() {
   const id = $('im-id').value, old = id ? S.investors.find((i) => i.id === id) : null;
   const pay = $('im-pay').value.trim();
   if (pay && !safePayUrl(pay)) return toast('The money link must be a web address starting with https://', 'err');
+  if (id && !(await mathCheck(`Save the changes to ${old?.nickname || nickname}?`))) return;
   if (pay || (old && old.pay_url != null)) row.pay_url = pay || null;   // a database without the column still saves the rest
   const member = $('im-member').value || null;
   if (member || (old && old.member != null)) row.member = member;
@@ -4233,6 +4246,7 @@ async function savePoolHolders() {
   for (const e of document.querySelectorAll('[data-pool-inv]')) { const v = amt(e.value); if (v > 0) holders[e.dataset.poolInv] = v; }
   const tot = sum(Object.values(holders));
   if (tot !== V.pool.inBooks) return toast(`The amounts add up to ${money(tot)}, but the pool has ${money(V.pool.inBooks)}.`, 'err');
+  if (!(await mathCheck('Save who keeps the pool?'))) return;
   const { error } = await S.sb.from('pool_holders').upsert({ round: V.next - 1, holders }, { onConflict: 'round' });
   if (error) return fail(error);
   _poolEdit = false;
@@ -4250,7 +4264,7 @@ async function markTransfer(el) {
   loadMoney();
 }
 async function undoTransfer(id) {
-  if (!confirm('Undo this? It goes back to the transfers still to make.')) return;
+  if (!(await mathCheck('Undo this transfer? It goes back to the transfers still to make.'))) return;
   const { error } = await S.sb.from('money_transfers').delete().eq('id', /^\d+$/.test(id) ? Number(id) : id);
   if (error) return fail(error);
   loadMoney();
@@ -5157,7 +5171,7 @@ function renderMembers() {
 }
 
 async function setMember(id, patch, question) {
-  if (question && !confirm(question)) return;
+  if (question && !(await mathCheck(question))) return;
   const { error } = await S.sb.rpc('admin_update_member', { p_user: id, p_status: patch.status ?? null, p_role: patch.role ?? null });
   if (error) return fail(error);
   toast('Member updated.', 'ok');
@@ -5172,7 +5186,7 @@ function randomPassword() {
 
 async function resetMemberPassword(id) {
   const p = S.profiles.find((x) => x.id === id);
-  if (!p || !confirm(`Set a new temporary password for ${p.display_name}?`)) return;
+  if (!p || !(await mathCheck(`Set a new temporary password for ${p.display_name}?`))) return;
   const pw = randomPassword();
   const { error } = await S.sb.rpc('admin_set_password', { p_user: id, p_password: pw });
   if (error) return fail(error);
@@ -5210,7 +5224,7 @@ async function importLegacy(file) {
     investments: Object.fromEntries(Object.entries(w.investments || {}).map(([k, v]) => [k, +v || 0]).filter(([, v]) => v > 0)),
     pool_used: +w.pool_used || 0, prize_won: +w.prize_won || 0, big_win: !!w.big_win, notes: String(w.notes || '').slice(0, 2000),
   })).filter((w) => w.result_date);
-  if (!confirm(`Import ${investors.length} investors and ${weeks.length} weeks?`)) return;
+  if (!(await mathCheck(`Import ${investors.length} investors and ${weeks.length} weeks?`))) return;
   const { error: e1 } = await S.sb.from('investors').upsert(investors, { onConflict: 'id' });
   if (e1) return fail(e1);
   const { error: e2 } = await S.sb.from('weeks').upsert(weeks, { onConflict: 'id' });

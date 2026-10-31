@@ -48,6 +48,10 @@ with an invitation key from the admin.
   every draw's result (winning numbers, our 등수 and prize after tax) once, in each member's
   language. Tables `chat_messages` and `chat_reactions`; the latest 60 messages load, older ones
   on request.
+- **A small sum before important changes** (e.g. 7 × 8 = ?, answered on a number pad): saving
+  changes to or deleting a week entry, saving changes to an investor, deleting a ticket photo,
+  correcting the pool keepers, undoing a transfer, clearing all numbers, and the admin's member
+  actions (revoke, change role, reset password) and import. A wrong answer changes nothing.
 - **💰 Money** (tab): who sends whom how much, for every draw, and who keeps the pool money.
   - **The rule:** the buyers pay at the shop (₩1,000 per group they buy, from 🛒 Buy). Everyone
     with fresh money that week (the week entry) and whoever keeps the pool money used sends it to
@@ -128,8 +132,8 @@ with an invitation key from the admin.
   - How many groups of 6 we play comes from the draw's **week entry** (fresh money + pool used,
     ₩1,000 a group); it is read-only here, with **✏️ Edit the week entry** next to it. 🛒 Buy
     follows the same number, and the week entry is where 💰 Money starts.
-  - **🧹 Clear all numbers** removes every number of the draw, after a small sum (e.g. 7 × 8 = ?,
-    answered on a number pad). Deleting the week entry sets the groups back to 0.
+  - **🧹 Clear all numbers** removes every number of the draw. Deleting the week entry sets the
+    groups back to 0.
   - Each group shows 45 round buttons: gray = free, coloured = taken. Every member has their
     own colour. The buttons are shuffled by default (so nobody picks a row or diagonal of a
     1–45 grid, which many players do); **🔀 Random / 🔢 Sorted** switches each group, keeps the

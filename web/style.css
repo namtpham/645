@@ -1210,3 +1210,8 @@ table.bt td, table.bt th { padding: 8px 10px; }
 .ask-input { font: 600 24px var(--mono); text-align: center; letter-spacing: 2px; margin-top: 8px; }
 .picks-asof p { margin: -4px 0 10px; }
 .picks-asof .btn { margin-left: 6px; }
+#ask-overlay { z-index: 1200; }   /* above the dialog it guards (e.g. deleting a photo) */
+.ask-q { margin-top: 10px; font-weight: 600; }
+.picks-asof .asof { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin: -2px 0 12px; padding: 10px 14px; border-radius: 10px; font-size: 13.5px; font-weight: 600; }
+.picks-asof .asof.ok { background: rgba(34,197,94,.12); border: 1px solid rgba(34,197,94,.45); color: #86efac; }
+.picks-asof .asof.warn { background: rgba(245,158,11,.12); border: 1px solid rgba(245,158,11,.5); color: #fcd34d; }
