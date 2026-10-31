@@ -258,20 +258,7 @@
         </div>
         <div class="board-controls">
           <div class="fgrp">
-            <label class="flbl" for="board-x">Groups of 6 this week (₩1,000 each)</label>
-            <div class="sim-x-row">
-              <input type="number" class="finp mono" id="board-x" min="1" max="100" step="1" inputmode="numeric" data-on-input="board-x">
-              <div class="quick-row">
-                <button type="button" class="qb" data-act="board-x" data-set="5">5</button>
-                <button type="button" class="qb" data-act="board-x" data-set="10">10</button>
-                <button type="button" class="qb" data-act="board-x" data-set="15">15</button>
-                <button type="button" class="qb" data-act="board-x" data-set="20">20</button>
-                <button type="button" class="qb" data-act="board-x" data-set="25">25</button>
-                <button type="button" class="qb" data-act="board-x" data-set="30">30</button>
-                <button type="button" class="qb qb-minus" data-act="board-x" data-add="-1">−1</button>
-                <button type="button" class="qb qb-plus" data-act="board-x" data-add="1">+1</button>
-              </div>
-            </div>
+            <div class="board-groups-info" id="board-groups-info"></div>
             <span class="fhelp">Everyone picks together: tap a number to add it in your colour, tap it again to take it back.
               🤖 asks the suggestion engine to pick for you.</span>
           </div>
@@ -636,6 +623,8 @@
           <label><input type="checkbox" id="push-chat" data-on-input="push-extra"> <span><strong>💬 Chat messages</strong><small>When someone writes in 💬 Chat</small></span></label>
           <label><input type="checkbox" id="push-mention" data-on-input="push-extra" checked> <span><strong>📣 Mentions</strong><small>When someone writes @you or @everyone in 💬 Chat</small></span></label>
         </div>
+        <div class="money-warn" id="push-paused-note" hidden>⏸ Phone notifications are paused by the admin for now: nothing is sent to anyone's phone. Your choices are kept.</div>
+        <label class="lock-toggle admin-only" style="margin-top:8px"><input type="checkbox" id="push-paused" data-on-input="push-paused"> <span><strong>⏸ Pause phone notifications for everyone</strong><small>Admin: while testing. Chat, the bot and 🔔 in the app keep working.</small></span></label>
         <p class="fhelp" id="push-status"></p>
         <div class="btn-row" style="margin-top:8px">
           <button class="btn btn-secondary btn-sm" data-act="push-test" id="push-test" hidden>Send a test</button>
@@ -777,6 +766,7 @@
       <div id="wm-preview"></div>
       <div class="wm-totals">
         <span>Total: <strong id="wm-total" class="gold mono">—</strong></span>
+        <span class="fhelp" id="wm-groups"></span>
         <span id="wm-win-label"></span>
       </div>
 

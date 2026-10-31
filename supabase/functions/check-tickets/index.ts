@@ -403,8 +403,15 @@ async function gamesFor(round: number): Promise<number[][]> {
 
 const DRAW_TIME = '20:35';   // KST, the live draw
 
+/** ⏸ Settings → Notifications: an admin paused every phone notification (testing). The bot still posts in chat. */
+async function pushPaused(): Promise<boolean> {
+  const { data } = await db.from('settings').select('push_paused').eq('id', 1).maybeSingle();
+  return data?.push_paused === true;
+}
+
 /** Saturday 20:10–20:35 KST: tell the devices that asked for it that the draw is about to start (once per draw). */
 async function sendReminders() {
+  if (await pushPaused()) return { sent: 0, paused: true };
   const kst = new Date(Date.now() + 9 * 3600e3), day = kst.toISOString().slice(0, 10);
   const drawAt = new Date(`${day}T${DRAW_TIME}:00+09:00`).getTime(), minutes = (drawAt - Date.now()) / 60e3;
   if (kst.getUTCDay() !== 6 || minutes <= 0 || minutes > 25) return { sent: 0, note: 'only on Saturday between 20:10 and 20:35 KST' };
@@ -427,6 +434,7 @@ async function sendReminders() {
 /** "New ticket photos": photos this member uploaded in the last half hour, each announced once. */
 async function sendTicketNews(memberId: string, ids: string[]) {
   if (!ids.length) return { sent: 0 };
+  if (await pushPaused()) return { sent: 0, paused: true };   // the photos stay unannounced
   const since = new Date(Date.now() - 30 * 60e3).toISOString();
   // claim the photos first, so a second call can't announce them again
   const { data: photos, error } = await db.from('tickets').update({ notified_at: new Date().toISOString() })
@@ -458,6 +466,7 @@ async function sendTicketNews(memberId: string, ids: string[]) {
 /** A chat message, sent once to the other members who turned chat notifications on. */
 async function sendChatNews(memberId: string, id: number) {
   if (!Number.isFinite(id)) return { sent: 0 };
+  if (await pushPaused()) return { sent: 0, paused: true };
   const since = new Date(Date.now() - 10 * 60e3).toISOString();
   // claim it first, so a second call can't send it again
   const { data: msg, error } = await db.from('chat_messages').update({ notified_at: new Date().toISOString() })
@@ -490,6 +499,7 @@ async function sendMoneyReminder(memberId: string, b: Record<string, unknown>) {
   const target = String(b.member ?? ''), amount = Math.round(Number(b.amount)), round = Math.round(Number(b.round));
   const to = String(b.to ?? '').slice(0, 40);
   if (!/^[0-9a-f-]{36}$/.test(target) || target === memberId || !(amount > 0 && amount < 1e9) || !(round > 0)) return { error: 'Bad reminder.' };
+  if (await pushPaused()) return { ok: true, sent: 0, paused: true };
   const { data: who } = await db.from('profiles').select('display_name').eq('id', memberId).maybeSingle();
   const { data: subs } = await db.from('push_subs').select('*').eq('member', target);
   const v = subs?.length ? await vapid() : null;
@@ -522,6 +532,7 @@ async function notifyResults(cache: Map<number, Draw | null>) {
   if (!draw) return { round, sent: 0, waiting: 'winning numbers not published yet' };
   const s = summarize(await gamesFor(round), draw);
   const chat = await postResult(s, draw).catch((e) => ({ error: (e as Error).message }));
+  if (await pushPaused()) return { round, chat, sent: 0, paused: true };   // devices are told once unpaused
   const { data: subs, error } = await db.from('push_subs').select('*').neq('mode', 'none').or(`last_round.is.null,last_round.lt.${round}`);
   if (error) return { round, chat, error: error.message };
   if (!subs?.length) return { round, chat, sent: 0 };

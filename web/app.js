@@ -1119,6 +1119,10 @@ function previewWeek() {
     $('wp-' + el.dataset.inv).textContent = c.pcts[el.dataset.inv] ? fmtP(c.pcts[el.dataset.inv]) : '—';
   });
   $('wm-total').textContent = money(c.total);
+  const g = Math.floor((sum(Object.values(investments)) + pool_used) / TICKET_PRICE), left = (sum(Object.values(investments)) + pool_used) % TICKET_PRICE;
+  const locked = buyersLocked(drawNo($('wm-date').value));
+  $('wm-groups').textContent = locked ? '🔒 The buyers are set for this draw: changing the money here makes new transfers (refunds) in 💰 Money.'
+    : `= ${g} group${g === 1 ? '' : 's'} of 6 in 🔮 Picks${left ? ` (${money(left)} left over)` : ''}`;
   $('wm-prize-hint').textContent = prize_won > 0 ? money(prize_won) : '';
   const wl = $('wm-win-label'), threshold = S.settings.big_win_threshold;
   if (prize_won > 0 && !_wmShareTouched) _wmShare = prize_won >= threshold;
@@ -1157,6 +1161,8 @@ async function saveWeek() {
     toast('Week saved!', 'ok');
     closeModal('week-overlay');
     await loadAll();
+    const round = drawNo(result_date);
+    if (round >= S.board.round) await syncGroups(round);
   } catch (e) { fail(e, 'Error saving week.'); }
   finally { $('wm-save-btn').disabled = false; }
 }
@@ -2075,7 +2081,6 @@ function applyFocus() {
   $('focus-veil').hidden = !_focusKey;
 }
 
-const boardDefault = () => 5 * Math.max(1, simActiveMembers(currentDraw()));
 const groupPicks = (g) => S.board.picks.filter((p) => p.grp === g).sort((a, b) => a.num - b.num);
 
 // The same 0–100 scale as the ranked suggestions, so our own sets can be compared with them
@@ -2098,16 +2103,14 @@ function renderBoard() {
       ${isAdmin() ? 'Run <code>supabase/schema.sql</code> again in the Supabase SQL editor, then reload.' : 'Ask the admin to update the database.'}</div>`;
     return;
   }
-  const inp = $('board-x');
-  if (document.activeElement !== inp) inp.value = B.groups || '';
-  inp.placeholder = String(boardDefault());
+  renderGroupsInfo();
   const members = S.profiles.filter((p) => p.status === 'active');
   $('board-legend').innerHTML = members.map((p) => `<span class="${p.id === S.me.id ? 'me' : ''}"><span class="sw" style="--c:${memberColor(p.id)}"></span>${esc(p.display_name)}${p.id === S.me.id ? ' (you)' : ''}</span>`).join('')
     + `<span><span class="sw" style="--c:${ENGINE_COLOR}"></span>🤖 engine</span>`;
   if (!B.groups) {
-    $('board-body').innerHTML = `<div class="empty"><p>How many groups do we play for draw #${target}?</p>
-      <button class="btn btn-primary btn-sm" data-act="board-x" data-set="${boardDefault()}">Start with ${boardDefault()} groups</button>
-      <p class="fhelp" style="margin-top:8px">5 per active investor. Or use the buttons above.</p></div>`;
+    $('board-body').innerHTML = `<div class="empty"><p>How many groups we play for draw #${target} comes from its week entry:
+      who puts in fresh money and how much comes from the pool (₩1,000 a group).</p>
+      <button class="btn btn-primary btn-sm" data-act="board-week">${weekFor(target) ? '✏️ Edit the week entry' : '＋ Add the week entry'}</button></div>`;
     return;
   }
   const scale = boardScale(), stars = (f) => '★★★★★'.slice(0, Math.max(1, Math.round(f / 20))).padEnd(5, '☆');
@@ -2179,16 +2182,63 @@ function renderBoard() {
   applyFocus();
 }
 
-async function setBoardGroups(n) {
-  const B = S.board;
-  n = Math.max(1, Math.min(100, n | 0));
-  if (B.missing || n === B.groups) return;
-  const lost = B.picks.filter((p) => p.grp > n && p.grp <= (B.groups || 0)).length;
-  if (lost && !confirm(`Groups ${n + 1}–${B.groups} have ${lost} number${lost > 1 ? 's' : ''} picked. Hide them? (They come back if you raise the count again.)`)) { renderBoard(); return; }
-  B.groups = n;
-  renderBoard();
-  const { error } = await S.sb.from('pick_plans').upsert({ round: B.round, groups: n }, { onConflict: 'round' });
-  if (error) { fail(error); await loadBoard(); renderBoard(); }
+// ── How many groups: from the week entry (fresh money + pool used, ₩1,000 a group), read-only here.
+// pick_plans.groups follows it until the buyers are set (every transfer of the draw done).
+const weekFor = (round) => S.weeks.find((w) => w.result_date === drawDate(round)) || null;
+function weekGroups(round) {
+  const w = weekFor(round);
+  return w ? Math.floor((sum(Object.values(w.investments || {}).map(Number)) + (+w.pool_used || 0)) / TICKET_PRICE) : null;
+}
+const roundMoney = (round) => S.moneyView?.rounds.find((x) => x.r === round) || null;
+const buyersLocked = (round) => !!roundMoney(round)?.locked;
+
+/** Keep the plan's group count in step with the week entry (not once the buyers are set). */
+let _groupsSynced = '';
+async function syncGroups(round) {
+  const n = weekGroups(round), cur = round === S.board.round ? S.board.groups : S.money.plans[round]?.groups || 0;
+  if (n == null || n === cur || buyersLocked(round) || S.board.missing) return;
+  const key = `${round}:${n}`;
+  if (_groupsSynced === key) return;
+  _groupsSynced = key;
+  const { error } = await S.sb.from('pick_plans').upsert({ round, groups: n }, { onConflict: 'round' });
+  if (error) { _groupsSynced = ''; return console.error(error); }
+  if (round === S.board.round) { S.board.groups = n; if (S.tab === 'picks') renderPicks(); }
+}
+
+function renderGroupsInfo() {
+  const B = S.board, w = weekFor(B.round), el = $('board-groups-info');
+  if (!el) return;
+  const fresh = w ? sum(Object.values(w.investments || {}).map(Number)) : 0, pool = +w?.pool_used || 0;
+  const locked = buyersLocked(B.round), picked = B.picks.filter((p) => p.grp <= (B.groups || 0)).length;
+  el.innerHTML = `<div class="bgi-main">
+      <span class="bgi-n">${B.groups || 0}</span>
+      <span><strong>group${B.groups === 1 ? '' : 's'} of 6 this week</strong>
+        <small>${w ? `${esc(money(fresh + pool))}: fresh ${esc(money(fresh))} + pool ${esc(money(pool))}` : 'no week entry yet'}</small></span>
+      <button type="button" class="btn btn-secondary btn-sm" data-act="board-week">${w ? '✏️ Edit the week entry' : '＋ Add the week entry'}</button>
+      ${picked && !locked ? '<button type="button" class="btn btn-ghost btn-sm" data-act="board-clear-all">🧹 Clear all numbers</button>' : ''}
+    </div>
+    ${locked ? '<p class="fhelp">🔒 Buyers are set: every transfer for this draw is done (💰 Money).</p>' : ''}
+    ${w && (fresh + pool) % TICKET_PRICE ? `<p class="fhelp warn-txt">⚠️ ${esc(money((fresh + pool) % TICKET_PRICE))} of the week's money doesn't make a whole group.</p>` : ''}`;
+}
+function openRoundWeek(round) {
+  const w = weekFor(round);
+  openWeekModal(w?.id || null, drawDate(round));
+}
+
+/** 🧹 Clear every number of this draw, after a small sum (so it isn't done by accident). */
+async function clearBoard() {
+  const B = S.board, n = B.picks.length;
+  if (!n) return;
+  if (buyersLocked(B.round)) return toast('The buyers are set for this draw: the numbers can no longer be cleared.', 'err');
+  const a = 2 + Math.floor(Math.random() * 8), b = 2 + Math.floor(Math.random() * 8), times = Math.random() < 0.5;
+  const answer = prompt(`To clear all ${n} numbers picked for draw #${B.round}, answer: ${a} ${times ? '×' : '+'} ${b} = ?`);
+  if (answer == null) return;
+  if (parseInt(String(answer).trim(), 10) !== (times ? a * b : a + b)) return toast('That is not the right answer: nothing was cleared.', 'err');
+  const { error } = await S.sb.rpc('clear_group_picks', { p_round: B.round });
+  if (error) return fail(/clear_group_picks/.test(error.message) ? new Error('The database needs an update: run supabase/schema.sql again.') : error);
+  B.picks = [];
+  toast(`🧹 Cleared all ${n} numbers.`, 'ok');
+  renderPicks();
 }
 
 async function toggleBoardNum(g, n) {
@@ -2320,7 +2370,7 @@ function normBuyers(list, m) {
   for (const b of list || []) {
     if (from > m) break;
     const to = Math.max(from, Math.min(m, parseInt(b.to, 10) || m));
-    out.push({ by: b.by || null, from, to });
+    out.push({ by: b.by || null, from, to, ...(b.forgot ? { forgot: true } : {}) });
     from = to + 1;
   }
   if (out.length) out[out.length - 1].to = m;
@@ -2330,6 +2380,7 @@ const buyerList = () => normBuyers(S.board.buyers, S.board.groups);
 
 async function saveBuyers(list) {
   const B = S.board;
+  if (buyersLocked(B.round)) { toast('The buyers are set: every transfer for this draw is done. Use 🙈 Forgot to buy if someone did not buy.', 'err'); return renderBuy(); }
   B.buyers = normBuyers(list, B.groups);
   renderBuy(true);
   const { error } = await S.sb.from('pick_plans').update({ buyers: B.buyers }).eq('round', B.round);
@@ -2361,6 +2412,7 @@ function setBuyer(i, by) {
   const list = buyerList();
   if (!list[i]) return;
   list[i].by = by || null;
+  delete list[i].forgot;   // someone else buys these now
   saveBuyers(list);
 }
 
@@ -2448,7 +2500,7 @@ function renderBuy(own = false) {
   if (B.round !== target) { loadBoard().then(renderBuy).catch(console.error); return; }
   if (B.missing || !B.groups) {
     $('buy-plan').innerHTML = `<p class="fhelp">${B.missing ? 'Picking numbers together needs the database update (see ✍️ Picks).'
-      : 'Choose how many groups we play in ✍️ Picks first.'}</p>`;
+      : 'Add the week entry for this draw first (✍️ Picks → ＋ Add the week entry): it decides how many groups we play.'}</p>`;
     $('buy-qrs').innerHTML = '';
     return;
   }
@@ -2458,7 +2510,16 @@ function renderBuy(own = false) {
   const m = B.groups, nobody = list.filter((b) => !b.by);
   // a live update from someone else leaves a menu being opened or a slider being dragged alone
   const editing = !own && $('buy-plan').contains(document.activeElement) && document.activeElement.matches('select, .buy-slider:active');
-  if (!editing) {
+  if (buyersLocked(B.round)) {
+    // set: who buys what, read-only, and the way out when someone didn't buy
+    $('buy-plan').innerHTML = `<p class="buy-locked">🔒 Buyers are set: every transfer for this draw is done.</p>
+      <div class="buy-bar">${list.map((b) => `<div class="buy-seg" style="--c:${buyerColor(b)};flex:${b.to - b.from + 1}">
+        <strong>${esc(b.by ? memberName(b.by) : '?')}</strong><span>${b.from === b.to ? b.from : `${b.from}–${b.to}`}</span></div>`).join('')}</div>
+      ${list.map((b, i) => `<div class="buyer-row locked" style="--c:${buyerColor(b)}"><div class="buyer-head"><span class="buyer-dot"></span>
+        <strong>${esc(b.by ? memberName(b.by) : '?')}</strong><span class="buyer-range">${buyerRangeHtml(b)}</span>
+        ${b.by ? `<button type="button" class="btn btn-ghost btn-sm" data-act="buy-forgot" data-round="${B.round}" data-i="${i}">🙈 Forgot to buy</button>` : ''}</div></div>`).join('')}
+      <p class="fhelp">If a buyer forgets, tap 🙈: the draw opens again, so their groups can go to someone else here, or (after the draw) the week entry can be changed to what was really played. 💰 Money works out the refunds.</p>`;
+  } else if (!editing) {
     $('buy-plan').innerHTML = !list.length
       ? `<div class="buy-start">
           <button type="button" class="btn btn-primary" data-act="buy-start">🙋 I buy</button>
@@ -3788,7 +3849,8 @@ function prizeKeepers(round, amount) {
  */
 function buyLedger(x) {
   const spend = {};
-  for (const b of x.buyers) if (b.party) spend[b.party] = (spend[b.party] || 0) + b.n * TICKET_PRICE;
+  for (const b of x.buyers) if (b.party && !b.forgot) spend[b.party] = (spend[b.party] || 0) + b.n * TICKET_PRICE;
+  const forgot = sum(x.buyers.filter((b) => b.party && b.forgot).map((b) => b.n * TICKET_PRICE));
   const fresh = Object.fromEntries(Object.entries(x.fresh || {}).filter(([, v]) => +v > 0).map(([k, v]) => [k, roundAmt(v)]));
   const poolUse = allocatePool(x.holders || {}, x.poolUsed || 0, spend);
   const net = {};
@@ -3800,7 +3862,8 @@ function buyLedger(x) {
   const cost = (x.groups || 0) * TICKET_PRICE, spent = sum(Object.values(spend));
   const moneyIn = sum(Object.values(fresh)) + roundAmt(x.poolUsed);
   const warnings = [];
-  if (spent < cost) warnings.push({ k: 'unbought', amount: cost - spent });
+  if (forgot) warnings.push({ k: 'forgot', amount: forgot });
+  if (spent + forgot < cost) warnings.push({ k: 'unbought', amount: cost - spent - forgot });
   if (moneyIn !== spent && spent) warnings.push({ k: moneyIn > spent ? 'over' : 'short', amount: Math.abs(moneyIn - spent), moneyIn, spent });
   if (poolUse['?']) warnings.push({ k: 'pool-unknown', amount: poolUse['?'] });
   return { spend, fresh, poolUse, net, open: settle(net), cost, spent, moneyIn, warnings };
@@ -3830,11 +3893,19 @@ function computeMoney() {
     const doneBuy = done.filter((t) => t.kind === 'buy').map((t) => ({ ...t, from: t.from_inv, to: t.to_inv, amount: +t.amount }));
     const groups = plan?.groups || 0;
     const buyers = normBuyers(plan?.buyers, groups).map((b) => ({ ...b, n: b.to - b.from + 1, party: b.by ? partyOfMember(b.by) : null }));
+    // pool money handed over (↔) this draw moves between keepers first
+    for (const t of done.filter((x) => x.kind === 'pool')) {
+      holders[t.from_inv] = (holders[t.from_inv] || 0) - +t.amount;
+      holders[t.to_inv] = (holders[t.to_inv] || 0) + +t.amount;
+    }
     const before = { ...holders };
     const L = buyLedger({ groups, buyers, fresh: week?.investments, poolUsed: +week?.pool_used || 0, holders: before, done: doneBuy });
     const item = { r, date, week, plan, groups, buyers, holdersBefore: before, buy: L, doneBuy };
     if (!buyers.some((b) => b.by)) L.warnings.unshift({ k: 'no-buyers' });
     if (!week) L.warnings.unshift({ k: 'no-week' });
+    // the buyers are set once every transfer of the draw is done (until someone 🙈 forgot to buy)
+    item.ready = !L.warnings.some((w) => w.k === 'no-week' || w.k === 'no-buyers');
+    item.locked = item.ready && !L.open.length && doneBuy.length > 0 && !buyers.some((b) => b.forgot);
     // the pool after this draw: what was used leaves its holders, a prize added to the pool stays with its buyers
     for (const [k, v] of Object.entries(L.poolUse)) if (k !== '?') holders[k] = (holders[k] || 0) - v;
     const prize = +week?.prize_won || 0;
@@ -3849,14 +3920,15 @@ function computeMoney() {
       }
     }
     for (const k of Object.keys(holders)) if (!holders[k]) delete holders[k];
-    if (week || plan || done.length) rounds.push(item);
+    if (week || plan || done.some((t) => t.kind !== 'pool')) rounds.push(item);
   }
   // compare with the pool in the books (now, after the coming draw's tickets): what nobody is known to keep is "unknown"
   const nowInBooks = roundAmt(replay(S.weeks.filter((w) => w.result_date <= drawDate(next))).pool.total);
   const known = sum(Object.entries(holders).filter(([k]) => k !== '?').map(([, v]) => Math.max(0, v)));
   // the editor sets who keeps it after the last finished draw (before the coming draw's tickets)
   const inBooks = roundAmt(poolBefore(drawDate(next)).total);
-  const pool = { holders, nowInBooks, inBooks, unknown: nowInBooks - known, asOf: start, set: !!M.snap,
+  const handovers = M.transfers.filter((t) => t.kind === 'pool');
+  const pool = { holders, nowInBooks, inBooks, unknown: nowInBooks - known, asOf: start, set: !!M.snap, handovers,
     before: Object.fromEntries(Object.entries(beforeNext).filter(([k, v]) => k !== '?' && v > 0)) };
   // my part: transfers I still have to make, and money still coming to me
   const me = invOfMember(S.me?.id)?.id || `m:${S.me?.id}`;
@@ -3902,11 +3974,13 @@ const loadMoneySoon = () => { clearTimeout(_moneyT); _moneyT = setTimeout(() => 
 /** Recompute after any change (weeks, tickets, investors, plans, transfers): tab badge, 🔔 and the tab. */
 function renderMoneyAll() {
   S.moneyView = S.money.loaded && !S.money.missing && S.me ? computeMoney() : null;
+  if (S.moneyView) syncGroups(S.moneyView.next);
   const n = S.moneyView?.toSend.length || 0;
   $('money-badge').hidden = !n;
   $('money-badge').textContent = String(n);
   renderBell();
   if (S.tab === 'money') renderMoney();
+  if (S.tab === 'picks' && (_picksSec === 'buy' || _picksSec === 'board')) { if (_picksSec === 'buy') renderBuy(); else renderGroupsInfo(); }
 }
 
 const TRANSFER_SALT = (round, kind, t) => `${round}-${kind}-${t.from}-${t.to}`;
@@ -3938,9 +4012,9 @@ function transferRow(t, round, kind, V) {
     </div>
   </div>`;
 }
-function doneRow(t) {
+function doneRow(t, label = '') {
   const canUndo = t.done_by === S.me.id || isAdmin();
-  return `<div class="mt-row done"><div class="mt-what"><strong>${esc(partyName(t.from))}</strong> → <strong>${esc(partyName(t.to))}</strong> <span class="mt-amt">${esc(money(t.amount))}</span>
+  return `<div class="mt-row done"><div class="mt-what">${label}<strong>${esc(partyName(t.from))}</strong> → <strong>${esc(partyName(t.to))}</strong> <span class="mt-amt">${esc(money(t.amount))}</span>
     <span class="badge qr-win">✓ done</span> <span class="fhelp">marked by ${esc(userName(t.done_by))} · ${esc(ago(t.done_at))}</span></div>
     ${canUndo ? `<div class="mt-acts"><button type="button" class="btn btn-ghost btn-sm" data-act="money-undo" data-id="${t.id}">Undo</button></div>` : ''}</div>`;
 }
@@ -3953,15 +4027,22 @@ const WARN = {
   over: (it, w) => `Money in (${money(w.moneyIn)}) is more than the buyers spend (${money(w.spent)}): ${money(w.amount)} stays with whoever put it in.`,
   short: (it, w) => `The buyers spend ${money(w.spent)} but only ${money(w.moneyIn)} comes in (fresh money + pool): ${money(w.amount)} is missing. Fix the week entry or the number of groups.`,
   'pool-unknown': (it, w) => `${money(w.amount)} of the pool money has no known keeper: set who keeps the pool below.`,
+  forgot: (it, w) => `🙈 ${money(w.amount)} of tickets were not bought (someone forgot). Before the draw: give those groups to another buyer in 🛒 Buy.
+    After it: change the week entry to what was really played. 💰 Money then works out the refunds.
+    <button type="button" class="btn btn-secondary btn-sm" data-act="round-week" data-round="${it.r}">✏️ Edit the week entry</button>`,
 };
 
 function roundCard(it, V) {
   const L = it.buy, openN = L.open.length + (it.prize?.open.length || 0);
   const ready = !L.warnings.some((w) => w.k === 'no-week' || w.k === 'no-buyers');
   const status = !ready ? '<span class="badge bg-gray">⏳ not decided yet</span>'
-    : openN ? `<span class="badge bg-red">${openN} transfer${openN === 1 ? '' : 's'} to make</span>` : '<span class="badge qr-win">✓ all settled</span>';
+    : openN ? `<span class="badge bg-red">${openN} transfer${openN === 1 ? '' : 's'} to make</span>`
+      : it.locked ? '<span class="badge qr-win">🔒 all settled · buyers set</span>' : '<span class="badge qr-win">✓ all settled</span>';
   const unlinked = [...new Set(Object.keys({ ...L.spend, ...L.net }).filter((k) => String(k).startsWith('m:')))];
-  const buyers = it.buyers.filter((b) => b.by).map((b) => `${esc(memberName(b.by))} <span class="fhelp">(${b.from === b.to ? `group ${b.from}` : `groups ${b.from}–${b.to}`}, ${esc(money(b.n * TICKET_PRICE))})</span>`).join(' · ');
+  const canForget = it.locked || it.buyers.some((b) => b.forgot) || resultsOut(it.date);
+  const buyers = it.buyers.map((b, i) => (!b.by ? '' : `<span class="mr-buyer ${b.forgot ? 'forgot' : ''}">${esc(memberName(b.by))} <span class="fhelp">(${b.from === b.to ? `group ${b.from}` : `groups ${b.from}–${b.to}`}, ${esc(money(b.n * TICKET_PRICE))})</span>
+    ${b.forgot ? '<span class="badge bg-red">🙈 forgot</span>' : ''}
+    ${canForget ? `<button type="button" class="btn btn-ghost btn-sm" data-act="buy-forgot" data-round="${it.r}" data-i="${i}" data-undo="${b.forgot ? 1 : ''}">${b.forgot ? '↩ They bought after all' : '🙈 Forgot to buy'}</button>` : ''}</span>`)).filter(Boolean).join('');
   const fresh = Object.entries(L.fresh).map(([k, v]) => `${esc(partyName(k))} ${esc(money(v))}`).join(' · ');
   const pool = Object.entries(L.poolUse).map(([k, v]) => `${esc(partyName(k))} ${esc(money(v))}`).join(' · ');
   const donePrize = it.prize?.done || [];
@@ -3969,15 +4050,15 @@ function roundCard(it, V) {
     <div class="card-hd"><div class="card-title">🛒 Draw #${it.r} <span class="fhelp">${esc(fmtD(it.date))}</span></div>${status}</div>
     <div class="mr-facts">
       <div><span>Tickets</span><strong>${it.groups} group${it.groups === 1 ? '' : 's'} · ${esc(money(L.cost))}</strong></div>
-      <div><span>Buyers</span><div>${buyers || '—'}</div></div>
+      <div><span>Buyers</span><div class="mr-buyers">${buyers || '—'}</div></div>
       <div><span>Fresh money</span><div>${fresh || '—'}</div></div>
       <div><span>From the pool</span><div>${pool ? `${esc(money(sum(Object.values(L.poolUse))))}: ${pool}` : '—'}</div></div>
     </div>
     ${L.warnings.map((w) => `<div class="money-warn">⚠️ ${WARN[w.k](it, w)}</div>`).join('')}
     ${unlinked.map((k) => `<div class="money-warn">⚠️ ${esc(partyName(k))} buys but is not linked to an investor: 👥 Investors → ✏️ → App account.</div>`).join('')}
-    ${ready ? `<div class="mt-list">${L.open.map((t) => transferRow(t, it.r, 'buy', V)).join('')}
+    ${ready || L.open.length || it.doneBuy.length ? `<div class="mt-list">${L.open.map((t) => transferRow(t, it.r, 'buy', V)).join('')}
       ${it.doneBuy.map(doneRow).join('')}
-      ${!L.open.length && !it.doneBuy.length && L.spent ? '<p class="fhelp">✓ Nothing to transfer: every buyer pays with their own money.</p>' : ''}</div>` : ''}
+      ${ready && !L.open.length && !it.doneBuy.length && L.spent ? '<p class="fhelp">✓ Nothing to transfer: every buyer pays with their own money.</p>' : ''}</div>` : ''}
     ${it.prize ? `<div class="mr-prize">
       <div class="mr-sub">🎉 Shared prize ${esc(money(it.prize.amount))} · kept by ${Object.entries(it.prize.keepers).map(([k, v]) => `${esc(partyName(k))} ${esc(money(v))}`).join(', ')}</div>
       <div class="fhelp">Shares: ${Object.entries(it.prize.shares).map(([k, v]) => `${esc(partyName(k))} ${esc(money(v))}`).join(' · ')}</div>
@@ -3997,6 +4078,8 @@ function poolCard(V) {
     ${Math.abs(P.unknown) >= 1 && (P.set || P.nowInBooks) ? `<div class="money-warn">⚠️ ${P.unknown > 0 ? `${esc(money(P.unknown))} of the pool has no known keeper` : `the keepers hold ${esc(money(-P.unknown))} more than the pool`}: correct it below.</div>` : ''}
     <p class="fhelp">Pool money used for tickets comes from its keepers (first from those who buy that week). A prize added to the pool stays with whoever bought the winning tickets.
       ${P.set ? `Set as of draw #${P.asOf}.` : ''}</p>
+    ${P.handovers.length ? `<div class="mt-list">${P.handovers.map((t) => doneRow({ ...t, from: t.from_inv, to: t.to_inv }, '<span class="fhelp">↔ pool money · </span>')).join('')}</div>` : ''}
+    ${_poolGive ? poolGiveForm(V) : ''}
     ${_poolEdit ? `<div class="pool-edit">
       <p class="fhelp">Who keeps the pool money now, after draw #${last}? The amounts must add up to ${esc(money(P.inBooks))}.</p>
       ${editable.map((i) => `<label class="pe-row"><span>${esc(i.nickname)}</span><input class="finp" type="text" inputmode="numeric" data-amount data-on-input="pool-amt" data-pool-inv="${esc(i.id)}" value="${P.before[i.id] > 0 ? fmtAmt(P.before[i.id]) : ''}" placeholder="0"></label>`).join('')}
@@ -4004,8 +4087,64 @@ function poolCard(V) {
         <button type="button" class="btn btn-ghost btn-sm" data-act="pool-edit">Cancel</button>
         <button type="button" class="btn btn-primary btn-sm" data-act="pool-save">Save</button></div>
       <p class="fhelp">Saving starts the money tracking after draw #${last}: transfers of earlier draws are no longer listed.</p>
-    </div>` : `<button type="button" class="btn btn-secondary btn-sm" data-act="pool-edit">✏️ ${P.set ? 'Correct who keeps it' : 'Set who keeps it'}</button>`}
+    </div>` : `<div class="btn-row"><button type="button" class="btn btn-secondary btn-sm" data-act="pool-edit">✏️ ${P.set ? 'Correct who keeps it' : 'Set who keeps it'}</button>
+      ${!_poolGive && Object.values(P.holders).some((v) => v > 0) ? '<button type="button" class="btn btn-secondary btn-sm" data-act="pool-give">↔ Hand over pool money</button>' : ''}</div>`}
   </div>`;
+}
+
+// ↔ A keeper hands pool money to someone else (e.g. the one who buys next): recorded as done right away.
+let _poolGive = null;
+function poolGiveForm(V) {
+  const G = _poolGive, P = V.pool;
+  const keepers = Object.entries(P.holders).filter(([k, v]) => v > 0 && S.investors.some((i) => i.id === k));
+  const to = S.investors.filter((i) => i.id !== G.from && (invState(i) === 'active' || i.id === G.to));
+  const have = P.holders[G.from] || 0;
+  const t = { from: G.from, to: G.to, amount: G.amount };
+  return `<div class="pool-edit">
+    <p class="fhelp">Pool money handed from one keeper to another (e.g. to whoever buys next). Send it, then tap ✓ Handed over.</p>
+    <label class="pe-row"><span>From</span><select class="fsel" data-on-input="pool-give-field" data-k="from">${keepers.map(([k, v]) => `<option value="${esc(k)}" ${k === G.from ? 'selected' : ''}>${esc(partyName(k))} (${esc(money(v))})</option>`).join('')}</select></label>
+    <label class="pe-row"><span>To</span><select class="fsel" data-on-input="pool-give-field" data-k="to">${to.map((i) => `<option value="${esc(i.id)}" ${i.id === G.to ? 'selected' : ''}>${esc(i.nickname)}</option>`).join('')}</select></label>
+    <label class="pe-row"><span>Amount</span><input class="finp" type="text" inputmode="numeric" data-amount data-on-input="pool-give-field" data-k="amount" value="${G.amount ? fmtAmt(G.amount) : ''}"></label>
+    ${G.amount > have ? `<p class="fhelp warn-txt">⚠️ ${esc(partyName(G.from))} keeps only ${esc(money(have))}.</p>` : ''}
+    <div class="pe-foot">${G.to && G.amount > 0 && G.from === V.me ? payControl(t, V.next, 'pool') : '<span></span>'}
+      <button type="button" class="btn btn-ghost btn-sm" data-act="pool-give">Cancel</button>
+      <button type="button" class="btn btn-primary btn-sm" data-act="pool-give-done" ${G.to && G.amount > 0 && G.amount <= have ? '' : 'disabled'}>✓ Handed over</button></div>
+  </div>`;
+}
+function openPoolGive() {
+  const V = S.moneyView, keepers = Object.entries(V.pool.holders).filter(([k, v]) => v > 0 && S.investors.some((i) => i.id === k)).sort((a, b) => b[1] - a[1]);
+  if (_poolGive) { _poolGive = null; return renderMoney(); }
+  const from = keepers.find(([k]) => k === V.me)?.[0] || keepers[0]?.[0];
+  if (!from) return;
+  _poolGive = { from, to: S.investors.find((i) => i.id !== from && invState(i) === 'active')?.id || '', amount: V.pool.holders[from] };
+  renderMoney();
+}
+async function savePoolGive() {
+  const G = _poolGive, V = S.moneyView;
+  if (!G?.to || !(G.amount > 0)) return;
+  if (!confirm(`${partyName(G.from)} handed ${partyName(G.to)} ${money(G.amount)} of pool money?`)) return;
+  const { error } = await S.sb.from('money_transfers').insert({ round: V.next, kind: 'pool', from_inv: G.from, to_inv: G.to, amount: G.amount });
+  if (error) return fail(/row-level security/.test(error.message) ? new Error('Only the two of them (or an admin) can record this.') : error);
+  _poolGive = null;
+  toast('↔ Pool money handed over.', 'ok');
+  loadMoney();
+}
+
+/** 🙈 A buyer did not buy (or ↩ did after all): their groups count as not bought; the draw opens again. */
+async function setForgot(round, i, on) {
+  const plan = round === S.board.round ? { groups: S.board.groups, buyers: S.board.buyers } : S.money.plans[round];
+  if (!plan) return;
+  const list = normBuyers(plan.buyers, plan.groups), b = list[i];
+  if (!b?.by) return;
+  if (on && !confirm(`${memberName(b.by)} forgot to buy ${b.from === b.to ? `group ${b.from}` : `groups ${b.from}–${b.to}`} (${money((b.to - b.from + 1) * TICKET_PRICE)}) for draw #${round}?`)) return;
+  if (on) b.forgot = true; else delete b.forgot;
+  const { error } = await S.sb.from('pick_plans').update({ buyers: list }).eq('round', round);
+  if (error) return fail(error);
+  if (round === S.board.round) S.board.buyers = list;
+  if (S.money.plans[round]) S.money.plans[round].buyers = list;
+  toast(on ? '🙈 Marked: the draw is open again.' : '↩ Marked as bought.', 'ok');
+  renderMoneyAll();
+  if (S.tab === 'picks') renderPicks();
 }
 
 function renderMoney() {
@@ -4592,6 +4731,8 @@ async function devicePush() {
 
 async function renderPush() {
   if (!$('push-modes')) return;
+  $('push-paused').checked = !!S.settings.push_paused;
+  $('push-paused-note').hidden = !S.settings.push_paused;
   const radios = document.querySelectorAll('#push-modes input, #push-extra input');
   const status = (t, warn = false) => { $('push-status').textContent = t; $('push-status').classList.toggle('warn', warn); };
   if (!pushSupported()) {
@@ -4613,6 +4754,15 @@ async function renderPush() {
   if (!row) return status('Off on this device. Choose when you want to hear from us.');
   const extra = [row.remind && 'before the draw', row.tickets && 'new ticket photos', row.chat && 'chat messages', row.mention !== false && 'mentions'].filter(Boolean);
   status(`On: ${PUSH_HELP[row.mode]}${extra.length ? ` Also: ${extra.join(', ')}.` : ''}`);
+}
+
+/** ⏸ Admin: pause every phone notification (the function sends nothing while it is on). */
+async function setPushPaused(on) {
+  const { error } = await S.sb.from('settings').update({ push_paused: on }).eq('id', 1);
+  if (error) { $('push-paused').checked = !on; return fail(/push_paused/.test(error.message) ? new Error('The database needs an update: run supabase/schema.sql again.') : error); }
+  S.settings.push_paused = on;
+  toast(on ? '⏸ Phone notifications are paused for everyone.' : '▶️ Phone notifications are on again.', 'ok');
+  renderPush();
 }
 
 async function pushOff(quiet = false) {
@@ -5058,7 +5208,9 @@ const ACTIONS = {
   'picks-backtest': () => runBacktest(),
   'picks-more': () => { _picksCount += 10; renderPicks(); },
   'pick-k': (el) => setPickK(+el.dataset.k),
-  'board-x': (el) => setBoardGroups(el.dataset.add ? (S.board.groups || boardDefault()) + +el.dataset.add : +el.dataset.set),
+  'board-week': () => openRoundWeek(S.board.round),
+  'board-clear-all': () => clearBoard(),
+  'round-week': (el) => openRoundWeek(+el.dataset.round),
   'board-num': (el) => toggleBoardNum(+el.dataset.g, +el.dataset.n),
   'board-engine': (el) => engineFill(+el.dataset.g, el.dataset.mode),
   'board-clear': (el) => clearMine(+el.dataset.g),
@@ -5080,6 +5232,9 @@ const ACTIONS = {
   'money-remind': (el) => remindTransfer(el),
   'money-link': (el) => linkInvestor(el.dataset.inv, el.dataset.member),
   'money-ask-link': (el) => { goTab('chat'); chatSend(`<@${el.dataset.member}> please add your KakaoPay link (👥 Investors → ✏️ on your card → 💛 Link to send them money), so we can send you money from 💰 Money 🙏`); },
+  'pool-give': () => openPoolGive(),
+  'pool-give-done': () => savePoolGive(),
+  'buy-forgot': (el) => setForgot(+el.dataset.round, +el.dataset.i, !el.dataset.undo),
   'pool-edit': () => { _poolEdit = !_poolEdit; document.querySelectorAll('[data-pool-inv]').forEach((e) => e.remove()); renderMoney(); },
   'pool-save': () => savePoolHolders(),
   'chat-send': () => chatSend(),
@@ -5168,6 +5323,12 @@ const ACTIONS = {
 const INPUTS = {
   'im-pay': () => payHint(),
   'pool-amt': () => poolEditSum(),
+  'pool-give-field': (el, e) => {
+    if (!_poolGive) return;
+    _poolGive[el.dataset.k] = el.dataset.k === 'amount' ? amt(el.value) : el.value;
+    if (e.type === 'change' || el.dataset.k !== 'amount') renderMoney();
+  },
+  'push-paused': (el, e) => { if (e.type === 'change') setPushPaused(el.checked); },
   'chat-input': (el, e) => { if (e.type === 'input') { chatGrow(); chatMentionCheck(); } },
   'chat-q': () => { clearTimeout(_chatQT); _chatQT = setTimeout(chatSearch, 300); },
   'wm-preview': () => previewWeek(),
@@ -5196,7 +5357,6 @@ const INPUTS = {
   // 'chk-file': (el, e) => { if (e.type === 'change') { chkFile(el.files[0]); el.value = ''; } },
   // 'chk-theirs': (el, e) => { if (e.type === 'input' && el.value.trim()) chkCompare(); },
   // 'chk-games': (el, e) => { if (e.type === 'change' && $('chk-theirs').value.trim()) chkCompare(); },
-  'board-x': (el, e) => { if (e.type === 'change' && el.value) setBoardGroups(parseInt(el.value, 10) || 1); },
   'up-round': () => { const n = parseInt($('up-round').value, 10); if (n >= 1) $('up-date').value = drawDate(n); upDateInfo(); },
   'money-hint': (el) => moneyHint(el.id, el.dataset.hint),
   'cur-select': (el) => { _curDraft.currency = el.value; renderCurrencyPicker(); moneyHint('cfg-threshold', 'cfg-threshold-hint'); },

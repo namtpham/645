@@ -51,6 +51,8 @@ create table if not exists public.settings (
   updated_at        timestamptz not null default now()
 );
 insert into public.settings (id) values (1) on conflict (id) do nothing;
+-- ⏸ An admin can pause every phone notification (e.g. while testing). Paused at first.
+alter table public.settings add column if not exists push_paused boolean not null default true;
 
 create or replace function public.valid_amounts(j jsonb)
 returns boolean language sql immutable as $$
@@ -266,7 +268,7 @@ create table if not exists public.pool_holders (
 create table if not exists public.money_transfers (
   id       bigint generated always as identity primary key,
   round    int not null,
-  kind     text not null check (kind in ('buy', 'prize')),   -- buy: tickets for this draw · prize: a shared prize paid out
+  kind     text not null,   -- buy: tickets for this draw · prize: a shared prize paid out · pool: pool money handed over
   from_inv text not null references public.investors (id) on delete cascade,
   to_inv   text not null references public.investors (id) on delete cascade,
   amount   numeric not null check (amount > 0),
@@ -275,6 +277,8 @@ create table if not exists public.money_transfers (
   check (from_inv <> to_inv)
 );
 create index if not exists money_transfers_round on public.money_transfers (round);
+alter table public.money_transfers drop constraint if exists money_transfers_kind_check;
+alter table public.money_transfers add constraint money_transfers_kind_check check (kind in ('buy', 'prize', 'pool'));
 
 -- 🔔 A member's own notifications (the bell): someone mentioned them in chat, or the bot announced a win.
 -- Made by the database itself (chat_notify below), so they arrive even when no app is open.
@@ -567,6 +571,18 @@ begin
   return null;
 end $$;
 
+-- 🧹 Clear every number picked for a draw (✍️ Picks → Clear all; the app asks a small sum first).
+-- Members may otherwise only take back their own numbers, so this goes through here.
+create or replace function public.clear_group_picks(p_round int)
+returns int language plpgsql security definer set search_path = public as $$
+declare n int;
+begin
+  if not is_member() then raise exception 'Members only'; end if;
+  delete from group_picks where round = p_round;
+  get diagnostics n = row_count;
+  return n;
+end $$;
+
 -- Ticket photos are deleted only through here, by an admin, with a reason that goes into the audit log.
 create or replace function public.delete_ticket(p_ticket uuid, p_reason text)
 returns void language plpgsql security definer set search_path = public as $$
@@ -760,6 +776,7 @@ grant execute on function public.is_member(), public.is_admin(), public.normaliz
   to authenticated;
 grant execute on function public.move_ticket_to_qr_draw(uuid) to authenticated;
 grant execute on function public.delete_ticket(uuid, text) to authenticated;
+grant execute on function public.clear_group_picks(int) to authenticated;
 grant execute on function public.check_invite(text), public.username_available(text, text),
                           public.ping()
   to anon, authenticated;

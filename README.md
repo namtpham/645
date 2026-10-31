@@ -61,6 +61,13 @@ with an invitation key from the admin.
     **Who keeps the pool** is set by hand once (🏦 card → Set who keeps it, as of the last
     finished draw; amounts must add up to the pool); after that the app follows the weeks, and it
     warns when the books and the keepers disagree.
+  - **Buyers set:** once every transfer of a draw is done, its buyers are set (🛒 Buy is read-only,
+    the numbers can't be cleared). **🙈 Forgot to buy** (in 🛒 Buy or on the draw in 💰 Money)
+    marks a buyer's groups as not bought and opens the draw again: before the draw give them to
+    someone else; after it, change the week entry to what was really played. The refunds are
+    worked out from that (**↩ They bought after all** takes it back).
+  - **↔ Hand over pool money:** a keeper hands pool money to someone else (e.g. whoever buys
+    next); it is recorded as done and moves the money between keepers.
   - **Done:** after sending, the sender (or the receiver, or an admin) taps **✓ Done**. Done
     transfers are payments; what is still owed is worked out again from them, so changing the
     plan later (more groups, another buyer) stays right. **Undo** takes a mark back. Everything
@@ -117,7 +124,10 @@ with an invitation key from the admin.
   draw until the results, a big red YouTube banner shows under the bar on every tab and opens
   동행복권's live stream.
 - **Our numbers** (✍️ Picks): we pick the coming draw's numbers together.
-  - Choose how many groups of 6 we play (quick buttons 5–30, ±1).
+  - How many groups of 6 we play comes from the draw's **week entry** (fresh money + pool used,
+    ₩1,000 a group); it is read-only here, with **✏️ Edit the week entry** next to it. 🛒 Buy
+    follows the same number, and the week entry is where 💰 Money starts.
+  - **🧹 Clear all numbers** removes every number of the draw, after a small sum (e.g. 7 × 8 = ?).
   - Each group shows 45 round buttons: gray = free, coloured = taken. Every member has their
     own colour. The buttons are shuffled by default (so nobody picks a row or diagonal of a
     1–45 grid, which many players do); **🔀 Random / 🔢 Sorted** switches each group, keeps the
@@ -221,6 +231,8 @@ with an invitation key from the admin.
   Edge, Firefox. iPhone/iPad (iOS 16.4+): add 645 to the Home Screen first and turn it on from
   there. Signing out turns notifications off on that device. No keys to set up: the function makes
   its own key pair on first use and keeps the private half in the `push_keys` table.
+  **⏸ Pause** (admin, Settings → 🔔 Notifications): no phone notification at all is sent while it
+  is on (it is on after the update, for testing); chat, the bot and the 🔔 bell keep working.
   Two more, each on or off per device: **📺 Before the draw** (Saturday about 20:30 KST: "the
   draw starts in x minutes", time to watch it live; sent by the scheduled workflow at 20:17 and
   20:27 KST and by any member's open app from 20:10, each device once) and **🎟️ New ticket

@@ -1195,3 +1195,15 @@ table.bt td, table.bt th { padding: 8px 10px; }
   .mt-acts { width: 100%; }
   .pe-row { grid-template-columns: 1fr 130px; }
 }
+
+/* ✍️ Picks: groups come from the week entry */
+.board-groups-info { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
+.bgi-main { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.bgi-n { font: 700 28px var(--mono); color: var(--gold); min-width: 40px; text-align: center; }
+.bgi-main > span:nth-child(2) { display: flex; flex-direction: column; margin-right: auto; }
+.bgi-main small { color: var(--muted); font-size: 12px; }
+.buy-locked { padding: 8px 12px; border-radius: 10px; background: var(--gold-bg); color: var(--gold); font-size: 13px; margin-bottom: 10px; }
+.buyer-row.locked .buyer-head { flex-wrap: wrap; }
+.mr-buyers { display: flex; flex-direction: column; gap: 4px; }
+.mr-buyer.forgot > :first-child { text-decoration: line-through; }
+.mr-buyer .btn { padding: 2px 8px; font-size: 11px; }
