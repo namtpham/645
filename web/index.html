@@ -282,6 +282,7 @@
           <div class="card-title">🎯 Ranked suggestions</div>
           <button class="btn btn-ghost btn-sm" data-act="picks-more">Show 10 more</button>
         </div>
+        <div class="picks-asof" id="picks-asof"></div>
         <div class="pick-controls">
           <div class="fgrp">
             <span class="flbl">Numbers to suggest</span>
@@ -784,6 +785,21 @@
 </div>
 
 <!-- ═══ INVESTOR MODAL ════════════════════════════════════════════════════ -->
+<!-- a small question with a number answer (e.g. before 🧹 Clear all): a number pad on phones -->
+<div class="overlay" id="ask-overlay">
+  <div class="modal modal-sm">
+    <div class="modal-hd"><div class="modal-title">Just checking</div><button class="modal-close" data-act="ask-cancel">✕</button></div>
+    <div class="modal-body">
+      <p id="ask-text"></p>
+      <input type="text" class="finp ask-input" id="ask-input" inputmode="numeric" pattern="[0-9]*" autocomplete="off" enterkeyhint="done" aria-labelledby="ask-text">
+    </div>
+    <div class="modal-ft">
+      <button class="btn btn-secondary" data-act="ask-cancel">Cancel</button>
+      <button class="btn btn-primary" data-act="ask-ok">OK</button>
+    </div>
+  </div>
+</div>
+
 <div class="overlay" id="inv-overlay">
   <div class="modal modal-sm">
     <div class="modal-hd">

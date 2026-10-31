@@ -1174,6 +1174,7 @@ async function deleteWeek(id) {
   if (error) return fail(error);
   toast('Week deleted.', 'ok');
   await loadAll();
+  if (drawNo(w.result_date) >= S.board.round) await syncGroups(drawNo(w.result_date));
 }
 
 // ─── Ticket QR codes & automatic results ─────────────────────────────────────
@@ -1834,6 +1835,22 @@ function renderPicks() {
   else renderSuggestions(ready);
 }
 
+/** Which draws the suggestions come from; the latest finished one is fetched if it's missing. */
+let _latestAsked = 0;
+function renderPicksAsOf(hist, latestOut) {
+  const last = hist.at(-1), el = $('picks-asof');
+  if (!el || !last) return;
+  const missing = last.round < latestOut, out = resultsOut(drawDate(latestOut));
+  if (missing && out && _latestAsked !== latestOut) {
+    _latestAsked = latestOut;   // results are out but not here yet: ask the result checker once
+    checkResults().then(() => loadAll()).then(() => S.tab === 'picks' && renderPicks()).catch(console.error);
+  }
+  el.innerHTML = `<p class="fhelp ${missing ? 'warn-txt' : ''}">${missing
+    ? `⚠️ Made from the draws up to #${last.round} (${esc(fmtD(last.draw_date || drawDate(last.round)))}): draw #${latestOut} is not in yet${out ? '' : ` (its results come at ${RESULTS_TIME} KST)`}.
+       <button type="button" class="btn btn-ghost btn-sm" data-act="picks-refresh">↻ Get the latest draw</button>`
+    : `✓ Made from all ${hist.length.toLocaleString(LOCALE)} draws up to #${last.round} (${esc(fmtD(last.draw_date || drawDate(last.round)))}), the latest one.`}</p>`;
+}
+
 function renderSuggestions(ready) {
   const target = drawNo(currentDraw()), latestOut = drawNo(addDays(currentDraw(), -7));
   const hist = pickHistory().filter((d) => d.round < target);
@@ -1845,6 +1862,7 @@ function renderSuggestions(ready) {
     return;
   }
   renderPickControls();
+  renderPicksAsOf(hist, latestOut);
   const own = _pickOwn, k = pickK(), partial = k < 6;
   const key = `${target}-${hist.length}-${_picksCount}-${k}-${own.join(',')}`;
   if (key !== _picksKey) {
@@ -2195,8 +2213,9 @@ const buyersLocked = (round) => !!roundMoney(round)?.locked;
 /** Keep the plan's group count in step with the week entry (not once the buyers are set). */
 let _groupsSynced = '';
 async function syncGroups(round) {
-  const n = weekGroups(round), cur = round === S.board.round ? S.board.groups : S.money.plans[round]?.groups || 0;
-  if (n == null || n === cur || buyersLocked(round) || S.board.missing) return;
+  const n = weekGroups(round) ?? 0;   // no week entry (or it was deleted): no groups
+  const cur = round === S.board.round ? S.board.groups : S.money.plans[round]?.groups || 0;
+  if (n === (cur || 0) || buyersLocked(round) || S.board.missing) return;
   const key = `${round}:${n}`;
   if (_groupsSynced === key) return;
   _groupsSynced = key;
@@ -2225,13 +2244,33 @@ function openRoundWeek(round) {
   openWeekModal(w?.id || null, drawDate(round));
 }
 
+/** A question with a number answer in a small box (a number pad on phones); null when cancelled. */
+let _ask = null;
+function askNumber(text) {
+  if (_ask) _ask(null);
+  return new Promise((resolve) => {
+    _ask = resolve;
+    $('ask-text').textContent = text;
+    $('ask-input').value = '';
+    $('ask-overlay').classList.add('open');
+    setTimeout(() => $('ask-input').focus(), 60);
+  });
+}
+function answerAsk(ok) {
+  const done = _ask, v = $('ask-input').value.trim();
+  _ask = null;
+  $('ask-overlay').classList.remove('open');
+  if (done) done(ok ? v : null);
+}
+$('ask-input')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); answerAsk(true); } });
+
 /** 🧹 Clear every number of this draw, after a small sum (so it isn't done by accident). */
 async function clearBoard() {
   const B = S.board, n = B.picks.length;
   if (!n) return;
   if (buyersLocked(B.round)) return toast('The buyers are set for this draw: the numbers can no longer be cleared.', 'err');
   const a = 2 + Math.floor(Math.random() * 8), b = 2 + Math.floor(Math.random() * 8), times = Math.random() < 0.5;
-  const answer = prompt(`To clear all ${n} numbers picked for draw #${B.round}, answer: ${a} ${times ? '×' : '+'} ${b} = ?`);
+  const answer = await askNumber(`To clear all ${n} numbers picked for draw #${B.round}, answer: ${a} ${times ? '×' : '+'} ${b} = ?`);
   if (answer == null) return;
   if (parseInt(String(answer).trim(), 10) !== (times ? a * b : a + b)) return toast('That is not the right answer: nothing was cleared.', 'err');
   const { error } = await S.sb.rpc('clear_group_picks', { p_round: B.round });
@@ -4657,15 +4696,23 @@ function notifText(n) {
   return { ico: '🎉', title: `We won in draw #${d.round}!`,
     body: d.estimated ? `${list} · prize amount to follow` : `${money(d.won)}${d.won < d.gross ? ' after tax' : ''} · ${list}` };
 }
+// "Send B ₩5,000" in 🔔 is a to-do from 💰 Money, not a stored notification: marking it read is kept on this device.
+const oweKey = (t) => `${t.round}-${t.kind}-${t.from}-${t.to}-${t.amount}`;
+function oweSeen() { try { return new Set(JSON.parse(localStorage.getItem('645-owe-seen') || '[]')); } catch { return new Set(); } }
+function markOweSeen(keys) {
+  const seen = oweSeen(), now = new Set((S.moneyView?.toSend || []).map(oweKey));
+  keys.forEach((k) => seen.add(k));
+  try { localStorage.setItem('645-owe-seen', JSON.stringify([...seen].filter((k) => now.has(k)))); } catch { /* private mode */ }
+}
 function renderBell() {
-  const owe = S.moneyView?.toSend || [];
-  const unread = S.notifs.filter((n) => !n.read_at).length + owe.length;
+  const owe = S.moneyView?.toSend || [], seen = oweSeen();
+  const unread = S.notifs.filter((n) => !n.read_at).length + owe.filter((t) => !seen.has(oweKey(t))).length;
   $('bell-badge').hidden = !unread;
   $('bell-badge').textContent = unread > 9 ? '9+' : String(unread);
   $('bell').classList.toggle('on', !$('bell-panel').hidden);
   $('bell-read-all').disabled = !unread;
   if ($('bell-panel').hidden) return;
-  const oweHtml = owe.map((t) => `<button type="button" class="bn-item unread" data-act="goto-money">
+  const oweHtml = owe.map((t) => `<button type="button" class="bn-item ${seen.has(oweKey(t)) ? '' : 'unread'}" data-act="goto-money" data-key="${esc(oweKey(t))}">
       <span class="bn-ico">💸</span><span class="bn-main"><div class="bn-title">Send ${esc(partyName(t.to))} ${esc(money(t.amount))}</div>
       <div class="bn-body">Draw #${t.round}${t.kind === 'prize' ? ' (shared prize)' : ''}: send it, then tap ✓ Done in 💰 Money</div></span></button>`).join('');
   $('bell-list').innerHTML = oweHtml + (S.notifs.length ? S.notifs.map((n) => {
@@ -4688,7 +4735,8 @@ async function markNotifs(ids) {
   const at = new Date().toISOString();
   for (const n of S.notifs) if (ids.includes(String(n.id))) n.read_at = at;
   renderBell();
-  await S.sb.from('notifications').update({ read_at: at }).in('id', ids.map((i) => (/^\d+$/.test(i) ? Number(i) : i)));
+  const { error } = await S.sb.from('notifications').update({ read_at: at }).in('id', ids.map((i) => (/^\d+$/.test(i) ? Number(i) : i)));
+  if (error) { fail(error); loadNotifs(); }
 }
 async function openNotif(id) {
   const n = S.notifs.find((x) => String(x.id) === String(id));
@@ -5177,7 +5225,10 @@ function quickSet(input, value) {
   previewWeek();
 }
 
-function closeModal(id) { $(id).classList.remove('open'); }
+function closeModal(id) {
+  if (id === 'ask-overlay') return answerAsk(false);
+  $(id).classList.remove('open');
+}
 
 // ═════════════════════════════════════════════════════════════════════════════
 //  Event wiring (no inline handlers, so the page can use a strict CSP)
@@ -5210,6 +5261,9 @@ const ACTIONS = {
   'pick-k': (el) => setPickK(+el.dataset.k),
   'board-week': () => openRoundWeek(S.board.round),
   'board-clear-all': () => clearBoard(),
+  'ask-ok': () => answerAsk(true),
+  'picks-refresh': (el) => { el.disabled = true; checkResults().then(() => loadAll()).then(() => renderPicks()).catch((e) => { fail(e); el.disabled = false; }); },
+  'ask-cancel': () => answerAsk(false),
   'round-week': (el) => openRoundWeek(+el.dataset.round),
   'board-num': (el) => toggleBoardNum(+el.dataset.g, +el.dataset.n),
   'board-engine': (el) => engineFill(+el.dataset.g, el.dataset.mode),
@@ -5226,7 +5280,7 @@ const ACTIONS = {
   'buy-start': () => startBuying(),
   'goto-buy': () => { goTab('picks'); setPicksSection('buy'); },
   link: () => {},
-  'goto-money': () => { toggleBell(false); goTab('money'); },
+  'goto-money': (el) => { if (el.dataset.key) markOweSeen([el.dataset.key]); toggleBell(false); goTab('money'); },
   'money-done': (el) => markTransfer(el),
   'money-undo': (el) => undoTransfer(el.dataset.id),
   'money-remind': (el) => remindTransfer(el),
@@ -5251,7 +5305,7 @@ const ACTIONS = {
   'chat-jump': (el) => { chatSearchToggle(); chatJump(el.dataset.id); },
   'chat-latest': () => { _chatShown = false; loadChat(); },
   bell: () => toggleBell(),
-  'bell-read-all': () => markNotifs(S.notifs.filter((n) => !n.read_at).map((n) => String(n.id))),
+  'bell-read-all': () => { markOweSeen((S.moneyView?.toSend || []).map(oweKey)); markNotifs(S.notifs.filter((n) => !n.read_at).map((n) => String(n.id))); renderBell(); },
   'notif-open': (el) => openNotif(el.dataset.id),   // a link: the browser opens it (and the card it sits on doesn't open)
   'update-check': () => checkUpdate({ manual: true }),
   'update-now': () => applyUpdate(),

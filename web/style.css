@@ -1207,3 +1207,6 @@ table.bt td, table.bt th { padding: 8px 10px; }
 .mr-buyers { display: flex; flex-direction: column; gap: 4px; }
 .mr-buyer.forgot > :first-child { text-decoration: line-through; }
 .mr-buyer .btn { padding: 2px 8px; font-size: 11px; }
+.ask-input { font: 600 24px var(--mono); text-align: center; letter-spacing: 2px; margin-top: 8px; }
+.picks-asof p { margin: -4px 0 10px; }
+.picks-asof .btn { margin-left: 6px; }

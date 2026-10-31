@@ -72,8 +72,8 @@ with an invitation key from the admin.
     transfers are payments; what is still owed is worked out again from them, so changing the
     plan later (more groups, another buyer) stays right. **Undo** takes a mark back. Everything
     is in 📝 Activity.
-  - **Reminders:** transfers you still have to make show in 🔔, as a count on the 💰 tab and at the
-    top of the tab. **🔔 Remind** sends the sender a phone notification (if they allow 📣 Mentions).
+  - **Reminders:** transfers you still have to make show in 🔔 (Mark all as read clears the bell's
+    count; they stay listed until done), as a count on the 💰 tab and at the top of the tab. **🔔 Remind** sends the sender a phone notification (if they allow 📣 Mentions).
   - **KakaoPay:** **💛 Send B ₩5,000** opens KakaoPay with the amount filled in, when B's link is
     `https://qr.kakaopay.com/` + their 24-digit id: the app adds the amount × 8 in hexadecimal and
     4 more hex characters. Another link opens as it is (type the amount); no link → **Ask B in
@@ -109,7 +109,8 @@ with an invitation key from the admin.
     draws are split into two groups at random, which tells luck from a real pattern.
 - **Picks tab** sections: **✍️ Picks** (our own numbers), **🛒 Buy** (who buys, and QR codes for
   the shop), **🎫 My QR** (below), **🎯 Suggestion** (the engine's ranked sets and
-  backtest), **📊 Stats** (number statistics), **🕰️ Simulation** (a past week) and **📺 Live**.
+  backtest; a line says which draws they come from, and warns with **↻ Get the latest draw** when
+  the last finished draw isn't in yet), **📊 Stats** (number statistics), **🕰️ Simulation** (a past week) and **📺 Live**.
   🎫 My QR is shown and 🕰️ Simulation hidden unless changed in Settings → My Account (saved on the
   account, so it follows the member to every device).
 - **🎫 My QR** (can be hidden in Settings → My Account): tickets of your own, not
@@ -127,7 +128,8 @@ with an invitation key from the admin.
   - How many groups of 6 we play comes from the draw's **week entry** (fresh money + pool used,
     ₩1,000 a group); it is read-only here, with **✏️ Edit the week entry** next to it. 🛒 Buy
     follows the same number, and the week entry is where 💰 Money starts.
-  - **🧹 Clear all numbers** removes every number of the draw, after a small sum (e.g. 7 × 8 = ?).
+  - **🧹 Clear all numbers** removes every number of the draw, after a small sum (e.g. 7 × 8 = ?,
+    answered on a number pad). Deleting the week entry sets the groups back to 0.
   - Each group shows 45 round buttons: gray = free, coloured = taken. Every member has their
     own colour. The buttons are shuffled by default (so nobody picks a row or diagonal of a
     1–45 grid, which many players do); **🔀 Random / 🔢 Sorted** switches each group, keeps the

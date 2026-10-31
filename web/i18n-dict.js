@@ -1117,4 +1117,10 @@ window.I18N_DICT = [
   ['Admin: while testing. Chat, the bot and 🔔 in the app keep working.', '관리자: 테스트하는 동안. 채팅, 봇, 앱 안의 🔔은 그대로 작동합니다.', 'Quản trị: khi đang thử nghiệm. Trò chuyện, bot và 🔔 trong ứng dụng vẫn hoạt động.'],
   ['⏸ Phone notifications are paused for everyone.', '⏸ 모두의 휴대폰 알림을 멈췄습니다.', '⏸ Đã tạm dừng thông báo điện thoại cho mọi người.'],
   ['▶️ Phone notifications are on again.', '▶️ 휴대폰 알림을 다시 켰습니다.', '▶️ Thông báo điện thoại đã bật lại.'],
+  ['Just checking', '확인', 'Kiểm tra'],
+  ['OK', '확인', 'OK'],
+  ['⚠️ Made from the draws up to #{0} ({*}): draw #{#} is not in yet.', '⚠️ 제{0}회({*1})까지의 추첨으로 만들었습니다: 제{*2}회는 아직 없습니다.', '⚠️ Lập từ các kỳ đến #{0} ({*1}): kỳ #{*2} chưa có.'],
+  ['⚠️ Made from the draws up to #{0} ({*}): draw #{#} is not in yet (its results come at {#} KST).', '⚠️ 제{0}회({*1})까지의 추첨으로 만들었습니다: 제{*2}회는 아직 없습니다 (결과는 한국 시간 {*3}).', '⚠️ Lập từ các kỳ đến #{0} ({*1}): kỳ #{*2} chưa có (kết quả lúc {*3} giờ Hàn Quốc).'],
+  ['↻ Get the latest draw', '↻ 최신 회차 가져오기', '↻ Lấy kỳ mới nhất'],
+  ['✓ Made from all {0} draws up to #{1} ({*}), the latest one.', '✓ 최신 회차인 제{1}회({*1})까지 {0}회 추첨을 모두 반영했습니다.', '✓ Lập từ tất cả {0} kỳ đến #{1} ({*1}), kỳ mới nhất.'],
 ];
