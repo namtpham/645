@@ -661,7 +661,8 @@ function startRealtime() {
   _channel = S.sb.channel('db-changes')
     .on('postgres_changes', { event: '*', schema: 'public' },
       (p) => (p?.table === 'live_picks' ? scheduleLiveReload() : BOARD_TABLES.includes(p?.table) ? scheduleBoardReload()
-        : CHAT_TABLES.includes(p?.table) ? chatChange(p) : p?.table === 'chat_reads' ? loadChatReadsSoon() : p?.table === 'notifications' ? loadNotifsSoon()
+        : CHAT_TABLES.includes(p?.table) ? chatChange(p) : p?.table === 'chat_reads' ? loadChatReadsSoon()
+          : p?.table === 'chat_pins' ? loadPins().then(fetchExtra).then(() => renderChat({ noScroll: true })).catch(console.error) : p?.table === 'notifications' ? loadNotifsSoon()
           : ['pool_holders', 'money_transfers'].includes(p?.table) ? loadMoneySoon()
             : p?.table === 'photo_cleanups' ? loadCleanups() : scheduleReload(p?.table)))
     .subscribe((status) => $('syncDot').classList.toggle('off', status !== 'SUBSCRIBED'));
@@ -4380,7 +4381,7 @@ const EMOJI_SETS = [
   ['Hearts', '❤️ 🧡 💛 💚 💙 💜 🖤 🤍 💔 💖 💕 💯'],
   ['Food', '☕ 🍺 🍻 🥂 🍾 🍗 🍕 🍜 🍣 🍚 🍰 🍩'],
 ];
-S.chat = { msgs: [], reacts: [], loaded: false, missing: false, more: false, picker: null, busy: false };
+S.chat = { msgs: [], reacts: [], loaded: false, missing: false, more: false, picker: null, busy: false, replyTo: null, pins: [], extra: {} };
 let _chatReloadT = null;
 
 const chatSeenKey = () => `645-chat-seen-${S.me?.id}`;
@@ -4388,7 +4389,7 @@ function chatSeen() {
   let local = '';
   try { local = localStorage.getItem(chatSeenKey()) || ''; } catch { /* private mode */ }
   const server = S.chatReads[S.me?.id]?.read_at || '';   // read on another device counts too
-  return Date.parse(server || 0) > Date.parse(local || 0) ? server : local;
+  return tms(server) > tms(local) ? server : local;
 }
 
 // ── ✓ sent · ✓✓ delivered · blue ✓✓ read: each member's app notes the newest message it has received and shown
@@ -4402,7 +4403,9 @@ async function loadChatReads() {
   if (S.tab === 'chat') renderChat({ noScroll: true });
 }
 const loadChatReadsSoon = () => { clearTimeout(_readsT); _readsT = setTimeout(() => loadChatReads().catch(console.error), 400); };
-const later = (a, b) => (Date.parse(b || 0) > Date.parse(a || 0) ? b : a);
+/** A database time in ms. Postgres gives 6 decimals (…:05.123456+00:00), which some browsers (iPhone Safari) can't read. */
+const tms = (t) => (t ? Date.parse(String(t).replace(' ', 'T').replace(/(\.\d{3})\d+/, '$1')) || 0 : 0);
+const later = (a, b) => (tms(b) > tms(a) ? b : a);
 /** This app has the chat up to its newest message (delivered); `read`: and it is on screen. */
 function noteChat({ read = false } = {}) {
   if (!S.me || S.chat.gap || !S.chat.msgs.length) return;
@@ -4411,12 +4414,24 @@ function noteChat({ read = false } = {}) {
   if (next.delivered_at === cur.delivered_at && next.read_at === (cur.read_at || null)) return;
   S.chatReads[S.me.id] = { ...cur, ...next };
   clearTimeout(_rcptT);
-  _rcptT = setTimeout(() => S.sb.from('chat_reads').upsert(S.chatReads[S.me.id], { onConflict: 'member' }).then(() => {}, () => {}), 1200);
+  _rcptT = setTimeout(flushChatReads, 500);
 }
+function flushChatReads() {
+  if (!_rcptT || !S.me || !S.chatReads[S.me.id]) return;
+  clearTimeout(_rcptT); _rcptT = null;
+  const r = S.chatReads[S.me.id];
+  S.sb.from('chat_reads').upsert({ member: S.me.id, delivered_at: r.delivered_at, read_at: r.read_at || null }, { onConflict: 'member' }).then(() => {}, () => {});
+}
+// leaving the app right after reading still records it
+addEventListener('pagehide', flushChatReads);
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flushChatReads(); });
 /** Who of the others has my message: [read, delivered but not read, not yet]. */
 function receiptOf(m) {
-  const at = Date.parse(m.created_at), others = S.profiles.filter((p) => p.status === 'active' && p.id !== S.me.id);
-  const has = (p, k) => Date.parse(S.chatReads[p.id]?.[k] || 0) >= at;
+  const at = tms(m.created_at), others = S.profiles.filter((p) => p.status === 'active' && p.id !== S.me.id);
+  // someone who wrote or reacted after this message has read it (also from an app without read marks)
+  const acted = new Set([...S.chat.msgs.filter((x) => tms(x.created_at) > at && x.author).map((x) => x.author),
+    ...S.chat.reacts.filter((r) => tms(r.created_at) >= at || String(r.message_id) === String(m.id)).map((r) => r.member)]);
+  const has = (p, k) => acted.has(p.id) || tms(S.chatReads[p.id]?.[k]) >= at;
   const read = others.filter((p) => has(p, 'read_at')), got = others.filter((p) => !read.includes(p) && has(p, 'delivered_at'));
   return { others, read, got, none: others.filter((p) => !read.includes(p) && !got.includes(p)) };
 }
@@ -4476,6 +4491,8 @@ async function loadChat({ older = false } = {}) {
   const fresh = new Set(ids.map(String));
   S.chat.reacts = [...S.chat.reacts.filter((r) => !fresh.has(String(r.message_id))), ...(rs || [])];
   S.chat.loaded = true;
+  if (!older) await loadPins();
+  await fetchExtra();
   if (!older && !Object.keys(S.chatReads).length) await loadChatReads();
   renderChat({ keepTop: older });
   noteChat();
@@ -4488,6 +4505,7 @@ function chatChange(p) {
   if (p?.table === 'chat_messages' && p.eventType === 'INSERT' && n?.id != null) {
     if (!S.chat.msgs.some((m) => String(m.id) === String(n.id))) S.chat.msgs.push(n);
     renderChat();
+    if (n.reply_to != null && !chatMsg(n.reply_to)) fetchExtra().then(() => renderChat()).catch(console.error);
     return noteChat();
   }
   if (p?.table === 'chat_messages' && p.eventType === 'DELETE' && o?.id != null) {
@@ -4519,6 +4537,79 @@ function encodeMentions(text) {
   const people = S.profiles.filter((p) => p.display_name && p.status === 'active').sort((a, b) => b.display_name.length - a.display_name.length);
   for (const p of people) out = out.replace(new RegExp(`(^|[^\\p{L}\\p{N}_<])@${escRe(p.display_name)}(?![\\p{L}\\p{N}_])`, 'giu'), `$1<@${p.id}>`);
   return out;
+}
+
+/** A message by id: loaded, or fetched for a quote or a pin. */
+const chatMsg = (id) => S.chat.msgs.find((m) => String(m.id) === String(id)) || S.chat.extra[id] || null;
+async function fetchExtra() {
+  const want = [...new Set([...S.chat.msgs.map((m) => m.reply_to), ...S.chat.pins.map((p) => p.message_id)]
+    .filter((id) => id != null && !chatMsg(id)))];
+  if (!want.length) return;
+  const { data } = await S.sb.from('chat_messages').select('*').in('id', want);
+  for (const m of data || []) S.chat.extra[m.id] = m;
+  for (const id of want) if (!S.chat.extra[id]) S.chat.extra[id] = { id, deleted: true };
+}
+const excerpt = (m, n = 90) => { const t = plainMentions(m.body || '').replace(/\s+/g, ' ').trim(); return t.length > n ? t.slice(0, n - 1) + '…' : t; };
+const authorName = (m) => (m.bot ? '645 bot' : m.author === S.me?.id ? 'You' : memberName(m.author));
+
+// ── 📌 pins: every pin is kept (the history); the current ones are those not taken off
+let _pinsOpen = false;
+async function loadPins() {
+  const { data, error } = await S.sb.from('chat_pins').select('*').order('pinned_at', { ascending: false }).limit(100);
+  S.chat.pins = error ? [] : data || [];
+}
+const currentPins = () => S.chat.pins.filter((p) => !p.unpinned_at);
+const isPinned = (id) => currentPins().some((p) => String(p.message_id) === String(id));
+async function pinMessage(id, on) {
+  const { error } = await S.sb.rpc('pin_message', { p_message: /^\d+$/.test(String(id)) ? Number(id) : id, p_pin: on });
+  if (error) return fail(/pin_message|chat_pins/.test(error.message) ? new Error('Pins need the database update: run supabase/schema.sql again.') : error);
+  toast(on ? '📌 Pinned.' : 'Unpinned.', 'ok');
+  await loadPins(); await fetchExtra(); renderChat({ noScroll: true });
+}
+function renderPins() {
+  const cur = currentPins(), bar = $('chat-pinbar'), list = $('chat-pins');
+  if (!bar) return;
+  const top = cur[0] && chatMsg(cur[0].message_id);
+  bar.hidden = !S.chat.pins.length;
+  bar.innerHTML = !S.chat.pins.length ? '' : `${top ? `<button type="button" class="pin-top" data-act="chat-jump-pin" data-id="${top.id}">
+      <span class="pin-ico">📌</span><span class="pin-text"><strong ${top.bot ? '' : 'data-no-i18n'}>${esc(authorName(top))}</strong>
+      <span data-no-i18n>${esc(top.deleted ? '(deleted message)' : excerpt(top))}</span></span></button>`
+      : '<span class="pin-top fhelp">📌 No message pinned now</span>'}
+    <button type="button" class="btn btn-ghost btn-sm" data-act="chat-pins" title="All pinned messages">📌 ${cur.length > 1 ? `${cur.length} pinned · ` : ''}All</button>`;
+  list.hidden = !_pinsOpen;
+  if (!_pinsOpen) return;
+  list.innerHTML = `<div class="pins-hd"><strong>📌 Pinned messages</strong><button type="button" class="btn btn-ghost btn-sm" data-act="chat-pins">✕</button></div>`
+    + S.chat.pins.map((p) => {
+      const m = chatMsg(p.message_id) || { deleted: true }, on = !p.unpinned_at;
+      return `<div class="pin-row ${on ? '' : 'off'}">
+        <button type="button" class="pin-msg" data-act="chat-jump-pin" data-id="${p.message_id}" ${m.deleted ? 'disabled' : ''}>
+          <strong ${m.bot ? '' : 'data-no-i18n'}>${esc(m.deleted ? '' : authorName(m))}</strong> <span data-no-i18n>${esc(m.deleted ? '(deleted message)' : excerpt(m, 160))}</span></button>
+        <div class="fhelp">📌 ${esc(memberName(p.pinned_by))} · ${esc(ago(p.pinned_at))}${on ? '' : ` · unpinned by ${esc(memberName(p.unpinned_by))} · ${esc(ago(p.unpinned_at))}`}</div>
+        ${on ? `<button type="button" class="btn btn-ghost btn-sm" data-act="chat-unpin" data-id="${p.message_id}">Unpin</button>` : ''}
+      </div>`;
+    }).join('');
+}
+
+// ── ↩️ reply with a quote
+function startReply(id) {
+  const m = chatMsg(id);
+  if (!m) return;
+  S.chat.replyTo = m;
+  renderReplying();
+  $('chat-input').focus();
+}
+function renderReplying() {
+  const m = S.chat.replyTo, el = $('chat-replying');
+  el.hidden = !m;
+  el.innerHTML = m ? `<div class="cm-quote"><strong ${m.bot ? '' : 'data-no-i18n'}>↩️ ${esc(authorName(m))}</strong><span data-no-i18n>${esc(excerpt(m))}</span></div>
+    <button type="button" class="btn btn-ghost btn-sm" data-act="chat-reply-cancel" aria-label="Cancel the reply">✕</button>` : '';
+  fitChat();
+}
+function quoteHtml(m) {
+  if (m.reply_to == null) return '';
+  const q = chatMsg(m.reply_to);
+  return `<button type="button" class="cm-quote" data-act="chat-jump-pin" data-id="${m.reply_to}" ${!q || q.deleted ? 'disabled' : ''}>
+    ${!q || q.deleted ? '<span>↩️ (deleted message)</span>' : `<strong ${q.bot ? '' : 'data-no-i18n'}>${esc(authorName(q))}</strong><span data-no-i18n>${esc(excerpt(q))}</span>`}</button>`;
 }
 
 function chatText(body) {
@@ -4582,14 +4673,15 @@ function renderChat({ keepTop = false, noScroll = false } = {}) {
     html += `<div class="cm ${mine ? 'mine' : ''} ${bot ? 'bot' : ''} ${cont ? 'cont' : ''} ${!mine && !bot && mentionsMe(m.body) ? 'at-me' : ''} ${S.chat.flash?.id === String(m.id) && S.chat.flash.until > Date.now() ? 'flash' : ''}" data-id="${m.id}">
       ${cont ? '' : `<div class="cm-hd" style="--c:${clr}">${mine ? '' : `<span class="cm-av" style="--c:${clr}">${bot ? '🤖' : esc(ini(name))}</span><strong ${bot ? '' : 'data-no-i18n'}>${esc(name)}</strong>`}
         <span class="cm-time">${at.toLocaleTimeString(LOCALE, { hour: '2-digit', minute: '2-digit', hour12: false })}</span></div>`}
-      <div class="cm-line"><div class="cm-bubble ${big ? 'big' : ''}" ${bot ? '' : 'data-no-i18n'}>${text}</div>
+      <div class="cm-line"><div class="cm-bubble ${big && m.reply_to == null ? 'big' : ''}">${quoteHtml(m)}<div ${bot ? '' : 'data-no-i18n'}>${text}</div>${isPinned(m.id) ? '<span class="cm-pinned" title="Pinned">📌</span>' : ''}</div>
         ${mine ? receiptHtml(m) : ''}
-        <button type="button" class="cm-react-btn" data-act="chat-react-open" data-id="${m.id}" title="React" aria-label="React">☺</button></div>
+        <button type="button" class="cm-react-btn" data-act="chat-react-open" data-id="${m.id}" title="More" aria-label="More">⋯</button></div>
       ${reacts ? `<div class="cm-reacts">${reacts}</div>` : ''}
     </div>`;
     prev = m;
   }
   list.innerHTML = html || '<div class="chat-empty">No messages yet. Say hello 👋</div>';
+  renderPins();
   fitChat();
   if (keepTop) list.scrollTop = list.scrollHeight - prevH + prevTop;
   else if (noScroll) list.scrollTop = prevTop;
@@ -4603,7 +4695,7 @@ let _chatShown = false;
 function fitChat() {
   const list = $('chat-list');
   if (!list || S.tab !== 'chat') return;
-  const below = ['chat-quick', 'chat-picker', 'chat-mentions'].reduce((h, id) => h + ($(id).hidden ? 0 : $(id).offsetHeight), 0)
+  const below = ['chat-quick', 'chat-picker', 'chat-mentions', 'chat-replying'].reduce((h, id) => h + ($(id).hidden ? 0 : $(id).offsetHeight), 0)
     + document.querySelector('.chat-compose').offsetHeight + 40;
   const top = list.getBoundingClientRect().top + scrollY;
   const keep = list.scrollHeight - list.scrollTop - list.clientHeight < 80;
@@ -4628,8 +4720,10 @@ async function chatSend(text) {
   S.chat.busy = true;
   $('chat-send').disabled = true;
   try {
-    const { data, error } = await S.sb.from('chat_messages').insert({ body }).select().single();
+    const replyTo = text == null ? S.chat.replyTo?.id ?? null : null;
+    const { data, error } = await S.sb.from('chat_messages').insert(replyTo != null ? { body, reply_to: replyTo } : { body }).select().single();
     if (error) throw error;
+    if (replyTo != null) { S.chat.replyTo = null; renderReplying(); }
     if (text == null) { $('chat-input').value = ''; chatGrow(); }
     if (data && !S.chat.msgs.some((m) => String(m.id) === String(data.id))) S.chat.msgs.push(data);
     _chatShown = false;
@@ -4666,20 +4760,38 @@ async function chatDelete(id) {
 }
 
 /** The little bar of quick reactions next to a message (and Delete for its author or an admin). */
+/** ⋯ (or a long press on the message): quick reactions, then Reply · Pin · Copy · Delete. */
 function chatReactOpen(btn) {
   const pop = $('chat-pop'), id = btn.dataset.id;
   if (!pop.hidden && pop.dataset.id === id) { pop.hidden = true; return; }
   const m = S.chat.msgs.find((x) => String(x.id) === id);
-  const canDelete = m && ((!m.bot && m.author === S.me.id) || isAdmin());
+  const canDelete = m && ((!m.bot && m.author === S.me.id) || isAdmin()), pinned = isPinned(id);
   pop.dataset.id = id;
-  pop.innerHTML = QUICK_REACT.map((e) => `<button type="button" data-act="chat-react" data-id="${id}" data-e="${e}" aria-label="${e}">${e}</button>`).join('')
-    + `<button type="button" data-act="chat-react-more" data-id="${id}" title="More" aria-label="More">➕</button>`
-    + (canDelete ? `<button type="button" class="del" data-act="chat-delete" data-id="${id}">🗑 Delete</button>` : '');
-  pop.hidden = false;
-  const r = btn.getBoundingClientRect(), w = pop.offsetWidth, h = pop.offsetHeight;
-  pop.style.left = `${Math.max(8, Math.min(innerWidth - w - 8, r.left + r.width / 2 - w / 2))}px`;
-  pop.style.top = `${r.top - h - 6 < 8 ? r.bottom + 6 : r.top - h - 6}px`;
+  pop.innerHTML = `<div class="pop-reacts">${QUICK_REACT.map((e) => `<button type="button" data-act="chat-react" data-id="${id}" data-e="${e}" aria-label="${e}">${e}</button>`).join('')}
+      <button type="button" data-act="chat-react-more" data-id="${id}" title="More reactions" aria-label="More reactions">➕</button></div>
+    <div class="pop-acts">
+      <button type="button" data-act="chat-reply" data-id="${id}">↩️ Reply</button>
+      <button type="button" data-act="${pinned ? 'chat-unpin' : 'chat-pin'}" data-id="${id}">📌 ${pinned ? 'Unpin' : 'Pin'}</button>
+      ${m && !m.bot ? `<button type="button" data-act="chat-copy" data-id="${id}">📋 Copy</button>` : ''}
+      ${canDelete ? `<button type="button" class="del" data-act="chat-delete" data-id="${id}">🗑 Delete</button>` : ''}
+    </div>`;
+  placePop(pop, btn);
 }
+// long press on a message (phones), right click (computers): the same menu
+let _lpT = null;
+$('chat-list')?.addEventListener('touchstart', (e) => {
+  const b = e.target.closest('.cm-bubble');
+  if (!b || e.target.closest('a, button')) return;
+  clearTimeout(_lpT);
+  _lpT = setTimeout(() => { _lpT = null; navigator.vibrate?.(12); chatReactOpen(b.closest('.cm').querySelector('[data-act=chat-react-open]')); }, 450);
+}, { passive: true });
+for (const ev of ['touchend', 'touchmove', 'touchcancel']) $('chat-list')?.addEventListener(ev, () => clearTimeout(_lpT), { passive: true });
+$('chat-list')?.addEventListener('contextmenu', (e) => {
+  const b = e.target.closest('.cm-bubble');
+  if (!b || e.target.closest('a')) return;
+  e.preventDefault();
+  chatReactOpen(b.closest('.cm').querySelector('[data-act=chat-react-open]'));
+});
 document.addEventListener('click', (e) => {
   const pop = $('chat-pop');
   if (pop && !pop.hidden && !e.target.closest('#chat-pop, [data-act=chat-react-open], [data-act=chat-status]')) pop.hidden = true;
@@ -4858,6 +4970,7 @@ const loadNotifsSoon = () => { clearTimeout(_notifT); _notifT = setTimeout(() =>
 
 function notifText(n) {
   const d = n.data || {};
+  if (n.kind === 'reply') return { ico: '↩️', title: `${memberName(d.author)} replied to you`, body: plainMentions(d.excerpt || '') };
   if (n.kind === 'mention') {
     const who = memberName(d.author);
     return { ico: '📣', title: d.everyone ? `${who} mentioned everyone` : `${who} mentioned you`, body: plainMentions(d.excerpt || '') };
@@ -5497,6 +5610,13 @@ const ACTIONS = {
   'chat-react': (el) => { $('chat-pop').hidden = true; chatToggleReact(el.dataset.id, el.dataset.e); },
   'chat-react-open': (el) => chatReactOpen(el),
   'chat-status': (el) => chatStatusOpen(el),
+  'chat-reply': (el) => { $('chat-pop').hidden = true; startReply(el.dataset.id); },
+  'chat-reply-cancel': () => { S.chat.replyTo = null; renderReplying(); },
+  'chat-pin': (el) => { $('chat-pop').hidden = true; pinMessage(el.dataset.id, true); },
+  'chat-unpin': (el) => { $('chat-pop').hidden = true; pinMessage(el.dataset.id, false); },
+  'chat-copy': (el) => { $('chat-pop').hidden = true; navigator.clipboard?.writeText(plainMentions(chatMsg(el.dataset.id)?.body || '')).then(() => toast('📋 Copied.', 'ok'), () => {}); },
+  'chat-pins': () => { _pinsOpen = !_pinsOpen; renderPins(); fitChat(); },
+  'chat-jump-pin': (el) => { _pinsOpen = false; renderPins(); chatJump(el.dataset.id); },
   'chat-react-more': (el) => { $('chat-pop').hidden = true; chatPicker('react', el.dataset.id); },
   'chat-delete': (el) => { $('chat-pop').hidden = true; chatDelete(el.dataset.id); },
   'chat-emoji': () => chatPicker(S.chat.picker ? null : 'send'),

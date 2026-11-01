@@ -35,7 +35,7 @@
 
 import { createClient } from 'npm:@supabase/supabase-js@2.117.2';
 import { newVapidKeys, sendPush, type Vapid } from './push.ts';
-import { buyerMessage, cleanupMessage, chatMessage, mentionedIds, mentionMessage, mentionText, message, moneyMessage, reminderMessage, resultPost, shouldNotify, summarize, testMessage, ticketsMessage, type Lang, type Mode } from './notify.ts';
+import { buyerMessage, cleanupMessage, chatMessage, mentionedIds, mentionMessage, mentionText, message, moneyMessage, replyMessage, reminderMessage, resultPost, shouldNotify, summarize, testMessage, ticketsMessage, type Lang, type Mode } from './notify.ts';
 
 // The service key is provided to every Edge Function automatically (legacy or new key format).
 function serviceKey(): string | undefined {
@@ -476,7 +476,7 @@ async function sendChatNews(memberId: string, id: number) {
   const since = new Date(Date.now() - 10 * 60e3).toISOString();
   // claim it first, so a second call can't send it again
   const { data: msg, error } = await db.from('chat_messages').update({ notified_at: new Date().toISOString() })
-    .eq('id', id).eq('author', memberId).is('notified_at', null).gte('created_at', since).select('id, body').maybeSingle();
+    .eq('id', id).eq('author', memberId).is('notified_at', null).gte('created_at', since).select('id, body, reply_to').maybeSingle();
   if (error) return { error: error.message };
   if (!msg) return { sent: 0 };
   const { data } = await db.from('profiles').select('id, display_name, status');
@@ -486,16 +486,21 @@ async function sendChatNews(memberId: string, id: number) {
   // mentioned members (@them or @everyone) get "mentioned you" on devices that allow it; the others who want chat get the message
   const m = mentionedIds(msg.body);
   const mentioned = new Set(people.filter((p) => p.status === 'active' && p.id !== memberId && (m.everyone || m.ids.includes(p.id))).map((p) => p.id));
+  // ↩️ the author of the message replied to hears about it like a mention
+  const { data: orig } = msg.reply_to ? await db.from('chat_messages').select('author').eq('id', msg.reply_to).maybeSingle() : { data: null };
+  const repliedTo = orig?.author && orig.author !== memberId ? orig.author as string : null;
   const { data: subs } = await db.from('push_subs').select('*').neq('member', memberId).or('chat.eq.true,mention.eq.true');
   const v = subs?.length ? await vapid() : null;
   let sent = 0, mentions = 0;
   for (const sub of subs ?? []) {
-    const isMention = mentioned.has(sub.member) && sub.mention !== false;
-    if (!isMention && !sub.chat) continue;
-    const payload = isMention ? mentionMessage(name, text, m.everyone && !m.ids.includes(sub.member), sub.lang as Lang) : chatMessage(name, text);
+    const isReply = sub.member === repliedTo && sub.mention !== false;
+    const isMention = !isReply && mentioned.has(sub.member) && sub.mention !== false;
+    if (!isMention && !isReply && !sub.chat) continue;
+    const payload = isReply ? replyMessage(name, text, sub.lang as Lang)
+      : isMention ? mentionMessage(name, text, m.everyone && !m.ids.includes(sub.member), sub.lang as Lang) : chatMessage(name, text);
     const r = await sendPush(sub, payload, v!, 6 * 3600).catch(() => null);
     if (r?.gone) await db.from('push_subs').delete().eq('endpoint', sub.endpoint);
-    else if (r?.ok) { sent++; if (isMention) mentions++; }
+    else if (r?.ok) { sent++; if (isMention || isReply) mentions++; }
   }
   return { sent, mentions };
 }

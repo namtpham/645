@@ -39,9 +39,15 @@ with an invitation key from the admin.
 - **💬 Chat** (tab): every member can write; links open in a new tab. A row of quick emoji sends
   one with a single tap, and 😊 opens a full emoji picker. Tap ☺ next to a message to react
   (👍 ❤️ 😂 😮 😢 🎉 🍀, or ➕ for any emoji); tap a reaction again to take it back. Authors (and
-  admins) can delete a message. Unread messages show a red count on the tab. Your own messages
-  show their status: **✓** sent · grey **✓✓** delivered (every member's app has it) · blue **✓✓**
-  read by everyone; "👁 2" = read by some so far. Tap the ticks to see who read it, who has it,
+  admins) can delete a message. Unread messages show a red count on the tab. **⋯** next to a
+  message (or a long press on it; right click on a computer) opens the quick reactions and
+  **↩️ Reply** (the reply quotes the message; tap the quote to see it; its author is told, in 🔔 and
+  on the phone like a mention), **📌 Pin / Unpin**, **📋 Copy** and **🗑 Delete**. The latest pinned
+  message stays at the top of the chat; **📌 All** lists every pin, also the ones taken off later
+  (who pinned and unpinned, when). Tables `chat_pins`, column `chat_messages.reply_to`. Your own
+  messages show their status: **✓** sent · grey **✓✓** delivered (every member's app has it) · blue **✓✓**
+  read by everyone; "👁 2" = read by some so far. Someone who wrote or reacted after your message
+  has read it, even if their app hasn't sent a read mark. Tap the ticks to see who read it, who has it,
   and who not yet (table `chat_reads`: how far each member's app has received and shown the chat;
   reading on one device also clears the unread count on the others). Type **@** to
   mention someone (or **@everyone**): a list of members comes up, and the mentioned members get a

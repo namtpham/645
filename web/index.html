@@ -540,7 +540,7 @@
     <div class="card chat-card">
       <div class="card-hd">
         <div class="card-title">💬 Chat</div>
-        <span class="fhelp chat-sub">Everyone in the group · write @ to mention someone · 🤖 the bot posts every draw's result</span>
+        <span class="chat-sub"></span>
         <button type="button" class="btn btn-ghost btn-sm chat-search-btn" data-act="chat-search" title="Search the chat" aria-label="Search the chat">🔍</button>
       </div>
       <div class="chat-search" id="chat-search" hidden>
@@ -548,11 +548,14 @@
         <button type="button" class="btn btn-ghost btn-sm" data-act="chat-search" aria-label="Close search">✕</button>
       </div>
       <div class="chat-results" id="chat-results" hidden></div>
+      <div class="chat-pinbar" id="chat-pinbar" hidden></div>
+      <div class="chat-pins" id="chat-pins" hidden></div>
       <button type="button" class="btn btn-secondary btn-sm chat-latest" id="chat-latest" data-act="chat-latest" hidden>⬇ Back to the latest messages</button>
       <div class="chat-list" id="chat-list"></div>
       <div class="chat-mentions" id="chat-mentions" hidden></div>
       <div class="chat-quick" id="chat-quick" title="Tap to send"></div>
       <div class="chat-picker" id="chat-picker" hidden></div>
+      <div class="chat-replying" id="chat-replying" hidden></div>
       <div class="chat-compose">
         <button type="button" class="chat-emoji-btn" data-act="chat-emoji" title="Emoji" aria-label="Emoji">😊</button>
         <textarea class="finp chat-input" id="chat-input" rows="1" maxlength="2000" placeholder="Message" data-on-input="chat-input"></textarea>

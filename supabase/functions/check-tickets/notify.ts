@@ -134,6 +134,12 @@ export function chatMessage(name: string, text: string) {
   return { title: `💬 ${name}`, body: short(text), tag: 'chat', url: './#chat' };
 }
 
+/** Someone replied to your chat message. */
+export function replyMessage(name: string, text: string, lang: Lang) {
+  const title = { en: `↩️ ${name} replied to you`, ko: `↩️ ${name} 님이 답장했습니다`, vi: `↩️ ${name} đã trả lời bạn` }[lang] ?? `↩️ ${name}`;
+  return { title, body: short(text), tag: 'mention', url: './#chat' };
+}
+
 /** Someone wrote @you (or @everyone) in chat. */
 export function mentionMessage(name: string, text: string, everyone: boolean, lang: Lang) {
   const title = {

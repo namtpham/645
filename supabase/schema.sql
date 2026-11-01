@@ -250,6 +250,29 @@ create table if not exists public.chat_messages (
   created_at  timestamptz not null default now()
 );
 create index if not exists chat_messages_created on public.chat_messages (created_at desc);
+alter table public.chat_messages add column if not exists reply_to bigint references public.chat_messages (id) on delete set null;   -- ↩️ a reply quotes this message
+
+-- 📌 Pinned messages: every pin, also the ones taken off later (the history)
+create table if not exists public.chat_pins (
+  id          bigint generated always as identity primary key,
+  message_id  bigint not null references public.chat_messages (id) on delete cascade,
+  pinned_by   uuid references public.profiles (id) on delete set null default auth.uid(),
+  pinned_at   timestamptz not null default now(),
+  unpinned_by uuid references public.profiles (id) on delete set null,
+  unpinned_at timestamptz
+);
+create unique index if not exists chat_pins_one_current on public.chat_pins (message_id) where unpinned_at is null;
+
+create or replace function public.pin_message(p_message bigint, p_pin boolean default true)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  if not is_member() then raise exception 'Members only'; end if;
+  if p_pin then
+    insert into chat_pins (message_id, pinned_by) values (p_message, auth.uid()) on conflict do nothing;
+  else
+    update chat_pins set unpinned_at = now(), unpinned_by = auth.uid() where message_id = p_message and unpinned_at is null;
+  end if;
+end $$;
 
 create table if not exists public.chat_reactions (
   message_id bigint not null references public.chat_messages (id) on delete cascade,
@@ -326,12 +349,14 @@ end $$;
 create table if not exists public.notifications (
   id         bigint generated always as identity primary key,
   member     uuid not null references public.profiles (id) on delete cascade,
-  kind       text not null check (kind in ('mention', 'win')),
+  kind       text not null,   -- mention · reply · win (see notifications_kind_check)
   data       jsonb not null default '{}',   -- mention: message_id, author, everyone · win: the result (round, ranks, won …)
   read_at    timestamptz,
   created_at timestamptz not null default now()
 );
 create index if not exists notifications_member on public.notifications (member, created_at desc);
+alter table public.notifications drop constraint if exists notifications_kind_check;
+alter table public.notifications add constraint notifications_kind_check check (kind in ('mention', 'reply', 'win'));
 
 -- ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -658,6 +683,12 @@ begin
       from profiles p
      where p.status = 'active' and p.id <> new.author
        and (everyone or p.id::text in (select (regexp_matches(new.body, '<@([0-9a-f-]{36})>', 'g'))[1]));
+    -- ↩️ a reply: its author hears about it (unless the reply mentions them anyway)
+    insert into notifications (member, kind, data)
+    select q.author, 'reply', jsonb_build_object('message_id', new.id, 'author', new.author, 'excerpt', left(new.body, 300))
+      from chat_messages q join profiles p on p.id = q.author and p.status = 'active'
+     where q.id = new.reply_to and q.author <> new.author
+       and not exists (select 1 from notifications n where n.member = q.author and n.data ->> 'message_id' = new.id::text);
   elsif new.bot = 'results' and coalesce((new.meta ->> 'best')::int, 0) > 0 then
     insert into notifications (member, kind, data)
     select p.id, 'win', new.meta || jsonb_build_object('message_id', new.id)
@@ -693,6 +724,7 @@ alter table public.pool_holders    enable row level security;
 alter table public.money_transfers enable row level security;
 alter table public.photo_cleanups  enable row level security;
 alter table public.chat_reads      enable row level security;
+alter table public.chat_pins       enable row level security;
 
 do $$
 declare p record;
@@ -701,7 +733,7 @@ begin
            where schemaname = 'public'
              and tablename in ('profiles', 'invites', 'settings', 'investors', 'weeks', 'tickets', 'audit_log', 'draws',
                                'pick_plans', 'group_picks', 'live_picks', 'push_subs', 'push_keys', 'my_picks',
-                               'chat_messages', 'chat_reactions', 'notifications', 'pool_holders', 'money_transfers', 'photo_cleanups', 'chat_reads')
+                               'chat_messages', 'chat_reactions', 'notifications', 'pool_holders', 'money_transfers', 'photo_cleanups', 'chat_reads', 'chat_pins')
   loop
     execute format('drop policy %I on public.%I', p.policyname, p.tablename);
   end loop;
@@ -769,6 +801,7 @@ create policy "react"          on public.chat_reactions for insert to authentica
   with check (public.is_member() and member = auth.uid());
 create policy "take back a reaction" on public.chat_reactions for delete to authenticated
   using (public.is_member() and member = auth.uid());
+create policy "read pins" on public.chat_pins for select to authenticated using (public.is_member());
 create policy "read chat reads" on public.chat_reads for select to authenticated using (public.is_member());
 create policy "own chat reads"  on public.chat_reads for insert to authenticated with check (public.is_member() and member = auth.uid());
 create policy "move own chat reads" on public.chat_reads for update to authenticated
@@ -808,12 +841,13 @@ grant select, insert, update         on public.live_picks  to authenticated;
 grant select, insert, update, delete on public.push_subs   to authenticated;
 grant select, insert, update, delete on public.my_picks    to authenticated;
 grant select, delete                 on public.chat_messages  to authenticated;
-grant insert (body)                  on public.chat_messages  to authenticated;   -- author = auth.uid() by default; bot columns are the server's
+grant insert (body, reply_to)        on public.chat_messages  to authenticated;   -- author = auth.uid() by default; bot columns are the server's
 grant select, insert, delete         on public.chat_reactions to authenticated;
 grant select, delete                 on public.notifications  to authenticated;
 grant select, insert, update         on public.pool_holders    to authenticated;
 grant select                         on public.photo_cleanups  to authenticated;   -- votes: approve_cleanup()
 grant select, insert, update         on public.chat_reads      to authenticated;
+grant select                         on public.chat_pins       to authenticated;   -- changes: pin_message()
 grant select, insert, delete         on public.money_transfers to authenticated;
 grant update (read_at)               on public.notifications  to authenticated;
 
@@ -828,6 +862,7 @@ grant execute on function public.move_ticket_to_qr_draw(uuid) to authenticated;
 grant execute on function public.delete_ticket(uuid, text) to authenticated;
 grant execute on function public.clear_group_picks(int) to authenticated;
 grant execute on function public.approve_cleanup(int, boolean) to authenticated;
+grant execute on function public.pin_message(bigint, boolean) to authenticated;
 grant execute on function public.check_invite(text), public.username_available(text, text),
                           public.ping()
   to anon, authenticated;
@@ -860,7 +895,7 @@ do $$
 declare t text;
 begin
   foreach t in array array['investors', 'weeks', 'tickets', 'settings', 'profiles', 'draws', 'pick_plans', 'group_picks', 'live_picks',
-                           'chat_messages', 'chat_reactions', 'notifications', 'pool_holders', 'money_transfers', 'photo_cleanups', 'chat_reads'] loop
+                           'chat_messages', 'chat_reactions', 'notifications', 'pool_holders', 'money_transfers', 'photo_cleanups', 'chat_reads', 'chat_pins'] loop
     if not exists (select 1 from pg_publication_tables
                    where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = t) then
       execute format('alter publication supabase_realtime add table public.%I', t);
