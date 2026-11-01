@@ -52,7 +52,7 @@ const TEXT = {
     wonBig: (list: string, g: number) => `🎉 We won ${list} on ${g} game${g === 1 ? '' : 's'}! Prize amount to follow.`,
     none: (g: number) => `No win this time (${g} game${g === 1 ? '' : 's'}).`,
     notPlayed: 'We did not play this draw.',
-    rank: (r: number, n: number) => `${n}× ${r}등`,
+    rank: (r: number, n: number) => `${n}× ${['', '1st', '2nd', '3rd', '4th', '5th'][r] ?? r} prize`,
   },
   ko: {
     title: (r: number) => `🎱 제${r}회 추첨 결과`,

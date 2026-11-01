@@ -93,6 +93,18 @@ function drawNo(d) {
 const drawDate = (n) => addDays(FIRST_DRAW, (n - 1) * 7);
 // Dates, times and currency names in the chosen language (i18n.js)
 const LANG = window.I18N?.lang || 'en', LOCALE = window.I18N?.locale || 'en-GB', tr = window.I18N?.t || ((s) => s);
+// Lottery words in the member's language (Korean as on dhlottery's own pages, for Korean only)
+const LT = {
+  rank: (r) => ({ ko: `${r}등`, vi: `giải ${r}` }[LANG] || `${['', '1st', '2nd', '3rd', '4th', '5th'][r] || r} prize`),
+  ranks: (from, to) => ({ ko: `${from}등–${to}등`, vi: `giải ${from}–${to}` }[LANG] || `${['', '1st', '2nd', '3rd', '4th', '5th'][from]}–${['', '1st', '2nd', '3rd', '4th', '5th'][to]} prizes`),
+  noWin: { ko: '낙첨', vi: 'không trúng' }[LANG] || 'no win',
+  congrats: { ko: '축하합니다!', vi: '🎉 Chúc mừng!' }[LANG] || '🎉 Congratulations!',
+  wonTotal: (amt) => ({ ko: `총 ${amt} 당첨`, vi: `trúng ${amt}` }[LANG] || `${amt} won`),
+  sorry: { ko: '아쉽게도,', vi: 'Lần này' }[LANG] || 'No win',
+  sorryEnd: { ko: '낙첨되었습니다.', vi: 'không trúng.' }[LANG] || 'this time.',
+  winNums: { ko: '당첨번호', vi: 'Số trúng' }[LANG] || 'Winning numbers',
+  draw: (n) => ({ ko: `제${n}회`, vi: `Kỳ #${n}` }[LANG] || `Draw #${n}`),
+};
 document.addEventListener('DOMContentLoaded', () => document.querySelectorAll('[data-on-input=lang]').forEach((el) => { el.value = LANG; }));
 const fmtShort = (d) => new Date(d + 'T12:00:00Z').toLocaleDateString(LOCALE, { day: '2-digit', month: 'short', year: '2-digit', timeZone: 'UTC' });
 const fmtD = (d) => d ? new Date(d + 'T12:00:00Z').toLocaleDateString(LOCALE, { day: '2-digit', month: 'short', year: 'numeric', timeZone: 'UTC' }) : '—';
@@ -273,10 +285,9 @@ const thumbImg = (t, cls = 'thumb thumb-sm') => (t.photo_deleted_at
   : `<img class="${cls}" data-path="${esc(t.thumb_path || t.storage_path)}" data-act="ticket-open" data-id="${esc(t.id)}" alt="Ticket photo" loading="lazy">`);
 
 function uploadBadge(t) {
-  const before = new Date(t.created_at) < kstAt(t.draw_date, DRAW_TIME);
-  return before
-    ? `<span class="badge bg-green" title="Uploaded before the ${DRAW_TIME} KST draw">✓ before draw</span>`
-    : `<span class="badge bg-red" title="Uploaded after the ${DRAW_TIME} KST draw">after draw</span>`;
+  const drawAt = kstAt(t.draw_date, DRAW_TIME), before = new Date(t.created_at) < drawAt;
+  if (before) return Date.now() < drawAt.getTime() ? `<span class="badge bg-green" title="Uploaded before the ${DRAW_TIME} KST draw">✓ in time for the draw</span>` : '';
+  return `<span class="badge bg-red" title="Uploaded after the ${DRAW_TIME} KST draw">⚠️ uploaded after the draw</span>`;
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -650,7 +661,7 @@ function startRealtime() {
   _channel = S.sb.channel('db-changes')
     .on('postgres_changes', { event: '*', schema: 'public' },
       (p) => (p?.table === 'live_picks' ? scheduleLiveReload() : BOARD_TABLES.includes(p?.table) ? scheduleBoardReload()
-        : CHAT_TABLES.includes(p?.table) ? chatChange(p) : p?.table === 'notifications' ? loadNotifsSoon()
+        : CHAT_TABLES.includes(p?.table) ? chatChange(p) : p?.table === 'chat_reads' ? loadChatReadsSoon() : p?.table === 'notifications' ? loadNotifsSoon()
           : ['pool_holders', 'money_transfers'].includes(p?.table) ? loadMoneySoon()
             : p?.table === 'photo_cleanups' ? loadCleanups() : scheduleReload(p?.table)))
     .subscribe((status) => $('syncDot').classList.toggle('off', status !== 'SUBSCRIBED'));
@@ -809,13 +820,13 @@ function renderLastCard() {
     if (r?.rank != null) ranks[r.rank] = (ranks[r.rank] || 0) + 1;
   }
   const games = sum(Object.values(ranks));
-  const rankLine = games ? [1, 2, 3, 4, 5].filter((r) => ranks[r]).map((r) => `<span class="rs-rank r${r}">${ranks[r]}× ${r}등</span>`).join(' ')
-    + (ranks[0] ? ` <span class="rs-rank r0">${ranks[0]}× 낙첨</span>` : '') : '';
+  const rankLine = games ? [1, 2, 3, 4, 5].filter((r) => ranks[r]).map((r) => `<span class="rs-rank r${r}">${ranks[r]}× ${LT.rank(r)}</span>`).join(' ')
+    + (ranks[0] ? ` <span class="rs-rank r0">${ranks[0]}× ${LT.noWin}</span>` : '') : '';
   const prize = week ? +week.prize_won || 0 : qs.done ? qs.total : null;
   const prizeText = week ? money(prize) : moneyTax(qs.total, qs.net);
   const verdict = !week && !tix.length ? `<div class="rs-verdict lose">Not played</div>`
-    : prize > 0 ? `<div class="rs-verdict win">축하합니다! <span>총 ${esc(prizeText)} 당첨${week ? (week.big_win ? ' · 💸 shared' : ' · 🏦 to pool') : ''}</span></div>`
-      : prize === 0 ? `<div class="rs-verdict lose">아쉽게도, <span>낙첨되었습니다.</span></div>`
+    : prize > 0 ? `<div class="rs-verdict win">${LT.congrats} <span>${LT.wonTotal(esc(prizeText))}${week ? (week.big_win ? ' · 💸 shared' : ' · 🏦 to pool') : ''}</span></div>`
+      : prize === 0 ? `<div class="rs-verdict lose">${LT.sorry} <span>${LT.sorryEnd}</span></div>`
         : `<div class="rs-verdict wait">⏳ Results are being checked</div>`;
   $('last-card').innerHTML = `
     <div class="card-hd"><div class="card-title">🎱 Last draw #${n}</div><span class="fhelp">${esc(fmtD(d))}</span></div>
@@ -894,7 +905,7 @@ function renderDashboard() {
       <span class="rd-main">Not played</span><span class="rd-res"></span></div>`;
     return r.weeks.map((w) => {
       const fresh = sum(Object.values(w.investments || {})), prize = +w.prize_won || 0;
-      const res = prize ? `<span class="rd-prize ${w.big_win ? 'shared' : 'pooled'}">${esc(money(prize))} ${w.big_win ? '💸' : '🏦'}</span>` : '<span class="muted">낙첨</span>';
+      const res = prize ? `<span class="rd-prize ${w.big_win ? 'shared' : 'pooled'}">${esc(money(prize))} ${w.big_win ? '💸' : '🏦'}</span>` : `<span class="muted">${LT.noWin}</span>`;
       return `<div class="rd-row" data-act="week-edit" data-id="${esc(w.id)}" title="Edit this week"><span class="rd-no">#${n}</span><span class="rd-date">${esc(fmtD(r.date))}</span>
         <span class="rd-main"><span class="green mono">${esc(money(fresh))}</span>${w.pool_used > 0 ? ` <span class="gold mono">+${esc(money(w.pool_used))}</span>` : ''}${tix.length ? ` · 🎟️ ${tix.length}` : ''}</span>
         <span class="rd-res">${res}</span></div>`;
@@ -1016,7 +1027,7 @@ function weekRow(w) {
     <div class="week-body ${S.openWeeks.has(w.id) ? 'open' : ''}" id="wb-${esc(w.id)}">
       <div class="flbl mb8">Effective percentages &amp; amounts</div>
       ${pctRows(c.pcts, c.eff) || '<p class="fhelp">No investments recorded.</p>'}
-      ${S.draws[drawNo(w.result_date)] ? `<div class="fhelp" style="margin-top:10px">당첨번호 <span class="rs-win">${drawBalls(S.draws[drawNo(w.result_date)])}</span></div>` : ''}
+      ${S.draws[drawNo(w.result_date)] ? `<div class="fhelp" style="margin-top:10px">${LT.winNums} <span class="rs-win">${drawBalls(S.draws[drawNo(w.result_date)])}</span></div>` : ''}
       ${qs.n ? `<div class="fhelp" style="margin-top:10px">Ticket QR results: ${qs.n} code${qs.n > 1 ? 's' : ''} · ${qs.win} won · ${qs.lose} no win${qs.pending ? ` · ${qs.pending} waiting` : ''} ${qrBadge(qs)}</div>` : ''}
       ${tix.length ? `<div class="thumb-row">${tix.map((t) => thumbImg(t)).join('')}</div>` : ''}
       ${w.notes ? `<div class="week-notes">${esc(w.notes)}</div>` : ''}
@@ -1212,7 +1223,7 @@ async function deleteWeek(id) {
 // status: pending (results not checked / not out yet) · win · lose · error · invalid.
 // The check-tickets Edge Function fills in status/prize; members can correct any item by hand
 // (manual: true), and the automatic check then leaves that item alone.
-const QR_LABEL = { pending: '⏳ Waiting for results', win: '🎉 Won', lose: '낙첨 · no win', error: '❓ Could not check', invalid: '❓ Not a lotto QR' };
+const QR_LABEL = { pending: '⏳ Waiting for results', win: '🎉 Won', lose: LANG === 'ko' ? '낙첨' : 'No win', error: '❓ Could not check', invalid: '❓ Not a lotto QR' };
 const QR_SEEN_MS = 10 * 60e3;
 
 let _zx = null;
@@ -1328,7 +1339,7 @@ function qrBadge(s, { short = false } = {}) {
   if (s.win) return `<span class="badge qr-win" ${s.net < s.total ? `title="${esc(money(s.net))} after tax"` : ''}>🎉 ${esc(money(s.total))}${s.pending ? ` · ${s.pending} ⏳` : ''}</span>`;
   if (s.pending) return `<span class="badge bg-gray">⏳ ${short ? s.pending : `${s.pending} waiting`}</span>`;
   if (s.problem) return `<span class="badge bg-red">❓ check</span>`;
-  return `<span class="badge bg-gray">낙첨</span>`;
+  return `<span class="badge bg-gray">${LT.noWin}</span>`;
 }
 
 const resultsOut = (d) => Date.now() >= kstAt(d, RESULTS_TIME).getTime();
@@ -1418,16 +1429,16 @@ function resultSummary(it, drawDate) {
   const draw = S.draws[it.round];
   const games = (it.games || []).map((g) => gameResult(g, draw) || g);
   const verdict = it.status === 'win'
-    ? `<div class="rs-verdict win">축하합니다! <span>총 ${+it.prize > 0 ? esc(moneyTax(it.prize, qrNet(it))) : '?'} 당첨</span></div>`
-    : it.status === 'lose' ? `<div class="rs-verdict lose">아쉽게도, <span>낙첨되었습니다.</span></div>`
+    ? `<div class="rs-verdict win">${LT.congrats} <span>${LT.wonTotal(+it.prize > 0 ? esc(moneyTax(it.prize, qrNet(it))) : '?')}</span></div>`
+    : it.status === 'lose' ? `<div class="rs-verdict lose">${LT.sorry} <span>${LT.sorryEnd}</span></div>`
       : `<div class="rs-verdict wait">${resultsOut(drawDate) ? '⏳ Result not checked yet' : `⏳ Results after ${RESULTS_TIME} KST on ${esc(fmtD(drawDate))}`}</div>`;
   return `<div class="rs">
-    <div class="rs-head">제${it.round ?? '?'}회${draw?.draw_date ? ` · ${esc(fmtD(draw.draw_date))}` : ''}
-      ${draw ? `<span class="rs-win">당첨번호 ${drawBalls(draw)}</span>` : resultsOut(drawDate) ? '<span class="fhelp">winning numbers not loaded yet</span>' : ''}</div>
+    <div class="rs-head">${LT.draw(it.round ?? '?')}${draw?.draw_date ? ` · ${esc(fmtD(draw.draw_date))}` : ''}
+      ${draw ? `<span class="rs-win">${LT.winNums} ${drawBalls(draw)}</span>` : resultsOut(drawDate) ? '<span class="fhelp">winning numbers not loaded yet</span>' : ''}</div>
     ${games.map((g, i) => {
       const hit = (n) => (g.match?.includes(n) ? 'hit' : g.bonus && draw && n === draw.bonus ? 'hit-bonus' : '');
       const amt = g.rank ? FIXED_PRIZE[g.rank] || +draw?.prizes?.[g.rank] || 0 : 0;
-      const rank = g.rank == null ? '' : g.rank ? `<span class="rs-rank r${g.rank}">${g.rank}등${amt ? ' ' + esc(moneyTax(amt, afterTax(amt))) : ''}</span>` : '<span class="rs-rank r0">낙첨</span>';
+      const rank = g.rank == null ? '' : g.rank ? `<span class="rs-rank r${g.rank}">${LT.rank(g.rank)}${amt ? ' ' + esc(moneyTax(amt, afterTax(amt))) : ''}</span>` : `<span class="rs-rank r0">${LT.noWin}</span>`;
       return `<div class="rs-game"><span class="rs-label">${GAME_LABELS[i] || i + 1}</span><span class="rs-nums">${g.nums.map((n) => ball(n, hit(n))).join('')}</span>${rank}</div>`;
     }).join('')}
     ${verdict}
@@ -1594,7 +1605,7 @@ function renderTickets() {
 
 function upDateInfo() {
   const d = $('up-date').value, n = drawNo(d);
-  $('up-date-info').textContent = !d ? '' : n ? `제${n}회 · ${fmtD(d)}${d === currentDraw() ? ' (this week)' : ''}` : '⚠️ Not a Saturday';
+  $('up-date-info').textContent = !d ? '' : n ? `${LT.draw(n)} · ${fmtD(d)}${d === currentDraw() ? ' (this week)' : ''}` : '⚠️ Not a Saturday';
 }
 
 function addUploadFiles(files) {
@@ -2015,7 +2026,7 @@ function runBacktest() {
       <thead><tr><th></th><th>Suggested</th><th>Random</th><th>Theory</th></tr></thead>
       <tbody>
         <tr><td>Numbers matched per game</td><td class="mono">${(r.matches / r.games).toFixed(2)}</td><td class="mono">${(r.rMatches / r.rGames).toFixed(2)}</td><td class="mono">0.80</td></tr>
-        <tr><td>Games with 3+ matches (5등 or better)</td><td class="mono">${pct(r.hit3, r.games)}</td><td class="mono">${pct(r.rHit3, r.rGames)}</td><td class="mono">2.4%</td></tr>
+        <tr><td>Games with 3+ matches (${LT.rank(5)} or better)</td><td class="mono">${pct(r.hit3, r.games)}</td><td class="mono">${pct(r.rHit3, r.rGames)}</td><td class="mono">2.4%</td></tr>
       </tbody></table>
       <p class="fhelp" style="margin-top:8px">${r.draws} draws · ${r.games} suggested games. Differences this small are luck:
       every set has the same chance. The real benefit is a smaller chance of sharing a big prize.</p>`;
@@ -3046,7 +3057,7 @@ function liveColumn(list, main, bonus, draw) {
   }
   const best = rows[0]?.k || 0;
   const head = !main.length ? `${list.length} ticket${list.length === 1 ? '' : 's'} · waiting for the first number`
-    : `${final ? 'Final' : 'So far'}: best ${best} of ${main.length} matched${[1, 2, 3, 4, 5].filter((r) => ranks[r]).map((r) => ` · ${ranks[r]}× ${r}등`).join('')}`
+    : `${final ? 'Final' : 'So far'}: best ${best} of ${main.length} matched${[1, 2, 3, 4, 5].filter((r) => ranks[r]).map((r) => ` · ${ranks[r]}× ${LT.rank(r)}`).join('')}`
       + (main.length === 6 ? ` · won ${money(fixed)}${big ? ' + big prize' : fixed > TAX_FREE ? ' after tax' : ''} for ${money(list.length * TICKET_PRICE)}` : '');
   return `<p class="live-sum ${big ? 'big' : fixed ? 'won' : ''}">${esc(head)}</p>` + rows.map((r, pos) => `<div class="live-row ${r.rank ? 'r' + r.rank : ''}">
       <span class="live-pos">${pos + 1}</span>
@@ -3054,7 +3065,7 @@ function liveColumn(list, main, bonus, draw) {
         <span class="live-balls">${r.nums.map((n) => ball(n, main.includes(n) ? 'hit' : n === bonus ? 'hit-bonus' : '')).join('')}</span>
         <span class="fhelp">${esc(r.label)}${r.sub ? ` · ${esc(r.sub)}` : ''}</span>
       </span>
-      <span class="live-k"><strong>${r.k}</strong>${r.b ? '<small>+B</small>' : ''}${r.rank ? `<span class="rs-rank r${r.rank}">${r.rank}등</span>` : ''}</span>
+      <span class="live-k"><strong>${r.k}</strong>${r.b ? '<small>+B</small>' : ''}${r.rank ? `<span class="rs-rank r${r.rank}">${LT.rank(r.rank)}</span>` : ''}</span>
     </div>`).join('');
 }
 
@@ -3237,7 +3248,7 @@ function renderSim() {
   $('sim-round').value = SIM.round;
   $('sim-date').value = date;
   $('sim-x').value = SIM.x;
-  $('sim-info').textContent = `제${SIM.round}회 · Saturday ${fmtD(date)} · ${members} active member${members === 1 ? '' : 's'} → default ${Math.max(5, 5 * members)} groups`;
+  $('sim-info').textContent = `${LT.draw(SIM.round)} · Saturday ${fmtD(date)} · ${members} active member${members === 1 ? '' : 's'} → default ${Math.max(5, 5 * members)} groups`;
 
   let won = 0, estimated = false;
   const rankCount = {};
@@ -3255,7 +3266,7 @@ function renderSim() {
         <strong>${q}</strong>
         <button class="qb qb-plus" data-act="sim-qty" data-i="${i}" data-d="1">+</button>
       </span>
-      <span class="sim-res">${!SIM.revealed ? '' : r.rank ? `<span class="rs-rank r${r.rank}">${r.rank}등</span> ${esc(money(afterTax(prize.amount)))}${prize.estimated ? '≈' : ''}${q > 1 ? ` ×${q}` : ''}` : '<span class="rs-rank r0">낙첨</span>'}</span>
+      <span class="sim-res">${!SIM.revealed ? '' : r.rank ? `<span class="rs-rank r${r.rank}">${LT.rank(r.rank)}</span> ${esc(money(afterTax(prize.amount)))}${prize.estimated ? '≈' : ''}${q > 1 ? ` ×${q}` : ''}` : '<span class="rs-rank r0">낙첨</span>'}</span>
     </div>`;
   }).join('');
 
@@ -3266,14 +3277,14 @@ function renderSim() {
       ${SIM.revealed
         ? `<span>Won <strong class="${won ? 'green' : ''}">${esc(money(won))}${estimated ? ' ≈' : ''}</strong> after tax</span>
            <span class="sim-profit ${profit >= 0 ? 'green' : 'red'}">Profit ${profit >= 0 ? '+' : ''}${esc(money(profit))}</span>
-           <span class="fhelp">${Object.keys(rankCount).length ? Object.entries(rankCount).map(([k, v]) => `${v}× ${k}등`).join(' · ') : 'no winning games'}</span>`
+           <span class="fhelp">${Object.keys(rankCount).length ? Object.entries(rankCount).map(([k, v]) => `${v}× ${LT.rank(+k)}`).join(' · ') : 'no winning games'}</span>`
         : `<button class="btn btn-primary btn-sm" data-act="sim-reveal" ${groups && draw ? '' : 'disabled'}>Reveal results</button>`}
     </div>
-    ${SIM.revealed && draw ? `<div class="sim-draw">Winning numbers 제${SIM.round}회: <span class="rs-win">${drawBalls(draw)}</span></div>` : ''}
+    ${SIM.revealed && draw ? `<div class="sim-draw">${LT.winNums} · ${LT.draw(SIM.round)}: <span class="rs-win">${drawBalls(draw)}</span></div>` : ''}
     ${!draw ? '<p class="form-error">The winning numbers of this draw are not loaded.</p>' : ''}
     <div class="sim-list">${rows}</div>
-    <p class="fhelp" style="margin-top:8px">Suggestions use only the ${SIM.round - 1} draws before 제${SIM.round}회, the same way this
-      week's picks are made. Prizes: 4등 ₩50,000 and 5등 ₩5,000 are fixed. 1등–3등 change every draw: that draw's real amount
+    <p class="fhelp" style="margin-top:8px">Suggestions use only the ${SIM.round - 1} draws before ${LT.draw(SIM.round)}, the same way this
+      week's picks are made. Prizes: ${LT.rank(4)} ₩50,000 and ${LT.rank(5)} ₩5,000 are fixed. ${LT.ranks(1, 3)} change every draw: that draw's real amount
       when known, otherwise a typical amount marked ≈. Amounts are after tax: none up to ₩2,000,000 per game, 22% above that,
       33% on the part over ₩300,000,000. On average a ₩1,000 game pays back about ₩500.</p>`;
 
@@ -4373,10 +4384,72 @@ S.chat = { msgs: [], reacts: [], loaded: false, missing: false, more: false, pic
 let _chatReloadT = null;
 
 const chatSeenKey = () => `645-chat-seen-${S.me?.id}`;
-function chatSeen() { try { return localStorage.getItem(chatSeenKey()) || ''; } catch { return ''; } }
+function chatSeen() {
+  let local = '';
+  try { local = localStorage.getItem(chatSeenKey()) || ''; } catch { /* private mode */ }
+  const server = S.chatReads[S.me?.id]?.read_at || '';   // read on another device counts too
+  return Date.parse(server || 0) > Date.parse(local || 0) ? server : local;
+}
+
+// ── ✓ sent · ✓✓ delivered · blue ✓✓ read: each member's app notes the newest message it has received and shown
+S.chatReads = {};
+let _readsT = null, _rcptT = null;
+async function loadChatReads() {
+  const { data, error } = await S.sb.from('chat_reads').select('*');
+  if (error) return;   // database without the table yet: no ticks
+  S.chatReads = Object.fromEntries((data || []).map((r) => [r.member, r]));
+  renderChatBadge();
+  if (S.tab === 'chat') renderChat({ noScroll: true });
+}
+const loadChatReadsSoon = () => { clearTimeout(_readsT); _readsT = setTimeout(() => loadChatReads().catch(console.error), 400); };
+const later = (a, b) => (Date.parse(b || 0) > Date.parse(a || 0) ? b : a);
+/** This app has the chat up to its newest message (delivered); `read`: and it is on screen. */
+function noteChat({ read = false } = {}) {
+  if (!S.me || S.chat.gap || !S.chat.msgs.length) return;
+  const newest = S.chat.msgs.at(-1).created_at, cur = S.chatReads[S.me.id] || {};
+  const next = { member: S.me.id, delivered_at: later(cur.delivered_at, newest), read_at: read ? later(cur.read_at, newest) : cur.read_at || null };
+  if (next.delivered_at === cur.delivered_at && next.read_at === (cur.read_at || null)) return;
+  S.chatReads[S.me.id] = { ...cur, ...next };
+  clearTimeout(_rcptT);
+  _rcptT = setTimeout(() => S.sb.from('chat_reads').upsert(S.chatReads[S.me.id], { onConflict: 'member' }).then(() => {}, () => {}), 1200);
+}
+/** Who of the others has my message: [read, delivered but not read, not yet]. */
+function receiptOf(m) {
+  const at = Date.parse(m.created_at), others = S.profiles.filter((p) => p.status === 'active' && p.id !== S.me.id);
+  const has = (p, k) => Date.parse(S.chatReads[p.id]?.[k] || 0) >= at;
+  const read = others.filter((p) => has(p, 'read_at')), got = others.filter((p) => !read.includes(p) && has(p, 'delivered_at'));
+  return { others, read, got, none: others.filter((p) => !read.includes(p) && !got.includes(p)) };
+}
+function receiptHtml(m) {
+  const r = receiptOf(m);
+  if (!r.others.length) return '';
+  const all = r.read.length === r.others.length, allGot = r.read.length + r.got.length === r.others.length;
+  const [ticks, cls, title] = all ? ['✓✓', 'read', 'Read by everyone']
+    : allGot ? ['✓✓', 'got', 'Delivered to everyone'] : r.read.length + r.got.length ? ['✓✓', 'some', 'Delivered to some'] : ['✓', 'sent', 'Sent'];
+  return `<button type="button" class="cm-status ${cls}" data-act="chat-status" data-id="${m.id}" title="${title}" aria-label="${title}">${ticks}${!all && r.read.length ? `<small>👁 ${r.read.length}</small>` : ''}</button>`;
+}
+function chatStatusOpen(btn) {
+  const pop = $('chat-pop'), m = S.chat.msgs.find((x) => String(x.id) === btn.dataset.id);
+  if (!m) return;
+  if (!pop.hidden && pop.dataset.id === `s${m.id}`) { pop.hidden = true; return; }
+  const r = receiptOf(m), names = (xs) => xs.map((p) => esc(p.display_name)).join(', ');
+  pop.dataset.id = `s${m.id}`;
+  pop.innerHTML = `<div class="cs-list">
+    ${r.read.length ? `<div><span class="cm-status read">✓✓</span> <span>Read by ${r.read.length === r.others.length ? 'everyone' : `<span data-no-i18n>${names(r.read)}</span>`}</span></div>` : ''}
+    ${r.got.length ? `<div><span class="cm-status got">✓✓</span> <span>Delivered to <span data-no-i18n>${names(r.got)}</span></span></div>` : ''}
+    ${r.none.length ? `<div><span class="cm-status sent">✓</span> <span>Not yet: <span data-no-i18n>${names(r.none)}</span></span></div>` : ''}</div>`;
+  placePop(pop, btn);
+}
+function placePop(pop, btn) {
+  pop.hidden = false;
+  const r = btn.getBoundingClientRect(), w = pop.offsetWidth, h = pop.offsetHeight;
+  pop.style.left = `${Math.max(8, Math.min(innerWidth - w - 8, r.left + r.width / 2 - w / 2))}px`;
+  pop.style.top = `${r.top - h - 6 < 8 ? r.bottom + 6 : r.top - h - 6}px`;
+}
 function markChatSeen() {
   const last = S.chat.msgs.at(-1)?.created_at;
   if (!last || S.tab !== 'chat' || document.visibilityState !== 'visible') return;
+  noteChat({ read: true });
   try { if (last > chatSeen()) localStorage.setItem(chatSeenKey(), last); } catch { /* private mode */ }
   renderChatBadge();
 }
@@ -4403,7 +4476,9 @@ async function loadChat({ older = false } = {}) {
   const fresh = new Set(ids.map(String));
   S.chat.reacts = [...S.chat.reacts.filter((r) => !fresh.has(String(r.message_id))), ...(rs || [])];
   S.chat.loaded = true;
+  if (!older && !Object.keys(S.chatReads).length) await loadChatReads();
   renderChat({ keepTop: older });
+  noteChat();
 }
 
 /** A realtime change: messages and reactions arrive with the row itself; anything else reloads the latest page. */
@@ -4412,7 +4487,8 @@ function chatChange(p) {
   if (S.chat.gap && p?.table === 'chat_messages') return;   // looking at older messages: "Back to the latest" brings the new ones
   if (p?.table === 'chat_messages' && p.eventType === 'INSERT' && n?.id != null) {
     if (!S.chat.msgs.some((m) => String(m.id) === String(n.id))) S.chat.msgs.push(n);
-    return renderChat();
+    renderChat();
+    return noteChat();
   }
   if (p?.table === 'chat_messages' && p.eventType === 'DELETE' && o?.id != null) {
     S.chat.msgs = S.chat.msgs.filter((m) => String(m.id) !== String(o.id));
@@ -4463,7 +4539,7 @@ function botPost(m) {
   }
   if (d.type === 'cleanup-done') return `🗑️ Deleted the ${d.photos} ticket photos of draw #${d.round} (no win). Their results stay.`;
   if (d.type !== 'result') return esc(m.body);
-  const list = Object.keys(d.ranks || {}).map(Number).sort((a, b) => a - b).map((r) => `${d.ranks[r]}× ${r}등`).join(', ');
+  const list = Object.keys(d.ranks || {}).map(Number).sort((a, b) => a - b).map((r) => `${d.ranks[r]}× ${LT.rank(r)}`).join(', ');
   const g = d.games || 0, games = `${g} game${g === 1 ? '' : 's'}`;
   const line = !g ? 'We did not play this draw.'
     : !d.best ? `No win this time (${games}).`
@@ -4507,6 +4583,7 @@ function renderChat({ keepTop = false, noScroll = false } = {}) {
       ${cont ? '' : `<div class="cm-hd" style="--c:${clr}">${mine ? '' : `<span class="cm-av" style="--c:${clr}">${bot ? '🤖' : esc(ini(name))}</span><strong ${bot ? '' : 'data-no-i18n'}>${esc(name)}</strong>`}
         <span class="cm-time">${at.toLocaleTimeString(LOCALE, { hour: '2-digit', minute: '2-digit', hour12: false })}</span></div>`}
       <div class="cm-line"><div class="cm-bubble ${big ? 'big' : ''}" ${bot ? '' : 'data-no-i18n'}>${text}</div>
+        ${mine ? receiptHtml(m) : ''}
         <button type="button" class="cm-react-btn" data-act="chat-react-open" data-id="${m.id}" title="React" aria-label="React">☺</button></div>
       ${reacts ? `<div class="cm-reacts">${reacts}</div>` : ''}
     </div>`;
@@ -4605,7 +4682,7 @@ function chatReactOpen(btn) {
 }
 document.addEventListener('click', (e) => {
   const pop = $('chat-pop');
-  if (pop && !pop.hidden && !e.target.closest('#chat-pop, [data-act=chat-react-open]')) pop.hidden = true;
+  if (pop && !pop.hidden && !e.target.closest('#chat-pop, [data-act=chat-react-open], [data-act=chat-status]')) pop.hidden = true;
 });
 $('chat-list')?.addEventListener('scroll', () => { if (!$('chat-pop').hidden) $('chat-pop').hidden = true; }, { passive: true });
 
@@ -4785,7 +4862,7 @@ function notifText(n) {
     const who = memberName(d.author);
     return { ico: '📣', title: d.everyone ? `${who} mentioned everyone` : `${who} mentioned you`, body: plainMentions(d.excerpt || '') };
   }
-  const list = Object.keys(d.ranks || {}).map(Number).sort((a, b) => a - b).map((r) => `${d.ranks[r]}× ${r}등`).join(', ');
+  const list = Object.keys(d.ranks || {}).map(Number).sort((a, b) => a - b).map((r) => `${d.ranks[r]}× ${LT.rank(r)}`).join(', ');
   return { ico: '🎉', title: `We won in draw #${d.round}!`,
     body: d.estimated ? `${list} · prize amount to follow` : `${money(d.won)}${d.won < d.gross ? ' after tax' : ''} · ${list}` };
 }
@@ -4855,7 +4932,7 @@ const isIos = () => /iPhone|iPad|iPod/.test(navigator.userAgent);
 const PUSH_HELP = {
   all: 'Every Saturday result comes to this device.',
   win: 'You hear from us on this device when we win anything.',
-  big: 'You hear from us on this device when we win 4등 or better.',
+  big: `You hear from us on this device when we win ${LT.rank(4)} or better.`,
   none: 'No results on this device.',
 };
 /** What this device wants, as chosen on the settings page. */
@@ -5026,7 +5103,7 @@ function quietChange(r) {
 
 function qrStatusText(it) {
   if (it.status === 'win') return `🎉 won ${+it.prize > 0 ? money(it.prize) : '(amount ?)'}`;
-  return { lose: '낙첨', pending: '⏳ waiting', error: '❓ could not check', invalid: '❓ not a lotto QR' }[it.status] || it.status;
+  return { lose: LT.noWin, pending: '⏳ waiting', error: '❓ could not check', invalid: '❓ not a lotto QR' }[it.status] || it.status;
 }
 
 function describeQrChange(oldItems, newItems) {
@@ -5419,6 +5496,7 @@ const ACTIONS = {
   'chat-quick': (el) => chatSend(el.dataset.e),
   'chat-react': (el) => { $('chat-pop').hidden = true; chatToggleReact(el.dataset.id, el.dataset.e); },
   'chat-react-open': (el) => chatReactOpen(el),
+  'chat-status': (el) => chatStatusOpen(el),
   'chat-react-more': (el) => { $('chat-pop').hidden = true; chatPicker('react', el.dataset.id); },
   'chat-delete': (el) => { $('chat-pop').hidden = true; chatDelete(el.dataset.id); },
   'chat-emoji': () => chatPicker(S.chat.picker ? null : 'send'),

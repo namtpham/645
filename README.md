@@ -39,7 +39,11 @@ with an invitation key from the admin.
 - **💬 Chat** (tab): every member can write; links open in a new tab. A row of quick emoji sends
   one with a single tap, and 😊 opens a full emoji picker. Tap ☺ next to a message to react
   (👍 ❤️ 😂 😮 😢 🎉 🍀, or ➕ for any emoji); tap a reaction again to take it back. Authors (and
-  admins) can delete a message. Unread messages show a red count on the tab. Type **@** to
+  admins) can delete a message. Unread messages show a red count on the tab. Your own messages
+  show their status: **✓** sent · grey **✓✓** delivered (every member's app has it) · blue **✓✓**
+  read by everyone; "👁 2" = read by some so far. Tap the ticks to see who read it, who has it,
+  and who not yet (table `chat_reads`: how far each member's app has received and shown the chat;
+  reading on one device also clears the unread count on the others). Type **@** to
   mention someone (or **@everyone**): a list of members comes up, and the mentioned members get a
   🔔 notification (and a phone notification, if they allow 📣 Mentions). Mentions are stored as
   the member's id, so they follow name changes. **🔍** searches every message on the server

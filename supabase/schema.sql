@@ -286,6 +286,15 @@ create index if not exists money_transfers_round on public.money_transfers (roun
 alter table public.money_transfers drop constraint if exists money_transfers_kind_check;
 alter table public.money_transfers add constraint money_transfers_kind_check check (kind in ('buy', 'prize', 'pool'));
 
+-- 💬 How far each member's app has received (delivered) and shown (read) the chat: the newest message time.
+-- Senders see ✓ sent · ✓✓ delivered · blue ✓✓ read from it.
+create table if not exists public.chat_reads (
+  member       uuid primary key references public.profiles (id) on delete cascade default auth.uid(),
+  delivered_at timestamptz,
+  read_at      timestamptz,
+  updated_at   timestamptz not null default now()
+);
+
 -- 🧹 Photos of a draw that won nothing: a week later the bot proposes deleting them; once more than
 -- half of the members approve, check-tickets deletes the files (the QR results stay).
 create table if not exists public.photo_cleanups (
@@ -683,6 +692,7 @@ alter table public.notifications  enable row level security;
 alter table public.pool_holders    enable row level security;
 alter table public.money_transfers enable row level security;
 alter table public.photo_cleanups  enable row level security;
+alter table public.chat_reads      enable row level security;
 
 do $$
 declare p record;
@@ -691,7 +701,7 @@ begin
            where schemaname = 'public'
              and tablename in ('profiles', 'invites', 'settings', 'investors', 'weeks', 'tickets', 'audit_log', 'draws',
                                'pick_plans', 'group_picks', 'live_picks', 'push_subs', 'push_keys', 'my_picks',
-                               'chat_messages', 'chat_reactions', 'notifications', 'pool_holders', 'money_transfers', 'photo_cleanups')
+                               'chat_messages', 'chat_reactions', 'notifications', 'pool_holders', 'money_transfers', 'photo_cleanups', 'chat_reads')
   loop
     execute format('drop policy %I on public.%I', p.policyname, p.tablename);
   end loop;
@@ -759,6 +769,10 @@ create policy "react"          on public.chat_reactions for insert to authentica
   with check (public.is_member() and member = auth.uid());
 create policy "take back a reaction" on public.chat_reactions for delete to authenticated
   using (public.is_member() and member = auth.uid());
+create policy "read chat reads" on public.chat_reads for select to authenticated using (public.is_member());
+create policy "own chat reads"  on public.chat_reads for insert to authenticated with check (public.is_member() and member = auth.uid());
+create policy "move own chat reads" on public.chat_reads for update to authenticated
+  using (public.is_member() and member = auth.uid()) with check (member = auth.uid());
 create policy "read photo cleanups" on public.photo_cleanups for select to authenticated using (public.is_member());
 create policy "read pool holders" on public.pool_holders for select to authenticated using (public.is_member());
 create policy "set pool holders"  on public.pool_holders for insert to authenticated with check (public.is_member());
@@ -799,6 +813,7 @@ grant select, insert, delete         on public.chat_reactions to authenticated;
 grant select, delete                 on public.notifications  to authenticated;
 grant select, insert, update         on public.pool_holders    to authenticated;
 grant select                         on public.photo_cleanups  to authenticated;   -- votes: approve_cleanup()
+grant select, insert, update         on public.chat_reads      to authenticated;
 grant select, insert, delete         on public.money_transfers to authenticated;
 grant update (read_at)               on public.notifications  to authenticated;
 
@@ -845,7 +860,7 @@ do $$
 declare t text;
 begin
   foreach t in array array['investors', 'weeks', 'tickets', 'settings', 'profiles', 'draws', 'pick_plans', 'group_picks', 'live_picks',
-                           'chat_messages', 'chat_reactions', 'notifications', 'pool_holders', 'money_transfers', 'photo_cleanups'] loop
+                           'chat_messages', 'chat_reactions', 'notifications', 'pool_holders', 'money_transfers', 'photo_cleanups', 'chat_reads'] loop
     if not exists (select 1 from pg_publication_tables
                    where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = t) then
       execute format('alter publication supabase_realtime add table public.%I', t);
