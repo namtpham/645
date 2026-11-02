@@ -71,6 +71,8 @@ with an invitation key from the admin.
   the active members approve, the photo files are deleted. The tickets, their QR codes and results
   stay (the photo shows as 🗑️). Table `photo_cleanups`, function `approve_cleanup()`, column
   `tickets.photo_deleted_at`; the deleting is done by `check-tickets`.
+- **Week entry, pool money:** 5K / 10K / 15K / 20K / +1K / −1K add to the amount used from the pool
+  (never more than the pool has); **0** and **All** set it.
 - **A small sum before important changes** (e.g. 7 × 8 = ?, answered on a number pad): saving
   changes to or deleting a week entry, saving changes to an investor, deleting a ticket photo,
   correcting the pool keepers, undoing a transfer, clearing all numbers, and the admin's member
@@ -155,6 +157,11 @@ with an invitation key from the admin.
   - How many groups of 6 we play comes from the draw's **week entry** (fresh money + pool used,
     ₩1,000 a group); it is read-only here, with **✏️ Edit the week entry** next to it. 🛒 Buy
     follows the same number, and the week entry is where 💰 Money starts.
+  - **✍️ 수동 / 🎲 자동** slider under the count: by default every group is 수동 (manual: we pick the
+    numbers); dragging it moves groups to 자동 (auto: the shop picks them at random). Only the 수동
+    groups are picked here and go into the shop QR codes; in 🛒 Buy each buyer also sees how many
+    자동 games to ask for at the counter. The cost and 💰 Money don't change (column
+    `pick_plans.auto`). The QR code carries 수동 games only: the slip format we know has no 자동 code.
   - **🧹 Clear all numbers** removes every number of the draw. Deleting the week entry sets the
     groups back to 0.
   - Each group shows 45 round buttons: gray = free, coloured = taken. Every member has their

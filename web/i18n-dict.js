@@ -1200,4 +1200,13 @@ window.I18N_DICT = [
   ['Cancel the reply', '답장 취소', 'Hủy trả lời'],
   ['{*} replied to you', '{*1} 님이 답장했습니다', '{*1} đã trả lời bạn'],
   ['Pins need the database update: run supabase/schema.sql again.', '고정 기능에는 데이터베이스 업데이트가 필요합니다: supabase/schema.sql을 다시 실행하세요.', 'Ghim cần cập nhật cơ sở dữ liệu: chạy lại supabase/schema.sql.'],
+  ['we choose', '직접 고름', 'chúng ta chọn'],
+  ['random at the store', '판매점에서 무작위', 'ngẫu nhiên tại cửa hàng'],
+  ['🎲 All {0} games are {*}: the shop picks every number at random. Move the slider above toward {*} to choose numbers ourselves.', '🎲 {0}게임 모두 {*1}: 판매점에서 번호를 무작위로 고릅니다. 직접 고르려면 위의 슬라이더를 {*2} 쪽으로 옮기세요.', '🎲 Cả {0} vé đều {*1}: cửa hàng chọn ngẫu nhiên mọi số. Kéo thanh trượt phía trên về {*2} để tự chọn số.'],
+  ['All {0} {*} groups have numbers: move the slider toward {*}, or raise the money in the week entry.', '{*1} {0}조합에 모두 번호가 있습니다: 슬라이더를 {*2} 쪽으로 옮기거나 주간 기록의 금액을 늘리세요.', 'Cả {0} bộ {*1} đều đã có số: kéo thanh trượt về {*2}, hoặc tăng tiền trong mục tuần.'],
+  ['🎲 + {0} {*} games (₩{#}): ask at the counter for {#} 자동 (random numbers).', '🎲 + {*1} {0}게임 (₩{*2}): 판매점에서 자동 {*3}게임을 달라고 하세요.', '🎲 + {0} vé {*1} (₩{*2}): hỏi quầy {*3} vé 자동 (số ngẫu nhiên).'],
+  ['🎲 + {0} {*} game (₩{#}): ask at the counter for {#} 자동 (random numbers).', '🎲 + {*1} {0}게임 (₩{*2}): 판매점에서 자동 {*3}게임을 달라고 하세요.', '🎲 + {0} vé {*1} (₩{*2}): hỏi quầy {*3} vé 자동 (số ngẫu nhiên).'],
+  ['The pool has ₩{0}.', '적립금은 ₩{0}입니다.', 'Quỹ có ₩{0}.'],
+  ['Each button adds to the amount', '버튼마다 금액에 더해집니다', 'Mỗi nút cộng thêm vào số tiền'],
+  ['All', '전부', 'Tất cả'],
 ];

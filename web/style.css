@@ -1283,3 +1283,17 @@ table.bt td, table.bt th { padding: 8px 10px; }
 .pin-row .pin-msg { grid-column: 1; border: none; background: none; color: var(--text); font: inherit; font-size: 13.5px; text-align: left; cursor: pointer; padding: 0; overflow-wrap: anywhere; }
 .pin-row .fhelp { grid-column: 1; }
 .pin-row .btn { grid-column: 2; grid-row: 1 / span 2; align-self: center; }
+
+/* ✍️ 수동 / 🎲 자동 slider */
+.mix { margin: 6px 0 4px; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--border); background: rgba(255,255,255,.03); }
+.mix-labels { display: flex; justify-content: space-between; gap: 8px; font-size: 13px; margin-bottom: 6px; }
+.mix-labels strong { font: 700 18px var(--mono); color: var(--gold); }
+.mix-labels span:last-child strong { color: #60a5fa; }
+.mix-labels small { color: var(--muted); font-size: 11px; }
+.mix-slider { width: 100%; accent-color: var(--gold);
+  background: linear-gradient(90deg, var(--gold) 0 var(--p), #60a5fa var(--p) 100%); height: 6px; border-radius: 3px; appearance: none; -webkit-appearance: none; }
+.mix-slider::-webkit-slider-thumb { -webkit-appearance: none; width: 22px; height: 22px; border-radius: 50%; background: #fff; border: 3px solid var(--gold); cursor: pointer; }
+.mix-slider::-moz-range-thumb { width: 18px; height: 18px; border-radius: 50%; background: #fff; border: 3px solid var(--gold); cursor: pointer; }
+.mix-slider:disabled { opacity: .5; }
+.buy-auto { margin: 6px 0; padding: 8px 12px; border-radius: 10px; background: rgba(96,165,250,.1); border: 1px solid rgba(96,165,250,.35); font-size: 13px; }
+.pool-quick { margin-top: 6px; flex-wrap: wrap; }

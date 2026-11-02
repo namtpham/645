@@ -104,7 +104,12 @@ const LT = {
   sorryEnd: { ko: '낙첨되었습니다.', vi: 'không trúng.' }[LANG] || 'this time.',
   winNums: { ko: '당첨번호', vi: 'Số trúng' }[LANG] || 'Winning numbers',
   draw: (n) => ({ ko: `제${n}회`, vi: `Kỳ #${n}` }[LANG] || `Draw #${n}`),
+  manual: { ko: '수동', vi: 'Tự chọn (수동)' }[LANG] || 'Manual (수동)',
+  auto: { ko: '자동', vi: 'Ngẫu nhiên (자동)' }[LANG] || 'Auto (자동)',
 };
+/** 수동 (we pick the numbers) vs 자동 (the shop picks at random): groups 1…manual are 수동, the rest 자동. */
+const autoN = (B = S.board) => Math.max(0, Math.min(+B.auto || 0, B.groups || 0));
+const manualN = (B = S.board) => (B.groups || 0) - autoN(B);
 document.addEventListener('DOMContentLoaded', () => document.querySelectorAll('[data-on-input=lang]').forEach((el) => { el.value = LANG; }));
 const fmtShort = (d) => new Date(d + 'T12:00:00Z').toLocaleDateString(LOCALE, { day: '2-digit', month: 'short', year: '2-digit', timeZone: 'UTC' });
 const fmtD = (d) => d ? new Date(d + 'T12:00:00Z').toLocaleDateString(LOCALE, { day: '2-digit', month: 'short', year: 'numeric', timeZone: 'UTC' }) : '—';
@@ -851,13 +856,13 @@ function renderDuty() {
   if (!el) return;
   const close = kstAt(d, SALES_CLOSE).getTime();
   if (B.missing || B.round !== drawNo(d) || !B.groups || Date.now() >= close) { el.innerHTML = ''; return; }
-  const groups = Array.from({ length: B.groups }, (_, i) => ({ g: i + 1, nums: groupPicks(i + 1).map((p) => p.num) }));
+  const groups = Array.from({ length: manualN(B) }, (_, i) => ({ g: i + 1, nums: groupPicks(i + 1).map((p) => p.num) }));
   const { bought } = matchBought(groups, realGames(B.round));
   const list = buyerList(), mine = list.filter((b) => b.by === S.me.id);
   const when = `sales close Sat ${SALES_CLOSE} KST (in ${countdown(close - Date.now())})`;
   const btn = (t) => `<button class="btn btn-primary btn-sm" data-act="goto-buy">${t}</button>`;
   if (mine.length) {
-    const r = mine.map((b) => buyerCodes(b, bought)), games = sum(r.map((x) => x.games.length)), open = r.flatMap((x) => x.open);
+    const r = mine.map((b) => buyerCodes(b, bought)), games = sum(r.map((x) => x.games.length + x.auto)), open = r.flatMap((x) => x.open);
     const ranges = mine.map((b) => (b.from === b.to ? b.from : `${b.from}–${b.to}`)).join(', ');
     el.innerHTML = games
       ? `<div class="duty todo"><span>🛒 <strong>Your turn to buy</strong>: groups ${ranges} · ${games} game${games > 1 ? 's' : ''} (${esc(money(games * TICKET_PRICE))})
@@ -1938,7 +1943,7 @@ function renderSuggestions(ready) {
     </div>`;
   // suggestions already merged into our picks (same numbers in a group)
   const inBoard = new Map();
-  for (let g = S.board.groups; g >= 1; g--) inBoard.set(groupPicks(g).map((q) => q.num).join(), g);
+  for (let g = manualN(); g >= 1; g--) inBoard.set(groupPicks(g).map((q) => q.num).join(), g);
   $('picks-list').innerHTML = key6 + (picks.length ? picks.map((p, i) => `<div class="pick">
       <div class="pick-rank">${i + 1}</div>
       <div class="pick-main">
@@ -2051,7 +2056,7 @@ async function loadBoard() {
     S.sb.from('group_picks').select('*').eq('round', round).order('created_at'),
   ]);
   const err = pl.error || gp.error;   // tables not created yet → ask the admin to run the schema
-  S.board = { ...S.board, round, groups: pl.data?.groups || 0, buyers: Array.isArray(pl.data?.buyers) ? pl.data.buyers : [],
+  S.board = { ...S.board, round, groups: pl.data?.groups || 0, auto: pl.data?.auto || 0, buyers: Array.isArray(pl.data?.buyers) ? pl.data.buyers : [],
     picks: err ? [] : gp.data || [], missing: !!err };
 }
 
@@ -2171,6 +2176,11 @@ function renderBoard() {
   const members = S.profiles.filter((p) => p.status === 'active');
   $('board-legend').innerHTML = members.map((p) => `<span class="${p.id === S.me.id ? 'me' : ''}"><span class="sw" style="--c:${memberColor(p.id)}"></span>${esc(p.display_name)}${p.id === S.me.id ? ' (you)' : ''}</span>`).join('')
     + `<span><span class="sw" style="--c:${ENGINE_COLOR}"></span>🤖 engine</span>`;
+  if (B.groups && !manualN(B)) {
+    $('board-body').innerHTML = `<div class="empty"><p>🎲 All ${B.groups} games are ${esc(LT.auto)}: the shop picks every number at random.
+      Move the slider above toward ${esc(LT.manual)} to choose numbers ourselves.</p></div>`;
+    return;
+  }
   if (!B.groups) {
     $('board-body').innerHTML = `<div class="empty"><p>How many groups we play for draw #${target} comes from its week entry:
       who puts in fresh money and how much comes from the pool (₩1,000 a group).</p>
@@ -2179,7 +2189,7 @@ function renderBoard() {
   }
   const scale = boardScale(), stars = (f) => '★★★★★'.slice(0, Math.max(1, Math.round(f / 20))).padEnd(5, '☆');
   try { localStorage.setItem('645-board-layout', JSON.stringify(_layout)); } catch { /* private mode */ }
-  const groups = Array.from({ length: B.groups }, (_, i) => {
+  const groups = Array.from({ length: manualN(B) }, (_, i) => {
     const g = i + 1, picks = groupPicks(g), nums = picks.map((p) => p.num), full = nums.length >= 6;
     const r = scale && full ? scale.rate(nums) : null;
     return { g, picks, nums, full, r };
@@ -2187,7 +2197,7 @@ function renderBoard() {
   const scoreHtml = (x) => (!x.r ? ''
     : `<div class="stars">${stars(x.r.fit)}</div><div>score ${x.r.fit.toFixed(0)} · better than ${Math.min(99, Math.floor(x.r.percentile))}% of random sets</div>`);
   const busy = (g) => (B.busy[g] ? 'disabled' : '');
-  const hidden = B.picks.filter((p) => p.grp > B.groups).length;
+  const hidden = B.picks.filter((p) => p.grp > manualN(B)).length;
   const done = groups.filter((x) => x.full);
   const { bought, extras } = matchBought(groups, realGames(B.round));
   const boughtBadge = (b) => `<span class="bg-badge bought" title="${esc(`${memberName(b.by)}'s ticket photo, game ${b.label}`)}">🛒 Bought by ${esc(memberName(b.by))}</span>`;
@@ -2195,7 +2205,7 @@ function renderBoard() {
   $('board-body').innerHTML = `<div class="board-sum">
       <div class="bsum-hd">
         <div class="card-title">🧾 Our tickets</div>
-        <span class="fhelp">${done.length} of ${B.groups} groups complete · ${nBought} bought${extras.length ? ` (${extras.length} extra from photos)` : ''}
+        <span class="fhelp">${done.length} of ${manualN(B)} groups complete${autoN(B) ? ` · +${autoN(B)} ${LT.auto}` : ''} · ${nBought} bought${extras.length ? ` (${extras.length} extra from photos)` : ''}
           · ${esc(money((B.groups + extras.length) * TICKET_PRICE))}</span>
         <button class="btn btn-ghost btn-sm" data-act="board-scores" aria-pressed="${_showScores}">${_showScores ? '⭐ Hide scores' : '⭐ Show scores'}</button>
         ${done.length ? `<button class="btn btn-ghost btn-sm" data-act="copy" data-text="${esc(done.map((x) => `${x.g}: ${x.nums.map(two).join(' ')}`).join('\n'))}">Copy complete groups</button>` : ''}
@@ -2241,7 +2251,7 @@ function renderBoard() {
         </div>
       </div>
     </div>`).join('')}</div>
-    ${hidden ? `<p class="fhelp" style="margin-top:10px">Groups above ${B.groups} still hold ${hidden} number${hidden > 1 ? 's' : ''}; raise the count to see them again.</p>` : ''}
+    ${hidden ? `<p class="fhelp" style="margin-top:10px">Groups above ${manualN(B)} still hold ${hidden} number${hidden > 1 ? 's' : ''}; raise the count to see them again.</p>` : ''}
 `;
   applyFocus();
 }
@@ -2277,6 +2287,13 @@ function renderGroupsInfo() {
   if (!el) return;
   const fresh = w ? sum(Object.values(w.investments || {}).map(Number)) : 0, pool = +w?.pool_used || 0;
   const locked = buyersLocked(B.round), picked = B.picks.filter((p) => p.grp <= (B.groups || 0)).length;
+  const m = manualN(B), a = autoN(B);
+  const mix = B.groups ? `<div class="mix" title="${esc(LT.manual)}: we choose the numbers · ${esc(LT.auto)}: random at the store">
+      <div class="mix-labels"><span>✍️ <strong id="mix-m">${m}</strong> ${esc(LT.manual)} <small>we choose</small></span>
+        <span><small>random at the store</small> ${esc(LT.auto)} <strong id="mix-a">${a}</strong> 🎲</span></div>
+      <input type="range" class="mix-slider" min="0" max="${B.groups}" step="1" value="${m}" data-on-input="board-mix" aria-label="${esc(LT.manual)} groups" ${locked ? 'disabled' : ''}
+        style="--p:${B.groups ? (m / B.groups) * 100 : 100}%">
+    </div>` : '';
   el.innerHTML = `<div class="bgi-main">
       <span class="bgi-n">${B.groups || 0}</span>
       <span><strong>group${B.groups === 1 ? '' : 's'} of 6 this week</strong>
@@ -2284,9 +2301,24 @@ function renderGroupsInfo() {
       <button type="button" class="btn btn-secondary btn-sm" data-act="board-week">${w ? '✏️ Edit the week entry' : '＋ Add the week entry'}</button>
       ${picked && !locked ? '<button type="button" class="btn btn-ghost btn-sm" data-act="board-clear-all">🧹 Clear all numbers</button>' : ''}
     </div>
+    ${mix}
     ${locked ? '<p class="fhelp">🔒 Buyers are set: every transfer for this draw is done (💰 Money).</p>' : ''}
     ${w && (fresh + pool) % TICKET_PRICE ? `<p class="fhelp warn-txt">⚠️ ${esc(money((fresh + pool) % TICKET_PRICE))} of the week's money doesn't make a whole group.</p>` : ''}`;
 }
+/** The 수동 / 자동 slider: shown while dragging, saved when let go. */
+function mixInput(el, e) {
+  const B = S.board, m = +el.value, a = (B.groups || 0) - m;
+  $('mix-m').textContent = m; $('mix-a').textContent = a;
+  el.style.setProperty('--p', `${B.groups ? (m / B.groups) * 100 : 100}%`);
+  if (e.type !== 'change' || a === autoN(B)) return;
+  if (buyersLocked(B.round)) return renderGroupsInfo();
+  B.auto = a;
+  renderPicks();
+  S.sb.from('pick_plans').update({ auto: a }).eq('round', B.round).then(({ error }) => {
+    if (error) { fail(/auto/.test(error.message) ? new Error('The database needs an update: run supabase/schema.sql again.') : error); loadBoard().then(renderPicks); }
+  });
+}
+
 function openRoundWeek(round) {
   const w = weekFor(round);
   openWeekModal(w?.id || null, drawDate(round));
@@ -2365,7 +2397,7 @@ async function engineFill(g, mode) {
   await new Promise((r) => setTimeout(r, 20));   // let the page show the busy state
   const res = suggestPartial(hist, { fixed: have, k, seed: target * 7919 + g * 131, count: 8 });
   // when completing a group, don't repeat a set another group already has
-  const others = new Set(Array.from({ length: B.groups }, (_, i) => i + 1).filter((x) => x !== g).map((x) => groupPicks(x).map((p) => p.num).join()));
+  const others = new Set(Array.from({ length: manualN(B) }, (_, i) => i + 1).filter((x) => x !== g).map((x) => groupPicks(x).map((p) => p.num).join()));
   const pick = res.picks.find((p) => have.length + k < 6 || !others.has(p.nums.join())) || res.picks[0];
   const rows = (pick?.part || []).map((num) => ({ round: target, grp: g, num, by_engine: true }));
   const { error } = rows.length ? await S.sb.from('group_picks').insert(rows) : {};
@@ -2380,15 +2412,9 @@ async function mergeSuggestion(i) {
   const B = S.board, p = _picks?.picks[i];
   if (!p) return;
   if (B.missing) { toast('Picking together needs the database update (see ✍️ Picks).', 'err'); return; }
-  let g = Array.from({ length: B.groups }, (_, j) => j + 1).find((x) => !groupPicks(x).length);
-  if (!g) {
-    g = B.groups + 1;
-    while (groupPicks(g).length) g++;   // groups hidden by a lower count may still hold numbers
-    if (g > 100) { toast('We already have 100 groups.', 'err'); return; }
-    const { error } = await S.sb.from('pick_plans').upsert({ round: B.round, groups: g }, { onConflict: 'round' });
-    if (error) { fail(error); return; }
-    B.groups = g;
-  }
+  const g = Array.from({ length: manualN(B) }, (_, j) => j + 1).find((x) => !groupPicks(x).length);
+  // the number of groups comes from the week entry, and the slider splits them into 수동 and 자동
+  if (!g) { toast(`All ${manualN(B)} ${LT.manual} groups have numbers: move the slider toward ${LT.manual}, or raise the money in the week entry.`, 'err'); return; }
   const mine = new Set(p.part ? _picks.fixed : []);   // own numbers typed in Suggestion stay the member's
   const rows = p.nums.map((num) => ({ round: B.round, grp: g, num, by_engine: !mine.has(num) }));
   const { error } = await S.sb.from('group_picks').insert(rows);
@@ -2538,8 +2564,9 @@ function previewBuyerEnd(el) {
 
 /** The games one buyer takes to the shop: complete groups in their range not bought yet, ≤ 20 per QR code. */
 function buyerCodes(b, bought) {
-  const games = [], open = [], done = [];
-  for (let g = b.from; g <= Math.min(b.to, S.board.groups); g++) {
+  const games = [], open = [], done = [], m = manualN();
+  const auto = Math.max(0, Math.min(b.to, S.board.groups) - Math.max(b.from, m + 1) + 1);   // 자동 games in this range
+  for (let g = b.from; g <= Math.min(b.to, m); g++) {
     const nums = groupPicks(g).map((p) => p.num);
     if (bought[g]) done.push(g);
     else if (nums.length === 6) games.push({ g, nums });
@@ -2550,7 +2577,7 @@ function buyerCodes(b, bought) {
     const part = games.slice(i, i + QR_MAX_GAMES);
     codes.push({ games: part, payload: eslipPayload(part.map((x) => x.nums)) });
   }
-  return { games, open, done, codes };
+  return { games, open, done, codes, auto };
 }
 
 let _qrFull = null, _wakeLock = null;   // { codes: [{ payload, cap }], i }
@@ -2600,7 +2627,7 @@ function renderBuy(own = false) {
     return;
   }
   const list = buyerList(), members = S.profiles.filter((p) => p.status === 'active' || list.some((b) => b.by === p.id));
-  const groups = Array.from({ length: B.groups }, (_, i) => ({ g: i + 1, nums: groupPicks(i + 1).map((p) => p.num) }));
+  const groups = Array.from({ length: manualN(B) }, (_, i) => ({ g: i + 1, nums: groupPicks(i + 1).map((p) => p.num) }));
   const { bought } = matchBought(groups, realGames(B.round));
   const m = B.groups, nobody = list.filter((b) => !b.by);
   // a live update from someone else leaves a menu being opened or a slider being dragged alone
@@ -2671,10 +2698,12 @@ function renderBuy(own = false) {
       }).join('');
       return `<div class="card buy-card${mine ? ' mine' : ''}">
         <div class="card-hd"><div class="card-title">🛒 ${who}${mine ? ' (you)' : ''} · groups ${b.from}–${Math.min(b.to, B.groups)}</div>
-          <span class="fhelp">${r.games.length} game${r.games.length === 1 ? '' : 's'} to buy · ${esc(money(r.games.length * TICKET_PRICE))}</span></div>
+          <span class="fhelp">${r.games.length + r.auto} game${r.games.length + r.auto === 1 ? '' : 's'} to buy · ${esc(money((r.games.length + r.auto) * TICKET_PRICE))}</span></div>
         ${r.done.length ? `<p class="buy-done">✓ Already bought: group${r.done.length > 1 ? 's' : ''} ${rangeText(r.done)}</p>` : ''}
         ${r.open.length ? `<p class="buy-issue">⚠️ Not complete, left out: group${r.open.length > 1 ? 's' : ''} ${rangeText(r.open)}</p>` : ''}
-        ${figs ? `<div class="qr-grid">${figs}</div>` : `<p class="fhelp">${r.done.length ? 'Everything in this range is bought. 🎉' : 'No complete groups in this range yet.'}</p>`}
+        ${r.auto ? `<p class="buy-auto">🎲 + ${r.auto} ${esc(LT.auto)} game${r.auto === 1 ? '' : 's'} (${esc(money(r.auto * TICKET_PRICE))}): ask at the counter for ${r.auto} 자동 (${LANG === 'ko' ? `자동 ${r.auto}게임` : 'random numbers'}).</p>` : ''}
+        ${figs ? `<div class="qr-grid">${figs}</div>` : r.auto && !r.open.length && !r.done.length && !r.games.length ? ''
+          : `<p class="fhelp">${r.done.length ? 'Everything in this range is bought. 🎉' : 'No complete groups in this range yet.'}</p>`}
       </div>`;
     }).join('');
 }
@@ -3014,7 +3043,7 @@ function liveBoard(round) {
       S.sb.from('pick_plans').select('*').eq('round', round).maybeSingle(),
       S.sb.from('group_picks').select('*').eq('round', round).order('created_at'),
     ]).then(([pl, gp]) => {
-      _liveBoard = { round, groups: pl.data?.groups || 0, picks: gp.data || [] };
+      _liveBoard = { round, groups: pl.data?.groups || 0, auto: pl.data?.auto || 0, picks: gp.data || [] };
       if (S.tab === 'picks' && _picksSec === 'live') renderLive();
     }).catch(console.error);
   }
@@ -3025,8 +3054,8 @@ function liveBoard(round) {
 function ourTickets(round) {
   const B = liveBoard(round);
   if (!B) return null;
-  const groups = Array.from({ length: B.groups }, (_, i) => ({ g: i + 1, nums: B.picks.filter((p) => p.grp === i + 1).map((p) => p.num).sort((a, b) => a - b) }));
-  const { bought, extras } = matchBought(groups, realGames(round));
+  const groups = Array.from({ length: manualN(B) }, (_, i) => ({ g: i + 1, nums: B.picks.filter((p) => p.grp === i + 1).map((p) => p.num).sort((a, b) => a - b) }));
+  const { bought, extras } = matchBought(groups, realGames(round));   // 자동 games come in as extras from the photos
   const out = [];
   for (const x of groups) {
     const b = bought[x.g];
@@ -5571,6 +5600,13 @@ const ACTIONS = {
   'picks-more': () => { _picksCount += 10; renderPicks(); },
   'pick-k': (el) => setPickK(+el.dataset.k),
   'board-week': () => openRoundWeek(S.board.round),
+  'wm-pool-q': (el) => {   // the pool buttons add up (0 and All set it), never more than the pool has
+    const max = Math.round(_wmPool.total), cur = amt($('wm-pool-used').value);
+    const v = el.dataset.set === 'all' ? max : el.dataset.set != null ? +el.dataset.set : cur + +el.dataset.add;
+    $('wm-pool-used').value = fmtAmt(Math.max(0, Math.min(max, v))) || '0';
+    if (v > max) toast(`The pool has ${money(max)}.`, 'err');
+    previewWeek();
+  },
   'board-clear-all': () => clearBoard(),
   'ask-ok': () => answerAsk(true),
   'picks-refresh': (el) => { el.disabled = true; checkResults().then(() => loadAll()).then(() => renderPicks()).catch((e) => { fail(e); el.disabled = false; }); },
@@ -5699,6 +5735,7 @@ const ACTIONS = {
 const INPUTS = {
   'im-pay': () => payHint(),
   'pool-amt': () => poolEditSum(),
+  'board-mix': (el, e) => mixInput(el, e),
   'me-tz': (el, e) => { if (e.type === 'change') setTz(el.value); },
   'pool-give-field': (el, e) => {
     if (!_poolGive) return;

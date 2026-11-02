@@ -760,6 +760,16 @@
         <div class="fgrp pool-use">
           <label class="flbl" for="wm-pool-used">Use from pool</label>
           <input type="text" class="finp" id="wm-pool-used" data-amount inputmode="numeric" autocomplete="off" placeholder="0" data-on-input="wm-preview">
+          <div class="quick-row pool-quick" title="Each button adds to the amount">
+            <button type="button" class="qb" data-act="wm-pool-q" data-add="5000">5K</button>
+            <button type="button" class="qb" data-act="wm-pool-q" data-add="10000">10K</button>
+            <button type="button" class="qb" data-act="wm-pool-q" data-add="15000">15K</button>
+            <button type="button" class="qb" data-act="wm-pool-q" data-add="20000">20K</button>
+            <button type="button" class="qb qb-minus" data-act="wm-pool-q" data-add="-1000">−1K</button>
+            <button type="button" class="qb qb-plus" data-act="wm-pool-q" data-add="1000">+1K</button>
+            <button type="button" class="qb" data-act="wm-pool-q" data-set="0">0</button>
+            <button type="button" class="qb" data-act="wm-pool-q" data-set="all">All</button>
+          </div>
         </div>
       </div>
 

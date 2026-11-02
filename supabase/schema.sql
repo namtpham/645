@@ -175,6 +175,10 @@ alter table public.pick_plans add column if not exists buyers jsonb not null def
 -- 0 groups: the draw has no week entry (yet, or any more)
 alter table public.pick_plans drop constraint if exists pick_plans_groups_check;
 alter table public.pick_plans add constraint pick_plans_groups_check check (groups between 0 and 100);
+-- 🎲 자동: how many of the groups the shop picks at random (the rest, 수동, we pick ourselves)
+alter table public.pick_plans add column if not exists auto int not null default 0;
+alter table public.pick_plans drop constraint if exists pick_plans_auto_check;
+alter table public.pick_plans add constraint pick_plans_auto_check check (auto between 0 and 100);
 
 create table if not exists public.group_picks (
   round      int not null,
