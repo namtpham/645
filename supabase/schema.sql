@@ -643,12 +643,14 @@ end $$;
 
 -- 🧹 Clear every number picked for a draw (✍️ Picks → Clear all; the app asks a small sum first).
 -- Members may otherwise only take back their own numbers, so this goes through here.
-create or replace function public.clear_group_picks(p_round int)
+-- Groups already bought (on a ticket photo) are kept: p_keep.
+drop function if exists public.clear_group_picks(int);
+create or replace function public.clear_group_picks(p_round int, p_keep int[] default '{}')
 returns int language plpgsql security definer set search_path = public as $$
 declare n int;
 begin
   if not is_member() then raise exception 'Members only'; end if;
-  delete from group_picks where round = p_round;
+  delete from group_picks where round = p_round and not (grp = any(coalesce(p_keep, '{}')));
   get diagnostics n = row_count;
   return n;
 end $$;
@@ -864,7 +866,7 @@ grant execute on function public.is_member(), public.is_admin(), public.normaliz
   to authenticated;
 grant execute on function public.move_ticket_to_qr_draw(uuid) to authenticated;
 grant execute on function public.delete_ticket(uuid, text) to authenticated;
-grant execute on function public.clear_group_picks(int) to authenticated;
+grant execute on function public.clear_group_picks(int, int[]) to authenticated;
 grant execute on function public.approve_cleanup(int, boolean) to authenticated;
 grant execute on function public.pin_message(bigint, boolean) to authenticated;
 grant execute on function public.check_invite(text), public.username_available(text, text),

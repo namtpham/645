@@ -164,7 +164,12 @@ with an invitation key from the admin.
     their colour (also full screen); the card says how many 자동 to ask for at the counter. Buyers,
     the week's money and the split can change at any time: ✓ Done transfers count as payments and
     💰 Money shows what is still to send (or to give back). The QR code carries 수동 games only: the
-    slip format we know has no 자동 code.
+    slip format we know has no 자동 code. A buyer's QR code comes once **all** their 수동 groups have
+    6 numbers (until then the card says which still need numbers), so it never goes stale.
+  - **Bought tickets are the baseline:** once ticket photos are in, a 수동 group whose numbers are on a
+    photo is bought: its numbers can't change, it stays with the buyer whose photo it is on, and a
+    buyer keeps at least as many 자동 as the other games on their photos. Changes that would break
+    this are refused with the reason; **🧹 Clear all** keeps the bought groups.
   - **🧹 Clear all numbers** removes every number of the draw. Deleting the week entry sets the
     groups back to 0.
   - Each group shows 45 round buttons: gray = free, coloured = taken. Every member has their

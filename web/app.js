@@ -862,12 +862,16 @@ function renderDuty() {
   const when = `sales close Sat ${SALES_CLOSE} KST (in ${countdown(close - Date.now())})`;
   const btn = (t) => `<button class="btn btn-primary btn-sm" data-act="goto-buy">${t}</button>`;
   if (mine.length) {
-    const r = mine.map((b) => buyerCodes(b, bought)), games = sum(r.map((x) => x.games.length + x.auto)), open = r.flatMap((x) => x.open);
-    const ranges = mine.map((b) => (b.manual ? (b.gFrom === b.gTo ? `${b.gFrom}` : `${b.gFrom}–${b.gTo}`) : '')).filter(Boolean).join(', ') || '—';
-    el.innerHTML = games
-      ? `<div class="duty todo"><span>🛒 <strong>Your turn to buy</strong>: groups ${ranges} · ${games} game${games > 1 ? 's' : ''} (${esc(money(games * TICKET_PRICE))})
-          · ${when}${open.length ? ` · ⚠️ group${open.length > 1 ? 's' : ''} ${rangeText(open)} not complete yet` : ''}</span>${btn('Show my QR codes')}</div>`
-      : `<div class="duty done"><span>✓ Your groups for #${B.round} (${ranges}) are bought${open.length ? `, except unfinished group${open.length > 1 ? 's' : ''} ${rangeText(open)}` : ''}. Thanks!</span></div>`;
+    const r = mine.map((b) => buyerCodes(b, bought)), open = r.flatMap((x) => x.open);
+    const n = sum(mine.map((b) => b.n)), man = sum(mine.map((b) => b.manual)), auto = sum(mine.map((b) => b.auto));
+    const ready = man - open.length, autoDone = Math.min(auto, boughtNow().autoBy[S.me.id] || 0);
+    const ranges = mine.map((b) => (b.manual ? (b.gFrom === b.gTo ? `${b.gFrom}` : `${b.gFrom}–${b.gTo}`) : '')).filter(Boolean).join(', ');
+    const left = sum(r.map((x) => x.games.length)) + open.length + auto - autoDone;
+    el.innerHTML = left
+      ? `<div class="duty todo"><span>🛒 <strong>Your turn to buy</strong>: ${n} game${n > 1 ? 's' : ''} (${esc(money(n * TICKET_PRICE))}) ·
+          ${man} ${esc(LT.manual)}${man ? ` (group${man > 1 ? 's' : ''} ${ranges}, ${ready} of ${man} ready)` : ''} + ${auto} ${esc(LT.auto)} · ${when}
+          ${open.length ? ` · ⚠️ group${open.length > 1 ? 's' : ''} ${rangeText(open)} still need${open.length > 1 ? '' : 's'} numbers: the QR code comes when all are complete` : ''}</span>${btn(open.length ? 'Pick numbers' : 'Show my QR codes')}</div>`
+      : `<div class="duty done"><span>✓ Your ${n} games for #${B.round} are bought. Thanks!</span></div>`;
     return;
   }
   const ready = groups.filter((x) => x.nums.length === 6 && !bought[x.g]).length;
@@ -2335,18 +2339,20 @@ async function mathCheck(what) {
 
 /** 🧹 Clear every number of this draw, after a small sum (so it isn't done by accident). */
 async function clearBoard() {
-  const B = S.board, n = B.picks.length;
-  if (!n) return;
-  if (!(await mathCheck(`Clear all ${n} numbers picked for draw #${B.round}?`))) return;
-  const { error } = await S.sb.rpc('clear_group_picks', { p_round: B.round });
+  const B = S.board, keep = Object.keys(boughtNow().bought).map(Number), n = B.picks.filter((p) => !keep.includes(p.grp)).length;
+  if (!n) return toast('Only bought groups have numbers: they stay.', 'err');
+  if (!(await mathCheck(`Clear all ${n} numbers picked for draw #${B.round}?${keep.length ? ` Bought groups (${rangeText(keep)}) keep theirs.` : ''}`))) return;
+  const { error } = await S.sb.rpc('clear_group_picks', { p_round: B.round, p_keep: keep });
   if (error) return fail(/clear_group_picks/.test(error.message) ? new Error('The database needs an update: run supabase/schema.sql again.') : error);
-  B.picks = [];
+  B.picks = B.picks.filter((p) => keep.includes(p.grp));
   toast(`🧹 Cleared all ${n} numbers.`, 'ok');
   renderPicks();
 }
 
+const boughtStays = (g) => { if (!isBought(g)) return false; toast(`Group ${g} is bought (it's on a ticket photo): its numbers stay as they are.`, 'err'); return true; };
 async function toggleBoardNum(g, n) {
   const B = S.board, p = B.picks.find((q) => q.grp === g && q.num === n);
+  if (boughtStays(g)) return;
   if (p) {
     if (p.picked_by !== S.me.id && !p.by_engine && !isAdmin()) { toast(`${memberName(p.picked_by)} picked ${n}. Only they or an admin can take it back.`, 'err'); return; }
     B.picks = B.picks.filter((q) => q !== p);
@@ -2365,6 +2371,7 @@ async function toggleBoardNum(g, n) {
 /** The engine picks one number (or fills the group) around the numbers already in it. */
 async function engineFill(g, mode) {
   const B = S.board, target = B.round, have = groupPicks(g).map((p) => p.num);
+  if (boughtStays(g)) return;
   const hist = pickHistory().filter((d) => d.round < target);
   if (have.length >= 6) return;
   if (hist.length < 100) { toast('Past winning numbers are still loading. Try again in a moment.', 'err'); return; }
@@ -2403,6 +2410,7 @@ async function mergeSuggestion(i) {
 
 async function clearMine(g) {
   const B = S.board;
+  if (boughtStays(g)) return;
   B.picks = B.picks.filter((p) => !(p.grp === g && p.picked_by === S.me.id));
   renderBoard();
   const { error } = await S.sb.from('group_picks').delete().eq('round', B.round).eq('grp', g).eq('picked_by', S.me.id);
@@ -2492,8 +2500,37 @@ function buyerPlan(B = S.board) {
 }
 const groupBuyer = (g) => buyerPlan().find((b) => g >= b.gFrom && g <= b.gTo) || null;
 
+/** Bought already (ticket photos of the coming draw): 수동 groups matched by their numbers, and the other games
+ *  on the photos (자동) by who uploaded them. Changes must keep these: bought groups stay with their buyer and
+ *  keep their numbers; a buyer keeps at least as many 자동 as their photos have. */
+function boughtNow(B = S.board, plan = buyerPlan(B)) {
+  const m = (B.groups || 0) - sum(plan.map((b) => b.auto));
+  const groups = Array.from({ length: m }, (_, i) => ({ g: i + 1, nums: B.picks.filter((p) => p.grp === i + 1).map((p) => p.num) }));
+  const { bought, extras } = matchBought(groups, realGames(B.round));
+  const autoBy = {};
+  for (const e of extras) if (e.by) autoBy[e.by] = (autoBy[e.by] || 0) + 1;
+  return { bought, extras, autoBy };
+}
+const isBought = (g) => !!boughtNow().bought[g];
+/** Why a new buyer plan can't be (it would change what was bought), or null. */
+function checkBought(list) {
+  const B = S.board, before = buyerPlan(), { bought, autoBy } = boughtNow(B, before);
+  const after = buyerPlan({ ...B, buyers: normBuyers(list, B.groups) });
+  const owner = (plan, g) => plan.find((b) => g >= b.gFrom && g <= b.gTo)?.by ?? null;
+  for (const g of Object.keys(bought).map(Number).sort((a, b) => a - b)) {
+    const by = bought[g].by;   // who bought it: whose photo it is on
+    if (by && owner(before, g) === by && owner(after, g) !== by) return `Group ${g} is already bought (on ${memberName(by)}'s ticket photo): it stays with ${memberName(by)}'s ${LT.manual} tickets.`;
+  }
+  for (const [by, k] of Object.entries(autoBy)) {
+    const had = sum(before.filter((b) => b.by === by).map((b) => b.auto)), keep = Math.min(k, had);
+    if (sum(after.filter((b) => b.by === by).map((b) => b.auto)) < keep) return `${memberName(by)}'s ticket photos already have ${k} ${LT.auto} game${k === 1 ? '' : 's'}: keep at least ${keep} ${LT.auto}.`;
+  }
+  return null;
+}
+
 async function saveBuyers(list) {
-  const B = S.board;
+  const B = S.board, why = checkBought(list);
+  if (why) { toast(why, 'err'); renderBuy(); renderBuyerPanel('board-buyers'); return; }
   B.buyers = normBuyers(list, B.groups);
   renderBuy(true);
   renderBuyerPanel('board-buyers', true);
@@ -2566,7 +2603,8 @@ function buyerCodes(b, bought) {
     else open.push(g);
   }
   const codes = [];
-  for (let i = 0; i < games.length; i += QR_MAX_GAMES) {
+  // only when every 수동 group of this buyer has its 6 numbers (a code made earlier would go stale)
+  if (!open.length) for (let i = 0; i < games.length; i += QR_MAX_GAMES) {
     const part = games.slice(i, i + QR_MAX_GAMES);
     codes.push({ games: part, payload: eslipPayload(part.map((x) => x.nums)) });
   }
@@ -2713,10 +2751,11 @@ function renderBuy(own = false) {
           <span class="fhelp">${b.manual} ${esc(LT.manual)}${b.manual ? ` (groups ${b.gFrom === b.gTo ? b.gFrom : `${b.gFrom}–${b.gTo}`})` : ''} · ${b.auto} ${esc(LT.auto)}</span></div>
           <span class="fhelp">${r.games.length + r.auto} game${r.games.length + r.auto === 1 ? '' : 's'} to buy · ${esc(money((r.games.length + r.auto) * TICKET_PRICE))}</span></div>
         ${r.done.length ? `<p class="buy-done">✓ Already bought: group${r.done.length > 1 ? 's' : ''} ${rangeText(r.done)}</p>` : ''}
-        ${r.open.length ? `<p class="buy-issue">⚠️ Not complete, left out: group${r.open.length > 1 ? 's' : ''} ${rangeText(r.open)}</p>` : ''}
+        ${r.open.length ? `<p class="buy-issue">⏳ The QR code comes when all ${b.manual} ${esc(LT.manual)} groups are complete: ${b.manual - r.open.length} of ${b.manual} ready ·
+          group${r.open.length > 1 ? 's' : ''} ${rangeText(r.open)} still need${r.open.length > 1 ? '' : 's'} numbers (✍️ Picks).</p>` : ''}
         ${r.auto ? `<p class="buy-auto">🎲 + ${r.auto} ${esc(LT.auto)} game${r.auto === 1 ? '' : 's'} (${esc(money(r.auto * TICKET_PRICE))}): ask at the counter for ${r.auto} 자동 (${LANG === 'ko' ? `자동 ${r.auto}게임` : 'random numbers'}).</p>` : ''}
         ${figs ? `<div class="qr-grid">${figs}</div>` : r.auto && !r.open.length && !r.done.length && !r.games.length ? ''
-          : `<p class="fhelp">${r.done.length ? 'Everything in this range is bought. 🎉' : b.manual ? `No QR code yet: none of groups ${b.gFrom}–${b.gTo} has 6 numbers. Pick them in ✍️ Picks.` : 'No 수동 tickets.'}</p>`}
+          : r.open.length ? '' : `<p class="fhelp">${r.done.length ? `All ${esc(LT.manual)} groups are bought. 🎉` : `No ${esc(LT.manual)} tickets.`}</p>`}
       </div>`;
     }).join('');
 }
