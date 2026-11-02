@@ -108,7 +108,7 @@ const LT = {
   auto: { ko: '자동', vi: 'Ngẫu nhiên (자동)' }[LANG] || 'Auto (자동)',
 };
 /** 수동 (we pick the numbers) vs 자동 (the shop picks at random): groups 1…manual are 수동, the rest 자동. */
-const autoN = (B = S.board) => Math.max(0, Math.min(+B.auto || 0, B.groups || 0));
+const autoN = (B = S.board) => sum(buyerPlan(B).map((b) => b.auto));
 const manualN = (B = S.board) => (B.groups || 0) - autoN(B);
 document.addEventListener('DOMContentLoaded', () => document.querySelectorAll('[data-on-input=lang]').forEach((el) => { el.value = LANG; }));
 const fmtShort = (d) => new Date(d + 'T12:00:00Z').toLocaleDateString(LOCALE, { day: '2-digit', month: 'short', year: '2-digit', timeZone: 'UTC' });
@@ -858,12 +858,12 @@ function renderDuty() {
   if (B.missing || B.round !== drawNo(d) || !B.groups || Date.now() >= close) { el.innerHTML = ''; return; }
   const groups = Array.from({ length: manualN(B) }, (_, i) => ({ g: i + 1, nums: groupPicks(i + 1).map((p) => p.num) }));
   const { bought } = matchBought(groups, realGames(B.round));
-  const list = buyerList(), mine = list.filter((b) => b.by === S.me.id);
+  const list = buyerPlan(), mine = list.filter((b) => b.by === S.me.id);
   const when = `sales close Sat ${SALES_CLOSE} KST (in ${countdown(close - Date.now())})`;
   const btn = (t) => `<button class="btn btn-primary btn-sm" data-act="goto-buy">${t}</button>`;
   if (mine.length) {
     const r = mine.map((b) => buyerCodes(b, bought)), games = sum(r.map((x) => x.games.length + x.auto)), open = r.flatMap((x) => x.open);
-    const ranges = mine.map((b) => (b.from === b.to ? b.from : `${b.from}–${b.to}`)).join(', ');
+    const ranges = mine.map((b) => (b.manual ? (b.gFrom === b.gTo ? `${b.gFrom}` : `${b.gFrom}–${b.gTo}`) : '')).filter(Boolean).join(', ') || '—';
     el.innerHTML = games
       ? `<div class="duty todo"><span>🛒 <strong>Your turn to buy</strong>: groups ${ranges} · ${games} game${games > 1 ? 's' : ''} (${esc(money(games * TICKET_PRICE))})
           · ${when}${open.length ? ` · ⚠️ group${open.length > 1 ? 's' : ''} ${rangeText(open)} not complete yet` : ''}</span>${btn('Show my QR codes')}</div>`
@@ -1164,9 +1164,9 @@ function previewWeek() {
   });
   $('wm-total').textContent = money(c.total);
   const g = Math.floor((sum(Object.values(investments)) + pool_used) / TICKET_PRICE), left = (sum(Object.values(investments)) + pool_used) % TICKET_PRICE;
-  const locked = buyersLocked(drawNo($('wm-date').value));
-  $('wm-groups').textContent = locked ? '🔒 The buyers are set for this draw: changing the money here makes new transfers (refunds) in 💰 Money.'
-    : `= ${g} group${g === 1 ? '' : 's'} of 6 in 🔮 Picks${left ? ` (${money(left)} left over)` : ''}`;
+  const paid = roundMoney(drawNo($('wm-date').value))?.doneBuy.length;
+  $('wm-groups').textContent = `= ${g} group${g === 1 ? '' : 's'} of 6 in 🔮 Picks${left ? ` (${money(left)} left over)` : ''}`
+    + (paid ? ' · transfers already done count: 💰 Money shows what changes' : '');
   $('wm-prize-hint').textContent = prize_won > 0 ? money(prize_won) : '';
   const wl = $('wm-win-label'), threshold = S.settings.big_win_threshold;
   if (prize_won > 0 && !_wmShareTouched) _wmShare = prize_won >= threshold;
@@ -2173,6 +2173,7 @@ function renderBoard() {
     return;
   }
   renderGroupsInfo();
+  renderBuyerPanel('board-buyers');
   const members = S.profiles.filter((p) => p.status === 'active');
   $('board-legend').innerHTML = members.map((p) => `<span class="${p.id === S.me.id ? 'me' : ''}"><span class="sw" style="--c:${memberColor(p.id)}"></span>${esc(p.display_name)}${p.id === S.me.id ? ' (you)' : ''}</span>`).join('')
     + `<span><span class="sw" style="--c:${ENGINE_COLOR}"></span>🤖 engine</span>`;
@@ -2232,6 +2233,7 @@ function renderBoard() {
     <div class="board-groups">${groups.map((x) => `<div class="bgroup ${bought[x.g] ? 'bought' : x.full ? 'full' : 'open'}" data-g="${x.g}">
       <div class="bg-hd">
         <span class="bg-title">Group ${x.g}</span>
+        ${groupBuyer(x.g)?.by ? `<span class="bg-buyer" style="--c:${memberColor(groupBuyer(x.g).by)}" title="Bought by" data-no-i18n>🛒 ${esc(memberName(groupBuyer(x.g).by))}</span>` : ''}
         ${bought[x.g] ? boughtBadge(bought[x.g]) : x.full ? '<span class="bg-badge done">✓ Complete</span>' : `<span class="bg-badge todo">${x.nums.length}/6 · ${6 - x.nums.length} to go</span>`}
         <div class="bg-score">${_showScores ? scoreHtml(x) : ''}</div>
       </div>
@@ -2264,14 +2266,13 @@ function weekGroups(round) {
   return w ? Math.floor((sum(Object.values(w.investments || {}).map(Number)) + (+w.pool_used || 0)) / TICKET_PRICE) : null;
 }
 const roundMoney = (round) => S.moneyView?.rounds.find((x) => x.r === round) || null;
-const buyersLocked = (round) => !!roundMoney(round)?.locked;
 
 /** Keep the plan's group count in step with the week entry (not once the buyers are set). */
 let _groupsSynced = '';
 async function syncGroups(round) {
   const n = weekGroups(round) ?? 0;   // no week entry (or it was deleted): no groups
   const cur = round === S.board.round ? S.board.groups : S.money.plans[round]?.groups || 0;
-  if (n === (cur || 0) || buyersLocked(round) || S.board.missing) return;
+  if (n === (cur || 0) || S.board.missing) return;
   const key = `${round}:${n}`;
   if (_groupsSynced === key) return;
   _groupsSynced = key;
@@ -2286,39 +2287,16 @@ function renderGroupsInfo() {
   const B = S.board, w = weekFor(B.round), el = $('board-groups-info');
   if (!el) return;
   const fresh = w ? sum(Object.values(w.investments || {}).map(Number)) : 0, pool = +w?.pool_used || 0;
-  const locked = buyersLocked(B.round), picked = B.picks.filter((p) => p.grp <= (B.groups || 0)).length;
-  const m = manualN(B), a = autoN(B);
-  const mix = B.groups ? `<div class="mix" title="${esc(LT.manual)}: we choose the numbers · ${esc(LT.auto)}: random at the store">
-      <div class="mix-labels"><span>✍️ <strong id="mix-m">${m}</strong> ${esc(LT.manual)} <small>we choose</small></span>
-        <span><small>random at the store</small> ${esc(LT.auto)} <strong id="mix-a">${a}</strong> 🎲</span></div>
-      <input type="range" class="mix-slider" min="0" max="${B.groups}" step="1" value="${m}" data-on-input="board-mix" aria-label="${esc(LT.manual)} groups"
-        style="--p:${B.groups ? (m / B.groups) * 100 : 100}%">
-    </div>` : '';
+  const picked = B.picks.filter((p) => p.grp <= (B.groups || 0)).length;
   el.innerHTML = `<div class="bgi-main">
       <span class="bgi-n">${B.groups || 0}</span>
       <span><strong>group${B.groups === 1 ? '' : 's'} of 6 this week</strong>
         <small>${w ? `${esc(money(fresh + pool))}: fresh ${esc(money(fresh))} + pool ${esc(money(pool))}` : 'no week entry yet'}</small></span>
       <button type="button" class="btn btn-secondary btn-sm" data-act="board-week">${w ? '✏️ Edit the week entry' : '＋ Add the week entry'}</button>
-      ${picked && !locked ? '<button type="button" class="btn btn-ghost btn-sm" data-act="board-clear-all">🧹 Clear all numbers</button>' : ''}
+      ${picked ? '<button type="button" class="btn btn-ghost btn-sm" data-act="board-clear-all">🧹 Clear all numbers</button>' : ''}
     </div>
-    ${mix}
-    ${locked ? `<p class="fhelp">🔒 Buyers are set: the ${roundMoney(B.round).doneBuy.length} transfer${roundMoney(B.round).doneBuy.length === 1 ? '' : 's'} for this draw ${roundMoney(B.round).doneBuy.length === 1 ? 'is' : 'are'} marked done.
-      To change the buyers, undo a transfer in <a href="#money">💰 Money</a> or use 🙈 Forgot to buy in 🛒 Buy.</p>` : ''}
     ${w && (fresh + pool) % TICKET_PRICE ? `<p class="fhelp warn-txt">⚠️ ${esc(money((fresh + pool) % TICKET_PRICE))} of the week's money doesn't make a whole group.</p>` : ''}`;
 }
-/** The 수동 / 자동 slider: shown while dragging, saved when let go. */
-function mixInput(el, e) {
-  const B = S.board, m = +el.value, a = (B.groups || 0) - m;
-  $('mix-m').textContent = m; $('mix-a').textContent = a;
-  el.style.setProperty('--p', `${B.groups ? (m / B.groups) * 100 : 100}%`);
-  if (e.type !== 'change' || a === autoN(B)) return;
-  B.auto = a;
-  renderPicks();
-  S.sb.from('pick_plans').update({ auto: a }).eq('round', B.round).then(({ error }) => {
-    if (error) { fail(/auto/.test(error.message) ? new Error('The database needs an update: run supabase/schema.sql again.') : error); loadBoard().then(renderPicks); }
-  });
-}
-
 function openRoundWeek(round) {
   const w = weekFor(round);
   openWeekModal(w?.id || null, drawDate(round));
@@ -2359,7 +2337,6 @@ async function mathCheck(what) {
 async function clearBoard() {
   const B = S.board, n = B.picks.length;
   if (!n) return;
-  if (buyersLocked(B.round)) return toast('The buyers are set for this draw: the numbers can no longer be cleared.', 'err');
   if (!(await mathCheck(`Clear all ${n} numbers picked for draw #${B.round}?`))) return;
   const { error } = await S.sb.rpc('clear_group_picks', { p_round: B.round });
   if (error) return fail(/clear_group_picks/.test(error.message) ? new Error('The database needs an update: run supabase/schema.sql again.') : error);
@@ -2491,19 +2468,36 @@ function normBuyers(list, m) {
   for (const b of list || []) {
     if (from > m) break;
     const to = Math.max(from, Math.min(m, parseInt(b.to, 10) || m));
-    out.push({ by: b.by || null, from, to, ...(b.forgot ? { forgot: true } : {}) });
+    const auto = Math.max(0, Math.min(to - from + 1, parseInt(b.auto, 10) || 0));
+    out.push({ by: b.by || null, from, to, ...(auto ? { auto } : {}), ...(b.forgot ? { forgot: true } : {}) });
     from = to + 1;
   }
   if (out.length) out[out.length - 1].to = m;
   return out;
 }
 const buyerList = () => normBuyers(S.board.buyers, S.board.groups);
+/**
+ * Each buyer's tickets (from–to over all of the week's games) and how they split: `auto` 자동 (random at the
+ * counter), the rest 수동. The 수동 groups are numbered across the buyers in order: the first buyer's are
+ * groups 1…, the next buyer's follow. Anyone may pick numbers in any group.
+ */
+function buyerPlan(B = S.board) {
+  let g = 0;
+  return normBuyers(B.buyers, B.groups).map((b) => {
+    const n = b.to - b.from + 1, auto = b.auto || 0, manual = n - auto;
+    const r = { ...b, n, auto, manual, gFrom: g + 1, gTo: g + manual };
+    g += manual;
+    return r;
+  });
+}
+const groupBuyer = (g) => buyerPlan().find((b) => g >= b.gFrom && g <= b.gTo) || null;
 
 async function saveBuyers(list) {
   const B = S.board;
-  if (buyersLocked(B.round)) { toast('The buyers are set: every transfer for this draw is done. Use 🙈 Forgot to buy if someone did not buy.', 'err'); return renderBuy(); }
   B.buyers = normBuyers(list, B.groups);
   renderBuy(true);
+  renderBuyerPanel('board-buyers', true);
+  if (S.tab === 'picks' && _picksSec === 'board') renderBoard();
   const { error } = await S.sb.from('pick_plans').update({ buyers: B.buyers }).eq('round', B.round);
   if (error) { fail(error); await loadBoard(); renderBuy(); }
 }
@@ -2550,7 +2544,7 @@ const buyerColor = (b) => (b.by ? memberColor(b.by) : '#64748b');
 const sliderPct = (g, m) => (m > 1 ? ((g - 1) / (m - 1)) * 100 : 100);
 const buyerRangeHtml = (b) => {
   const n = b.to - b.from + 1;
-  return `groups <strong>${b.from === b.to ? b.from : `${b.from}–${b.to}`}</strong> · ${n} group${n > 1 ? 's' : ''} · ${esc(money(n * TICKET_PRICE))}`;
+  return `<strong>${n}</strong> ticket${n === 1 ? '' : 's'} · ${esc(money(n * TICKET_PRICE))}`;
 };
 
 /** While dragging: keep the thumb inside this buyer's part and update its label; saved on release. */
@@ -2564,9 +2558,8 @@ function previewBuyerEnd(el) {
 
 /** The games one buyer takes to the shop: complete groups in their range not bought yet, ≤ 20 per QR code. */
 function buyerCodes(b, bought) {
-  const games = [], open = [], done = [], m = manualN();
-  const auto = Math.max(0, Math.min(b.to, S.board.groups) - Math.max(b.from, m + 1) + 1);   // 자동 games in this range
-  for (let g = b.from; g <= Math.min(b.to, m); g++) {
+  const games = [], open = [], done = [], auto = b.auto || 0;   // b from buyerPlan(): its 수동 groups gFrom–gTo
+  for (let g = b.gFrom; g <= b.gTo; g++) {
     const nums = groupPicks(g).map((p) => p.num);
     if (bought[g]) done.push(g);
     else if (nums.length === 6) games.push({ g, nums });
@@ -2599,7 +2592,7 @@ function openQrFull(codes, i) {
 function drawQrFull() {
   const { codes, i } = _qrFull, c = codes[i];
   $('qrf-code').innerHTML = qrSvg(c.payload);
-  $('qrf-cap').textContent = c.cap;
+  $('qrf-cap').innerHTML = c.who ? `<span class="qrf-who" style="--c:${c.color}" data-no-i18n>🛒 ${esc(c.who)}</span> <span>${esc(c.cap)}</span>` : esc(c.cap);
   $('qrf-pos').textContent = codes.length > 1 ? `${i + 1} / ${codes.length}` : '';
   document.querySelectorAll('#qr-full [data-act=qr-step]').forEach((b) => { b.hidden = codes.length < 2; });
 }
@@ -2615,6 +2608,63 @@ function closeQrFull() { _qrFull = null; $('qr-full').hidden = true; document.bo
 
 let _buyCodes = [];   // what the QR figures on the page show, for the full-screen view
 /** `own`: re-drawn after this member's own edit (otherwise a live update leaves a field being edited alone). */
+/** Who buys how many of the week's tickets (one slider each), and how each one splits them into 수동 / 자동. */
+function renderBuyerPanel(id, own = false) {
+  const el = $(id), B = S.board;
+  if (!el) return;
+  // a live update from someone else leaves a menu being opened or a slider being dragged alone
+  if (!own && el.contains(document.activeElement) && document.activeElement.matches('select, input[type=range]')) return;
+  const list = buyerPlan(), m = B.groups, nobody = list.filter((b) => !b.by);
+  const members = S.profiles.filter((p) => p.status === 'active' || list.some((b) => b.by === p.id));
+  if (!m) { el.innerHTML = ''; return; }
+  el.innerHTML = !list.length
+    ? `<div class="buy-start">
+        <button type="button" class="btn btn-primary" data-act="buy-start">🙋 I buy</button>
+        <span class="fhelp">You get a slider over all ${m} tickets. Slide it down to how many you buy, and the rest goes to a new
+          buyer with their own slider. Each buyer then chooses how many are ${esc(LT.manual)} (our numbers) and ${esc(LT.auto)} (random at the counter).</span>
+      </div>`
+    : `<div class="buy-bar" title="Who buys how many">${list.map((b) => `<div class="buy-seg" style="--c:${buyerColor(b)};flex:${b.n}">
+        <strong>${esc(b.by ? memberName(b.by) : '?')}</strong><span>${b.n}${b.auto ? ` · 🎲${b.auto}` : ''}</span></div>`).join('')}</div>
+      <div class="buy-ticks"><span>1</span><span>${m}</span></div>
+      ${list.map((b, i) => `<div class="buyer-row" style="--c:${buyerColor(b)}">
+        <div class="buyer-head">
+          <span class="buyer-dot"></span>
+          <select class="finp" data-on-input="buy-by" data-i="${i}" aria-label="Who buys">
+            ${b.by ? '' : '<option value="" selected>Choose who…</option>'}
+            ${members.map((p) => `<option value="${esc(p.id)}" ${p.id === b.by ? 'selected' : ''}>${esc(p.display_name)}${p.id === S.me.id ? ' (you)' : ''}</option>`).join('')}
+          </select>
+          <span class="buyer-range">${buyerRangeHtml(b)}</span>
+          <button type="button" class="btn btn-ghost btn-sm" data-act="buy-remove" data-i="${i}" title="Remove this buyer: their tickets go to the buyer above">✕</button>
+        </div>
+        <input type="range" class="buy-slider" min="1" max="${m}" step="1" value="${b.to}" data-on-input="buy-end" data-i="${i}"
+          style="--a:${sliderPct(b.from, m)}%;--b:${sliderPct(b.to, m)}%" aria-label="How many ${esc(b.by ? memberName(b.by) : 'this buyer')} buys"
+          ${b.from === m ? 'disabled' : ''}>
+        <div class="split">
+          <div class="mix-labels"><span>✍️ <strong data-split-m="${i}">${b.manual}</strong> ${esc(LT.manual)}
+            <small data-split-g="${i}">${b.manual ? `groups ${b.gFrom === b.gTo ? b.gFrom : `${b.gFrom}–${b.gTo}`}` : ''}</small></span>
+            <span>${esc(LT.auto)} <strong data-split-a="${i}">${b.auto}</strong> 🎲</span></div>
+          <input type="range" class="mix-slider" min="0" max="${b.n}" step="1" value="${b.manual}" data-on-input="buy-split" data-i="${i}"
+            aria-label="${esc(LT.manual)} tickets of ${esc(b.by ? memberName(b.by) : 'this buyer')}" style="--p:${b.n ? (b.manual / b.n) * 100 : 100}%" ${b.n ? '' : 'disabled'}>
+        </div>
+      </div>`).join('')}
+      <p class="fhelp" style="margin-top:6px">The top slider of each buyer: how many tickets they buy (the rest moves to the next buyer).
+        The second: how many of them are ${esc(LT.manual)}, with our numbers (in the QR code), and ${esc(LT.auto)}, random at the counter.</p>
+      ${nobody.length ? `<p class="buy-issue">⚠️ Choose who buys ${sum(nobody.map((b) => b.n))} of the tickets.</p>` : ''}`;
+}
+/** A buyer's 수동 / 자동 slider: shown while dragging, saved when let go. */
+function splitInput(el, e) {
+  const i = +el.dataset.i, b = buyerPlan()[i];
+  if (!b) return;
+  const man = +el.value, auto = b.n - man;
+  document.querySelectorAll(`[data-split-m="${i}"]`).forEach((x) => { x.textContent = man; });
+  document.querySelectorAll(`[data-split-a="${i}"]`).forEach((x) => { x.textContent = auto; });
+  el.style.setProperty('--p', `${b.n ? (man / b.n) * 100 : 100}%`);
+  if (e.type !== 'change' || auto === b.auto) return;
+  const list = buyerList();
+  if (auto) list[i].auto = auto; else delete list[i].auto;
+  saveBuyers(list);
+}
+
 function renderBuy(own = false) {
   const B = S.board, target = drawNo(currentDraw());
   if (!$('buy-plan')) return;
@@ -2626,50 +2676,10 @@ function renderBuy(own = false) {
     $('buy-qrs').innerHTML = '';
     return;
   }
-  const list = buyerList(), members = S.profiles.filter((p) => p.status === 'active' || list.some((b) => b.by === p.id));
+  const list = buyerPlan();
   const groups = Array.from({ length: manualN(B) }, (_, i) => ({ g: i + 1, nums: groupPicks(i + 1).map((p) => p.num) }));
   const { bought } = matchBought(groups, realGames(B.round));
-  const m = B.groups, nobody = list.filter((b) => !b.by);
-  // a live update from someone else leaves a menu being opened or a slider being dragged alone
-  const editing = !own && $('buy-plan').contains(document.activeElement) && document.activeElement.matches('select, .buy-slider:active');
-  if (buyersLocked(B.round)) {
-    // set: who buys what, read-only, and the way out when someone didn't buy
-    $('buy-plan').innerHTML = `<p class="buy-locked">🔒 Buyers are set: every transfer for this draw is done.</p>
-      <div class="buy-bar">${list.map((b) => `<div class="buy-seg" style="--c:${buyerColor(b)};flex:${b.to - b.from + 1}">
-        <strong>${esc(b.by ? memberName(b.by) : '?')}</strong><span>${b.from === b.to ? b.from : `${b.from}–${b.to}`}</span></div>`).join('')}</div>
-      ${list.map((b, i) => `<div class="buyer-row locked" style="--c:${buyerColor(b)}"><div class="buyer-head"><span class="buyer-dot"></span>
-        <strong>${esc(b.by ? memberName(b.by) : '?')}</strong><span class="buyer-range">${buyerRangeHtml(b)}</span>
-        ${b.by ? `<button type="button" class="btn btn-ghost btn-sm" data-act="buy-forgot" data-round="${B.round}" data-i="${i}">🙈 Forgot to buy</button>` : ''}</div></div>`).join('')}
-      <p class="fhelp">If a buyer forgets, tap 🙈: the draw opens again, so their groups can go to someone else here, or (after the draw) the week entry can be changed to what was really played. 💰 Money works out the refunds.</p>`;
-  } else if (!editing) {
-    $('buy-plan').innerHTML = !list.length
-      ? `<div class="buy-start">
-          <button type="button" class="btn btn-primary" data-act="buy-start">🙋 I buy</button>
-          <span class="fhelp">You get a slider over all ${m} groups. Slide it down to the last group you buy, and the rest goes to a new
-            buyer with their own slider; keep sliding to split further. Usually one or two of us buy each week.</span>
-        </div>`
-      : `<div class="buy-bar" title="Who buys which groups">${list.map((b) => `<div class="buy-seg" style="--c:${buyerColor(b)};flex:${b.to - b.from + 1}">
-          <strong>${esc(b.by ? memberName(b.by) : '?')}</strong><span>${b.from === b.to ? b.from : `${b.from}–${b.to}`}</span></div>`).join('')}</div>
-        <div class="buy-ticks"><span>1</span><span>${m}</span></div>
-        ${list.map((b, i) => `<div class="buyer-row" style="--c:${buyerColor(b)}">
-          <div class="buyer-head">
-            <span class="buyer-dot"></span>
-            <select class="finp" data-on-input="buy-by" data-i="${i}" aria-label="Who buys">
-              ${b.by ? '' : '<option value="" selected>Choose who…</option>'}
-              ${members.map((p) => `<option value="${esc(p.id)}" ${p.id === b.by ? 'selected' : ''}>${esc(p.display_name)}${p.id === S.me.id ? ' (you)' : ''}</option>`).join('')}
-            </select>
-            <span class="buyer-range">${buyerRangeHtml(b)}</span>
-            <button type="button" class="btn btn-ghost btn-sm" data-act="buy-remove" data-i="${i}" title="Remove this buyer: their groups go to the buyer above">✕</button>
-          </div>
-          <input type="range" class="buy-slider" min="1" max="${m}" step="1" value="${b.to}" data-on-input="buy-end" data-i="${i}"
-            style="--a:${sliderPct(b.from, m)}%;--b:${sliderPct(b.to, m)}%" aria-label="Last group ${esc(b.by ? memberName(b.by) : 'this buyer')} buys"
-            ${b.from === m ? 'disabled' : ''}>
-        </div>`).join('')}
-        <p class="fhelp" style="margin-top:6px">Drag a slider to the last group that person buys; the groups after it move to the next buyer
-          (a new one is added when needed). Ranges never overlap.</p>
-        ${nobody.length ? `<p class="buy-issue">⚠️ Choose who buys group${nobody.length > 1 || nobody[0].from !== nobody[0].to ? 's' : ''} ${nobody.map((b) => (b.from === b.to ? b.from : `${b.from}–${b.to}`)).join(', ')}.</p>` : ''}`;
-  }
-
+  renderBuyerPanel('buy-plan', own);
   if (!list.length) { $('buy-qrs').innerHTML = ''; return; }
   if (!window.qrcode) {
     $('buy-qrs').innerHTML = '<div class="card"><p class="fhelp">Making QR codes…</p></div>';
@@ -2685,8 +2695,10 @@ function renderBuy(own = false) {
     + order.map(({ b }) => {
       const r = buyerCodes(b, bought), mine = b.by === S.me.id, who = b.by ? esc(memberName(b.by)) : 'Nobody yet';
       const figs = r.codes.map((c, j) => {
-        const k = _buyCodes.push({ payload: c.payload, cap: `${memberName(b.by)} · QR ${j + 1} of ${r.codes.length} · groups ${rangeText(c.games.map((x) => x.g))} · ${c.games.length} games` }) - 1;
-        return `<figure class="qr-fig">
+        const k = _buyCodes.push({ payload: c.payload, who: b.by ? memberName(b.by) : '?', color: buyerColor(b),
+          cap: `QR ${j + 1} of ${r.codes.length} · groups ${rangeText(c.games.map((x) => x.g))} · ${c.games.length} games` }) - 1;
+        return `<figure class="qr-fig" style="--c:${buyerColor(b)}">
+          <div class="qr-owner" data-no-i18n>🛒 ${esc(b.by ? memberName(b.by) : '?')}</div>
           <button type="button" class="qr-btn" data-act="qr-big" data-k="${k}" title="Show full screen">${qrSvg(c.payload)}</button>
           <figcaption><strong>QR ${j + 1}${r.codes.length > 1 ? ` of ${r.codes.length}` : ''}</strong> · groups ${rangeText(c.games.map((x) => x.g))} · ${c.games.length} game${c.games.length > 1 ? 's' : ''} · ${esc(money(c.games.length * TICKET_PRICE))}</figcaption>
           <details class="qr-details"><summary>Numbers and QR text</summary>
@@ -2696,14 +2708,15 @@ function renderBuy(own = false) {
           </details>
         </figure>`;
       }).join('');
-      return `<div class="card buy-card${mine ? ' mine' : ''}">
-        <div class="card-hd"><div class="card-title">🛒 ${who}${mine ? ' (you)' : ''} · groups ${b.from}–${Math.min(b.to, B.groups)}</div>
+      return `<div class="card buy-card${mine ? ' mine' : ''}" style="--c:${buyerColor(b)}">
+        <div class="card-hd"><div class="card-title"><span class="buyer-name" data-no-i18n>🛒 ${who}</span>${mine ? ' (you)' : ''}
+          <span class="fhelp">${b.manual} ${esc(LT.manual)}${b.manual ? ` (groups ${b.gFrom === b.gTo ? b.gFrom : `${b.gFrom}–${b.gTo}`})` : ''} · ${b.auto} ${esc(LT.auto)}</span></div>
           <span class="fhelp">${r.games.length + r.auto} game${r.games.length + r.auto === 1 ? '' : 's'} to buy · ${esc(money((r.games.length + r.auto) * TICKET_PRICE))}</span></div>
         ${r.done.length ? `<p class="buy-done">✓ Already bought: group${r.done.length > 1 ? 's' : ''} ${rangeText(r.done)}</p>` : ''}
         ${r.open.length ? `<p class="buy-issue">⚠️ Not complete, left out: group${r.open.length > 1 ? 's' : ''} ${rangeText(r.open)}</p>` : ''}
         ${r.auto ? `<p class="buy-auto">🎲 + ${r.auto} ${esc(LT.auto)} game${r.auto === 1 ? '' : 's'} (${esc(money(r.auto * TICKET_PRICE))}): ask at the counter for ${r.auto} 자동 (${LANG === 'ko' ? `자동 ${r.auto}게임` : 'random numbers'}).</p>` : ''}
         ${figs ? `<div class="qr-grid">${figs}</div>` : r.auto && !r.open.length && !r.done.length && !r.games.length ? ''
-          : `<p class="fhelp">${r.done.length ? 'Everything in this range is bought. 🎉' : 'No complete groups in this range yet.'}</p>`}
+          : `<p class="fhelp">${r.done.length ? 'Everything in this range is bought. 🎉' : b.manual ? `No QR code yet: none of groups ${b.gFrom}–${b.gTo} has 6 numbers. Pick them in ✍️ Picks.` : 'No 수동 tickets.'}</p>`}
       </div>`;
     }).join('');
 }
@@ -4074,7 +4087,7 @@ function computeMoney() {
     item.ready = !L.warnings.some((w) => w.k === 'no-week' || w.k === 'no-buyers');
     // …and only when the plan needed transfers at all (old or test marks alone don't set anything)
     const needed = buyLedger({ groups, buyers, fresh: week?.investments, poolUsed: +week?.pool_used || 0, holders: before, done: [] }).open.length;
-    item.locked = item.ready && needed > 0 && !L.open.length && doneBuy.length > 0 && !buyers.some((b) => b.forgot);
+    item.settled = item.ready && needed > 0 && !L.open.length && doneBuy.length > 0;
     // the pool after this draw: what was used leaves its holders, a prize added to the pool stays with its buyers
     for (const [k, v] of Object.entries(L.poolUse)) if (k !== '?') holders[k] = (holders[k] || 0) - v;
     const prize = +week?.prize_won || 0;
@@ -4206,10 +4219,10 @@ function roundCard(it, V) {
   const ready = !L.warnings.some((w) => w.k === 'no-week' || w.k === 'no-buyers');
   const status = !ready ? '<span class="badge bg-gray">⏳ not decided yet</span>'
     : openN ? `<span class="badge bg-red">${openN} transfer${openN === 1 ? '' : 's'} to make</span>`
-      : it.locked ? '<span class="badge qr-win">🔒 all settled · buyers set</span>' : '<span class="badge qr-win">✓ all settled</span>';
+      : '<span class="badge qr-win">✓ all settled</span>';
   const unlinked = [...new Set(Object.keys({ ...L.spend, ...L.net }).filter((k) => String(k).startsWith('m:')))];
-  const canForget = it.locked || it.buyers.some((b) => b.forgot) || resultsOut(it.date);
-  const buyers = it.buyers.map((b, i) => (!b.by ? '' : `<span class="mr-buyer ${b.forgot ? 'forgot' : ''}">${esc(memberName(b.by))} <span class="fhelp">(${b.from === b.to ? `group ${b.from}` : `groups ${b.from}–${b.to}`}, ${esc(money(b.n * TICKET_PRICE))})</span>
+  const canForget = it.settled || it.buyers.some((b) => b.forgot) || resultsOut(it.date);
+  const buyers = it.buyers.map((b, i) => (!b.by ? '' : `<span class="mr-buyer ${b.forgot ? 'forgot' : ''}">${esc(memberName(b.by))} <span class="fhelp">(${b.n} ticket${b.n === 1 ? '' : 's'}: ${b.n - (b.auto || 0)} ${esc(LT.manual)} + ${b.auto || 0} ${esc(LT.auto)}, ${esc(money(b.n * TICKET_PRICE))})</span>
     ${b.forgot ? '<span class="badge bg-red">🙈 forgot</span>' : ''}
     ${canForget ? `<button type="button" class="btn btn-ghost btn-sm" data-act="buy-forgot" data-round="${it.r}" data-i="${i}" data-undo="${b.forgot ? 1 : ''}">${b.forgot ? '↩ They bought after all' : '🙈 Forgot to buy'}</button>` : ''}</span>`)).filter(Boolean).join('');
   const fresh = Object.entries(L.fresh).map(([k, v]) => `${esc(partyName(k))} ${esc(money(v))}`).join(' · ');
@@ -4219,7 +4232,7 @@ function roundCard(it, V) {
     <div class="card-hd"><div class="card-title">🛒 Draw #${it.r} <span class="fhelp">${esc(fmtD(it.date))}</span></div>${status}</div>
     <div class="mr-facts">
       <div><span>Tickets</span><strong>${it.groups} group${it.groups === 1 ? '' : 's'} · ${esc(money(L.cost))}</strong></div>
-      <div><span>Buyers</span><div class="mr-buyers">${buyers || '—'}</div></div>
+      <div><span>Buyers</span><div class="mr-buyers">${buyers || '—'}${it.r === S.board.round ? ' <a href="#picks-buy" class="fhelp">✏️ edit</a>' : ''}</div></div>
       <div><span>Fresh money</span><div>${fresh || '—'}</div></div>
       <div><span>From the pool</span><div>${pool ? `${esc(money(sum(Object.values(L.poolUse))))}: ${pool}` : '—'}</div></div>
     </div>
@@ -4714,6 +4727,7 @@ function renderChat({ keepTop = false, noScroll = false } = {}) {
   list.innerHTML = html || '<div class="chat-empty">No messages yet. Say hello 👋</div>';
   renderPins();
   fitChat();
+  _chatAutoScroll = Date.now();   // scrolling done here doesn't close an open menu
   if (keepTop) list.scrollTop = list.scrollHeight - prevH + prevTop;
   else if (noScroll) list.scrollTop = prevTop;
   else if (!S.chat.gap && (atBottom || !_chatShown)) list.scrollTop = list.scrollHeight;
@@ -4731,6 +4745,7 @@ function fitChat() {
   const top = list.getBoundingClientRect().top + scrollY;
   const keep = list.scrollHeight - list.scrollTop - list.clientHeight < 80;
   list.style.height = `${Math.max(220, (visualViewport?.height || innerHeight) - top - below)}px`;
+  _chatAutoScroll = Date.now();
   if (keep) list.scrollTop = list.scrollHeight;
 }
 addEventListener('resize', fitChat);
@@ -4827,7 +4842,8 @@ document.addEventListener('click', (e) => {
   const pop = $('chat-pop');
   if (pop && !pop.hidden && !e.target.closest('#chat-pop, [data-act=chat-react-open], [data-act=chat-status]')) pop.hidden = true;
 });
-$('chat-list')?.addEventListener('scroll', () => { if (!$('chat-pop').hidden) $('chat-pop').hidden = true; }, { passive: true });
+let _chatAutoScroll = 0;
+$('chat-list')?.addEventListener('scroll', () => { if (!$('chat-pop').hidden && Date.now() - _chatAutoScroll > 300) $('chat-pop').hidden = true; }, { passive: true });
 
 /** Emoji picker: puts the emoji in the message, or reacts with it (from ➕ next to a message). */
 function chatPicker(mode, id = null) {
@@ -5033,7 +5049,7 @@ function renderBell() {
       <span class="bn-ico">💸</span><span class="bn-main"><div class="bn-title">Send ${esc(partyName(t.to))} ${esc(money(t.amount))}</div>
       <div class="bn-body">Draw #${t.round}${t.kind === 'prize' ? ' (shared prize)' : ''}: send it, then tap ✓ Done in 💰 Money</div></span></button>`).join('');
   const dutyHtml = duty ? `<button type="button" class="bn-item ${seen.has(dutyKey) ? '' : 'unread'}" data-act="goto-buy-bell" data-key="${dutyKey}">
-      <span class="bn-ico">🛒</span><span class="bn-main"><div class="bn-title">You buy group${duty.games > 1 ? 's' : ''} ${esc(duty.ranges)} for draw #${duty.round} today</div>
+      <span class="bn-ico">🛒</span><span class="bn-main"><div class="bn-title">You buy ${duty.games} game${duty.games > 1 ? 's' : ''} for draw #${duty.round} today (${duty.manual} ${esc(LT.manual)} + ${duty.auto} ${esc(LT.auto)})</div>
       <div class="bn-body">Sales close at ${SALES_CLOSE} KST: upload the ticket photos once bought</div></span></button>` : '';
   const voteHtml = votes.map((c) => `<button type="button" class="bn-item ${seen.has(`cleanup-${c.round}`) ? '' : 'unread'}" data-act="goto-cleanup" data-key="cleanup-${c.round}">
       <span class="bn-ico">🧹</span><span class="bn-main"><div class="bn-title">Delete the ${c.ticket_ids.length} ticket photos of draw #${c.round}?</div>
@@ -5180,9 +5196,9 @@ function myBuyDuty() {
   if (!S.me || weekday(d) !== 6 || B.round !== drawNo(d) || !B.groups) return null;
   const now = Date.now(), at = kstAt(d, DRAW_TIME).getTime();
   if (now < at - 12 * 3600e3 || now >= kstAt(d, SALES_CLOSE).getTime()) return null;
-  const mine = buyerList().filter((b) => b.by === S.me.id && !b.forgot);
+  const mine = buyerPlan().filter((b) => b.by === S.me.id && !b.forgot);
   if (!mine.length || S.tickets.some((t) => t.uploaded_by === S.me.id && t.draw_date === d)) return null;
-  return { round: B.round, ranges: mine.map((b) => (b.from === b.to ? `${b.from}` : `${b.from}–${b.to}`)).join(', '), games: sum(mine.map((b) => b.to - b.from + 1)) };
+  return { round: B.round, games: sum(mine.map((b) => b.n)), manual: sum(mine.map((b) => b.manual)), auto: sum(mine.map((b) => b.auto)) };
 }
 
 function maybeRemind() {
@@ -5737,7 +5753,6 @@ const ACTIONS = {
 const INPUTS = {
   'im-pay': () => payHint(),
   'pool-amt': () => poolEditSum(),
-  'board-mix': (el, e) => mixInput(el, e),
   'me-tz': (el, e) => { if (e.type === 'change') setTz(el.value); },
   'pool-give-field': (el, e) => {
     if (!_poolGive) return;
@@ -5768,6 +5783,7 @@ const INPUTS = {
     if (el.value === 'custom') $('del-custom').focus();
   },
   'pick-own': (el, e) => { if (e.type === 'change') setPickOwn(el.value); },
+  'buy-split': (el, e) => splitInput(el, e),
   'buy-by': (el, e) => { if (e.type === 'change') setBuyer(+el.dataset.i, el.value); },
   'buy-end': (el, e) => (e.type === 'change' ? setBuyerEnd(+el.dataset.i, +el.value) : previewBuyerEnd(el)),
   // 'chk-file': (el, e) => { if (e.type === 'change') { chkFile(el.files[0]); el.value = ''; } },

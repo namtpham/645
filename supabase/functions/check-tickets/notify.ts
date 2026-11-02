@@ -172,13 +172,13 @@ export function moneyMessage(from: string, to: string, amount: number, round: nu
 }
 
 /** 🛒 Saturday morning (12 hours before the draw): a buyer has no ticket photos for the draw yet. */
-export function buyerMessage(round: number, from: number, to: number, lang: Lang) {
-  const g = from === to ? `${from}` : `${from}–${to}`, n = to - from + 1;
+export function buyerMessage(round: number, manual: number, auto: number, lang: Lang) {
+  const n = manual + auto;
   const t = {
-    en: { title: `🛒 Draw #${round}: you buy group${n > 1 ? 's' : ''} ${g} today`, body: `${n} game${n > 1 ? 's' : ''}, ${money(n * 1000, lang)}. Sales close at 20:00 KST: upload the ticket photos once bought.` },
-    ko: { title: `🛒 제${round}회: 오늘 ${g}번 조합을 사 주세요`, body: `${n}게임, ${money(n * 1000, lang)}. 판매는 20:00에 마감됩니다: 산 뒤 복권 사진을 올려 주세요.` },
-    vi: { title: `🛒 Kỳ #${round}: hôm nay bạn mua bộ ${g}`, body: `${n} vé, ${money(n * 1000, lang)}. Bán đến 20:00 giờ Hàn Quốc: mua xong hãy tải ảnh vé lên.` },
-  }[lang] ?? { title: `🛒 #${round}: ${g}`, body: '' };
+    en: { title: `🛒 Draw #${round}: you buy ${n} game${n > 1 ? 's' : ''} today`, body: `${manual} manual (수동, from the QR code) + ${auto} auto (자동), ${money(n * 1000, lang)}. Sales close at 20:00 KST: upload the ticket photos once bought.` },
+    ko: { title: `🛒 제${round}회: 오늘 ${n}게임을 사 주세요`, body: `수동 ${manual}게임 (QR 코드) + 자동 ${auto}게임, ${money(n * 1000, lang)}. 판매는 20:00에 마감됩니다: 산 뒤 복권 사진을 올려 주세요.` },
+    vi: { title: `🛒 Kỳ #${round}: hôm nay bạn mua ${n} vé`, body: `${manual} tự chọn (수동, theo mã QR) + ${auto} ngẫu nhiên (자동), ${money(n * 1000, lang)}. Bán đến 20:00 giờ Hàn Quốc: mua xong hãy tải ảnh vé lên.` },
+  }[lang] ?? { title: `🛒 #${round}: ${n}`, body: '' };
   return { ...t, tag: `buy-${round}`, url: './#picks-buy' };
 }
 

@@ -90,12 +90,9 @@ with an invitation key from the admin.
     **Who keeps the pool** is set by hand once (🏦 card → Set who keeps it, as of the last
     finished draw; amounts must add up to the pool); after that the app follows the weeks, and it
     warns when the books and the keepers disagree.
-  - **Buyers set:** once every transfer a draw needed is done, its buyers are set (a plan that needs
-    no transfers, e.g. buyers paying with their own money, is never set by old ✓ Done marks) (🛒 Buy is read-only,
-    the numbers can't be cleared). **🙈 Forgot to buy** (in 🛒 Buy or on the draw in 💰 Money)
-    marks a buyer's groups as not bought and opens the draw again: before the draw give them to
-    someone else; after it, change the week entry to what was really played. The refunds are
-    worked out from that (**↩ They bought after all** takes it back).
+  - **🙈 Forgot to buy** (on the draw in 💰 Money) marks a buyer's tickets as not bought: before the
+    draw give them to someone else in 🛒 Buy; after it, change the week entry to what was really
+    played. The refunds are worked out from that (**↩ They bought after all** takes it back).
   - **↔ Hand over pool money:** a keeper hands pool money to someone else (e.g. whoever buys
     next); it is recorded as done and moves the money between keepers.
   - **Done:** after sending, the sender (or the receiver, or an admin) taps **✓ Done**. Done
@@ -158,11 +155,16 @@ with an invitation key from the admin.
   - How many groups of 6 we play comes from the draw's **week entry** (fresh money + pool used,
     ₩1,000 a group); it is read-only here, with **✏️ Edit the week entry** next to it. 🛒 Buy
     follows the same number, and the week entry is where 💰 Money starts.
-  - **✍️ 수동 / 🎲 자동** slider under the count: by default every group is 수동 (manual: we pick the
-    numbers); dragging it moves groups to 자동 (auto: the shop picks them at random). Only the 수동
-    groups are picked here and go into the shop QR codes; in 🛒 Buy each buyer also sees how many
-    자동 games to ask for at the counter. The cost and 💰 Money don't change (column
-    `pick_plans.auto`; the slider always moves, also once the buyers are set). The QR code carries 수동 games only: the slip format we know has no 자동 code.
+  - **Buyers first** (the same panel in ✍️ Picks and in 🛒 Buy): one slider per buyer for how many of
+    the week's tickets they buy (the rest moves to the next buyer), and under it a **✍️ 수동 / 🎲 자동**
+    slider for how many of those are 수동 (our numbers, in their QR code) and 자동 (random at the
+    counter). All 수동 by default. The 수동 groups are numbered across the buyers in order (the first
+    buyer's are groups 1…, the next buyer's follow), each group shows whose ticket it is, and every
+    member can pick numbers in any group. In 🛒 Buy each buyer's card and QR codes carry their name in
+    their colour (also full screen); the card says how many 자동 to ask for at the counter. Buyers,
+    the week's money and the split can change at any time: ✓ Done transfers count as payments and
+    💰 Money shows what is still to send (or to give back). The QR code carries 수동 games only: the
+    slip format we know has no 자동 code.
   - **🧹 Clear all numbers** removes every number of the draw. Deleting the week entry sets the
     groups back to 0.
   - Each group shows 45 round buttons: gray = free, coloured = taken. Every member has their

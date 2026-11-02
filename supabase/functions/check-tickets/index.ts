@@ -520,13 +520,13 @@ async function pushAll(payload: (lang: Lang) => Record<string, unknown>, ttl = 2
 }
 
 /** The buyers' group ranges of a plan, as the app keeps them ([{by, to, forgot}] → from/to). */
-function buyerRanges(buyers: { by?: string | null; to?: number; forgot?: boolean }[], m: number) {
-  const out: { by: string | null; from: number; to: number; forgot: boolean }[] = [];
+function buyerRanges(buyers: { by?: string | null; to?: number; forgot?: boolean; auto?: number }[], m: number) {
+  const out: { by: string | null; from: number; to: number; forgot: boolean; auto: number }[] = [];
   let from = 1;
   for (const b of buyers ?? []) {
     if (from > m) break;
     const to = Math.max(from, Math.min(m, Number(b.to) || m));
-    out.push({ by: b.by ?? null, from, to, forgot: !!b.forgot });
+    out.push({ by: b.by ?? null, from, to, forgot: !!b.forgot, auto: Math.max(0, Math.min(to - from + 1, Number(b.auto) || 0)) });
     from = to + 1;
   }
   if (out.length) out[out.length - 1].to = m;
@@ -554,7 +554,8 @@ async function remindBuyers() {
       const { data: claimed } = await db.from('push_subs').update({ last_buy_remind: round })
         .eq('endpoint', sub.endpoint).or(`last_buy_remind.is.null,last_buy_remind.lt.${round}`).select('endpoint');
       if (!claimed?.length) continue;
-      const r = await sendPush(sub, buyerMessage(round, b.from, b.to, sub.lang as Lang), v, 12 * 3600).catch(() => null);
+      const n = b.to - b.from + 1;
+      const r = await sendPush(sub, buyerMessage(round, n - b.auto, b.auto, sub.lang as Lang), v, 12 * 3600).catch(() => null);
       if (r?.gone) await db.from('push_subs').delete().eq('endpoint', sub.endpoint);
       else if (r?.ok) sent++;
     }
