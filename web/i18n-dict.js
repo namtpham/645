@@ -1209,4 +1209,7 @@ window.I18N_DICT = [
   ['The pool has ₩{0}.', '적립금은 ₩{0}입니다.', 'Quỹ có ₩{0}.'],
   ['Each button adds to the amount', '버튼마다 금액에 더해집니다', 'Mỗi nút cộng thêm vào số tiền'],
   ['All', '전부', 'Tất cả'],
+  ['🔒 Buyers are set: the {0} transfers for this draw are marked done. To change the buyers, undo a transfer in', '🔒 구매자가 확정되었습니다: 이 회차의 송금 {0}건이 완료로 표시되었습니다. 구매자를 바꾸려면 다음에서 송금을 되돌리세요:', '🔒 Đã chốt người mua: {0} chuyển khoản của kỳ này đã đánh dấu xong. Để đổi người mua, hoàn tác một chuyển khoản trong'],
+  ['🔒 Buyers are set: the {0} transfer for this draw is marked done. To change the buyers, undo a transfer in', '🔒 구매자가 확정되었습니다: 이 회차의 송금 {0}건이 완료로 표시되었습니다. 구매자를 바꾸려면 다음에서 송금을 되돌리세요:', '🔒 Đã chốt người mua: {0} chuyển khoản của kỳ này đã đánh dấu xong. Để đổi người mua, hoàn tác một chuyển khoản trong'],
+  ['or use 🙈 Forgot to buy in 🛒 Buy.', '또는 🛒 구매에서 🙈 못 샀어요를 쓰세요.', 'hoặc dùng 🙈 Quên mua trong 🛒 Mua.'],
 ];

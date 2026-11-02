@@ -90,7 +90,8 @@ with an invitation key from the admin.
     **Who keeps the pool** is set by hand once (🏦 card → Set who keeps it, as of the last
     finished draw; amounts must add up to the pool); after that the app follows the weeks, and it
     warns when the books and the keepers disagree.
-  - **Buyers set:** once every transfer of a draw is done, its buyers are set (🛒 Buy is read-only,
+  - **Buyers set:** once every transfer a draw needed is done, its buyers are set (a plan that needs
+    no transfers, e.g. buyers paying with their own money, is never set by old ✓ Done marks) (🛒 Buy is read-only,
     the numbers can't be cleared). **🙈 Forgot to buy** (in 🛒 Buy or on the draw in 💰 Money)
     marks a buyer's groups as not bought and opens the draw again: before the draw give them to
     someone else; after it, change the week entry to what was really played. The refunds are
@@ -161,7 +162,7 @@ with an invitation key from the admin.
     numbers); dragging it moves groups to 자동 (auto: the shop picks them at random). Only the 수동
     groups are picked here and go into the shop QR codes; in 🛒 Buy each buyer also sees how many
     자동 games to ask for at the counter. The cost and 💰 Money don't change (column
-    `pick_plans.auto`). The QR code carries 수동 games only: the slip format we know has no 자동 code.
+    `pick_plans.auto`; the slider always moves, also once the buyers are set). The QR code carries 수동 games only: the slip format we know has no 자동 code.
   - **🧹 Clear all numbers** removes every number of the draw. Deleting the week entry sets the
     groups back to 0.
   - Each group shows 45 round buttons: gray = free, coloured = taken. Every member has their

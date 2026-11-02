@@ -2291,7 +2291,7 @@ function renderGroupsInfo() {
   const mix = B.groups ? `<div class="mix" title="${esc(LT.manual)}: we choose the numbers · ${esc(LT.auto)}: random at the store">
       <div class="mix-labels"><span>✍️ <strong id="mix-m">${m}</strong> ${esc(LT.manual)} <small>we choose</small></span>
         <span><small>random at the store</small> ${esc(LT.auto)} <strong id="mix-a">${a}</strong> 🎲</span></div>
-      <input type="range" class="mix-slider" min="0" max="${B.groups}" step="1" value="${m}" data-on-input="board-mix" aria-label="${esc(LT.manual)} groups" ${locked ? 'disabled' : ''}
+      <input type="range" class="mix-slider" min="0" max="${B.groups}" step="1" value="${m}" data-on-input="board-mix" aria-label="${esc(LT.manual)} groups"
         style="--p:${B.groups ? (m / B.groups) * 100 : 100}%">
     </div>` : '';
   el.innerHTML = `<div class="bgi-main">
@@ -2302,7 +2302,8 @@ function renderGroupsInfo() {
       ${picked && !locked ? '<button type="button" class="btn btn-ghost btn-sm" data-act="board-clear-all">🧹 Clear all numbers</button>' : ''}
     </div>
     ${mix}
-    ${locked ? '<p class="fhelp">🔒 Buyers are set: every transfer for this draw is done (💰 Money).</p>' : ''}
+    ${locked ? `<p class="fhelp">🔒 Buyers are set: the ${roundMoney(B.round).doneBuy.length} transfer${roundMoney(B.round).doneBuy.length === 1 ? '' : 's'} for this draw ${roundMoney(B.round).doneBuy.length === 1 ? 'is' : 'are'} marked done.
+      To change the buyers, undo a transfer in <a href="#money">💰 Money</a> or use 🙈 Forgot to buy in 🛒 Buy.</p>` : ''}
     ${w && (fresh + pool) % TICKET_PRICE ? `<p class="fhelp warn-txt">⚠️ ${esc(money((fresh + pool) % TICKET_PRICE))} of the week's money doesn't make a whole group.</p>` : ''}`;
 }
 /** The 수동 / 자동 slider: shown while dragging, saved when let go. */
@@ -2311,7 +2312,6 @@ function mixInput(el, e) {
   $('mix-m').textContent = m; $('mix-a').textContent = a;
   el.style.setProperty('--p', `${B.groups ? (m / B.groups) * 100 : 100}%`);
   if (e.type !== 'change' || a === autoN(B)) return;
-  if (buyersLocked(B.round)) return renderGroupsInfo();
   B.auto = a;
   renderPicks();
   S.sb.from('pick_plans').update({ auto: a }).eq('round', B.round).then(({ error }) => {
@@ -4072,7 +4072,9 @@ function computeMoney() {
     if (!week) L.warnings.unshift({ k: 'no-week' });
     // the buyers are set once every transfer of the draw is done (until someone 🙈 forgot to buy)
     item.ready = !L.warnings.some((w) => w.k === 'no-week' || w.k === 'no-buyers');
-    item.locked = item.ready && !L.open.length && doneBuy.length > 0 && !buyers.some((b) => b.forgot);
+    // …and only when the plan needed transfers at all (old or test marks alone don't set anything)
+    const needed = buyLedger({ groups, buyers, fresh: week?.investments, poolUsed: +week?.pool_used || 0, holders: before, done: [] }).open.length;
+    item.locked = item.ready && needed > 0 && !L.open.length && doneBuy.length > 0 && !buyers.some((b) => b.forgot);
     // the pool after this draw: what was used leaves its holders, a prize added to the pool stays with its buyers
     for (const [k, v] of Object.entries(L.poolUse)) if (k !== '?') holders[k] = (holders[k] || 0) - v;
     const prize = +week?.prize_won || 0;
