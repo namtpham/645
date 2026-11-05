@@ -509,6 +509,10 @@
         <p class="chart-sub">Are we luckier in odd-numbered draws? Everything we played, split by the draw number. Spent = fresh money + money from the pool.</p>
         <div class="parity"><div id="parity-table"></div><div class="parity-chart"><canvas id="ch-parity"></canvas></div></div>
         <p class="parity-verdict" id="parity-verdict"></p></div>
+      <div class="chart-card wide" id="modes-card"><div class="chart-title">✍️ 수동 vs 🎲 자동</div>
+        <p class="chart-sub">Every game on our ticket photos, by how it was picked (the ticket's QR code says so): numbers we chose (수동) or random at the counter (자동). Prizes before tax.</p>
+        <div class="parity"><div id="modes-table"></div><div class="parity-chart"><canvas id="ch-modes"></canvas></div></div>
+        <p class="parity-verdict" id="modes-verdict"></p></div>
       <div class="chart-card"><div class="chart-title">🏦 Prize pool balance</div>
         <p class="chart-sub">After each draw.</p><canvas id="ch-pool"></canvas></div>
       <div class="chart-card"><div class="chart-title">📅 Month by month</div>
@@ -628,6 +632,7 @@
         <label class="lock-toggle admin-only" style="margin-top:8px"><input type="checkbox" id="push-paused" data-on-input="push-paused"> <span><strong>⏸ Pause phone notifications for everyone</strong><small>Admin: while testing. Chat, the bot and 🔔 in the app keep working.</small></span></label>
         <p class="fhelp" id="push-status"></p>
         <div class="btn-row" style="margin-top:8px">
+          <button class="btn btn-primary btn-sm" data-act="push-here" id="push-here" hidden>🔔 Turn on here</button>
           <button class="btn btn-secondary btn-sm" data-act="push-test" id="push-test" hidden>Send a test</button>
         </div>
       </div>

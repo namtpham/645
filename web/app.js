@@ -3811,6 +3811,68 @@ function parityStats() {
   return { odd, even, pRet, pWin };
 }
 
+// ── ✍️ 수동 vs 🎲 자동: the letter before each game in a ticket's QR code (dhlottery) says how it was picked
+const MODE_OF = { m: 'manual', q: 'auto', s: 'semi' };
+function modeStats() {
+  const seen = new Set(), by = {};
+  for (const t of S.tickets) for (const it of qrItems(t)) {
+    const round = it.round || drawNo(t.draw_date), draw = S.draws[round];
+    if (seen.has(it.url) || !draw) continue;   // each QR code once; only draws whose results are in
+    seen.add(it.url);
+    for (const g of (it.games || []).filter(isGame)) {
+      const k = MODE_OF[g.mode] || 'other', r = gameResult(g, draw);
+      const x = (by[k] ||= { games: 0, matched: 0, hits: 0, won: 0, ranks: {}, estimated: false, draws: new Set(), perRound: {} });
+      const amount = !r.rank ? 0 : FIXED_PRIZE[r.rank] || +draw.prizes?.[r.rank] || 0;
+      if (r.rank && !amount) x.estimated = true;
+      const won = r.rank ? amount || TYPICAL_RANK_PRIZE[r.rank] || 0 : 0;
+      x.games++; x.matched += r.match.length; x.won += won; x.draws.add(round);
+      if (r.rank) { x.hits++; x.ranks[r.rank] = (x.ranks[r.rank] || 0) + 1; }
+      const pr = (x.perRound[round] ||= { games: 0, won: 0 });
+      pr.games++; pr.won += won;
+    }
+  }
+  return by;
+}
+function renderModes(mk) {
+  const by = modeStats(), keys = ['manual', 'auto', 'semi', 'other'].filter((k) => by[k]);
+  const name = { manual: `✍️ ${LT.manual}`, auto: `🎲 ${LT.auto}`, semi: '½ 반자동', other: 'Other' };
+  if (!keys.length) {
+    $('modes-table').innerHTML = '<p class="fhelp">This fills in once ticket photos with QR codes have results.</p>';
+    $('modes-verdict').innerHTML = '';
+    killChart('modes');
+    return;
+  }
+  const per1000 = (x) => money(Math.round((x.won / x.games) * TICKET_PRICE));
+  const col = (f) => keys.map((k) => `<td class="mono">${f(by[k])}</td>`).join('');
+  $('modes-table').innerHTML = `<table>
+    <thead><tr><th></th>${keys.map((k) => `<th>${esc(name[k])}</th>`).join('')}</tr></thead>
+    <tbody>
+      <tr><td>Games</td>${col((x) => x.games)}</tr>
+      <tr><td>Draws</td>${col((x) => x.draws.size)}</tr>
+      <tr><td>Numbers matched per game</td>${col((x) => (x.matched / x.games).toFixed(2))}</tr>
+      <tr><td>Games with a prize</td>${col((x) => `${x.hits} (${((x.hits / x.games) * 100).toFixed(1)}%)`)}</tr>
+      <tr><td>Prizes</td>${col((x) => esc(money(x.won)) + (x.estimated ? ' ≈' : ''))}</tr>
+      <tr><td>Back per ₩1,000</td>${col((x) => esc(per1000(x)))}</tr>
+      <tr><td>Prizes won</td>${col((x) => Object.keys(x.ranks).sort().map((r) => `${x.ranks[r]}× ${esc(LT.rank(+r))}`).join('<br>') || '—')}</tr>
+      <tr class="fhelp"><td>By chance (any way of picking)</td>${keys.map(() => '<td class="mono">0.80 · 2.4% · ₩500</td>').join('')}</tr>
+    </tbody></table>`;
+  // back per ₩1,000 over time, draw by draw (running totals)
+  const rounds = [...new Set(keys.flatMap((k) => Object.keys(by[k].perRound).map(Number)))].sort((a, b) => a - b);
+  const color = { manual: '#f59e0b', auto: '#60a5fa', semi: '#a78bfa', other: '#94a3b8' };
+  const opts = chartOpts({ endLabels: true });
+  opts.aspectRatio = window.innerWidth < 640 ? 1.3 : 1.8;
+  mk('modes', { type: 'line', data: { labels: rounds.map((r) => `#${r}`), datasets: keys.map((k) => {
+    let g = 0, w = 0;
+    return { label: name[k], data: rounds.map((r) => { const p = by[k].perRound[r]; if (p) { g += p.games; w += p.won; } return g ? Math.round((w / g) * TICKET_PRICE) : null; }), ...lineStyle(color[k]), spanGaps: true };
+  }) }, options: opts });
+  const m = by.manual, a = by.auto;
+  $('modes-verdict').innerHTML = m && a
+    ? `So far ${m.games} ${esc(LT.manual)} and ${a.games} ${esc(LT.auto)} games: <strong>${esc(LT.manual)} ${esc(per1000(m))}</strong> and <strong>${esc(LT.auto)} ${esc(per1000(a))}</strong> back per ₩1,000.
+       Every set of 6 numbers has the same chance however it is picked, so the gap is luck. One real difference: our own picks can avoid
+       numbers many people choose, so a big prize is shared with fewer winners.`
+    : `Only ${esc(m ? LT.manual : a ? LT.auto : 'one kind of')} games so far: play both to compare them.`;
+}
+
 function renderParity(mk) {
   const { odd, even, pRet, pWin } = parityStats();
   const per1000 = (x) => money(Math.round(x * TICKET_PRICE));
@@ -3892,6 +3954,7 @@ function renderCharts() {
     datasets: [{ label: 'Draws', data: d.outcomes.map((o) => o.n), ...barStyle(SERIES.invested), maxBarThickness: 44 }] }, options: outOpts });
 
   renderParity(mk);
+  renderModes(mk);
 
   mk('pool', { type: 'line', data: { labels, datasets: [{ label: 'Pool balance', data: S.ledger.history, ...lineStyle(SERIES.pool, true), stepped: true }] },
     options: tl(chartOpts({ legend: false, timeline: true })) });
@@ -4778,17 +4841,34 @@ let _chatShown = false;
 /** The chat fills the screen: messages scroll, the emoji row and the message box stay in view. */
 function fitChat() {
   const list = $('chat-list');
-  if (!list || S.tab !== 'chat') return;
+  if (!list || S.tab !== 'chat') { document.body.style.paddingBottom = ''; return; }
   const below = ['chat-quick', 'chat-picker', 'chat-mentions', 'chat-replying'].reduce((h, id) => h + ($(id).hidden ? 0 : $(id).offsetHeight), 0)
     + document.querySelector('.chat-compose').offsetHeight + 40;
-  const top = list.getBoundingClientRect().top + scrollY;
   const keep = list.scrollHeight - list.scrollTop - list.clientHeight < 80;
-  list.style.height = `${Math.max(220, (visualViewport?.height || innerHeight) - top - below)}px`;
+  const vv = window.visualViewport, vh = vv?.height || innerHeight;
+  // a phone keyboard is up: the chat fills exactly what is left above it (iPhone keeps the page as tall and only
+  // shrinks the visible part, then scrolls it by its own amount, which left a blank gap under the chat)
+  const typing = document.activeElement?.closest?.('.chat-card') && vh < innerHeight - 120;
+  if (typing) {
+    const card = list.closest('.chat-card'), cardTop = card.getBoundingClientRect().top + scrollY;
+    const above = list.getBoundingClientRect().top - card.getBoundingClientRect().top;
+    list.style.height = `${Math.max(120, vh - above - below + 16)}px`;
+    document.body.style.paddingBottom = `${Math.ceil(innerHeight - vh)}px`;   // room to scroll the card up to the top
+    window.scrollTo(0, Math.max(0, cardTop - (vv?.offsetTop || 0) - 4));
+  } else {
+    document.body.style.paddingBottom = '';
+    const top = list.getBoundingClientRect().top + scrollY;
+    list.style.height = `${Math.max(220, vh - top - below)}px`;
+  }
   _chatAutoScroll = Date.now();
   if (keep) list.scrollTop = list.scrollHeight;
 }
-addEventListener('resize', fitChat);
-visualViewport?.addEventListener('resize', fitChat);
+let _fitT = 0;
+const fitChatSoon = () => { cancelAnimationFrame(_fitT); _fitT = requestAnimationFrame(fitChat); };
+addEventListener('resize', fitChatSoon);
+visualViewport?.addEventListener('resize', fitChatSoon);
+// the keyboard opens and closes a moment after the message box gets or loses focus
+for (const ev of ['focusin', 'focusout']) document.addEventListener(ev, (e) => { if (e.target.closest?.('.chat-card')) setTimeout(fitChatSoon, 300); });
 
 function openChat() {
   _chatShown = false;
@@ -5167,17 +5247,25 @@ async function renderPush() {
     return status(isIos() ? 'On iPhone and iPad: first add 645 to the Home Screen (Share → Add to Home Screen), open it from there, then turn notifications on.'
       : 'This browser cannot show notifications.', true);
   }
-  const cur = await devicePush().catch(() => null), row = cur?.row;
-  const mode = !row || row.mode === 'none' ? 'off' : row.mode;
+  const cur = await devicePush().catch(() => null), row = cur?.row, acct = accountPush();
+  // this device has no saved choice (new device, or its push address changed): the account's choice comes back
+  if (!row && acct && wantsPush(acct) && Notification.permission === 'granted' && !_pushHealed) {
+    _pushHealed = true;
+    if (await subscribeHere(acct, true)) return renderPush();
+  }
+  const shown = row || acct;
+  const mode = !shown || shown.mode === 'none' ? 'off' : shown.mode;
   radios.forEach((r) => { r.disabled = false; if (r.type === 'radio') r.checked = r.value === mode; });
-  $('push-remind').checked = !!row?.remind;
-  $('push-tickets').checked = !!row?.tickets;
-  $('push-chat').checked = !!row?.chat;
-  if (row) $('push-mention').checked = row.mention !== false;   // starts ticked (index.html); otherwise as last chosen
+  $('push-remind').checked = !!shown?.remind;
+  $('push-tickets').checked = !!shown?.tickets;
+  $('push-chat').checked = !!shown?.chat;
+  if (shown) $('push-mention').checked = shown.mention !== false;   // starts ticked (index.html); otherwise as last chosen
   $('push-test').hidden = !row;
+  $('push-here').hidden = !!row || !acct || !wantsPush(acct) || Notification.permission === 'denied';
   if (row && row.lang !== LANG) S.sb.from('push_subs').update({ lang: LANG }).eq('endpoint', row.endpoint).then(() => {});
   if (Notification.permission === 'denied') return status('Notifications are blocked for this site: allow them in the browser\'s site settings, then choose again.', true);
-  if (!row) return status('Off on this device. Choose when you want to hear from us.');
+  if (!row) return status(acct && wantsPush(acct) ? 'Your choices are saved on your account (shown above): tap “Turn on here” to use them on this device too.'
+    : 'Off on this device. Choose when you want to hear from us.');
   const extra = [row.remind && 'before the draw', row.tickets && 'new ticket photos', row.chat && 'chat messages', row.mention !== false && 'mentions'].filter(Boolean);
   status(`On: ${PUSH_HELP[row.mode]}${extra.length ? ` Also: ${extra.join(', ')}.` : ''}`);
 }
@@ -5192,6 +5280,7 @@ async function setPushPaused(on) {
 }
 
 async function pushOff(quiet = false) {
+  if (!quiet) saveAccountPush({ mode: 'none' });   // turned off on purpose (signing out only turns this device off)
   const cur = await devicePush().catch(() => null);
   if (cur) {
     await S.sb.from('push_subs').delete().eq('endpoint', cur.sub.endpoint);
@@ -5201,11 +5290,24 @@ async function pushOff(quiet = false) {
 }
 
 /** Save this device's choice; nothing chosen at all turns notifications off here. */
-async function setPushMode() {
-  const want = pushChoice();
-  if (want.mode === 'none' && !want.remind && !want.tickets && !want.chat && !want.mention) return pushOff();
+// The choice is also kept on the account (profiles.prefs.push), so a new device, or one whose push address
+// changed (it then has no saved row), gets it back instead of showing "Off".
+let _pushHealed = false;
+const PUSH_KEYS = ['mode', 'remind', 'tickets', 'chat', 'mention'];
+const accountPush = () => (S.me?.prefs?.push && typeof S.me.prefs.push === 'object' ? S.me.prefs.push : null);
+const wantsPush = (w) => !!w && (w.mode !== 'none' || w.remind || w.tickets || w.chat || w.mention);
+async function saveAccountPush(want) {
+  const push = Object.fromEntries(PUSH_KEYS.map((k) => [k, k === 'mode' ? want.mode || 'none' : !!want[k]]));
+  if (JSON.stringify(push) === JSON.stringify(accountPush()) || !('prefs' in (S.me || {}))) return;
+  const prefs = { ...(S.me.prefs || {}), push };
+  const { error } = await S.sb.from('profiles').update({ prefs }).eq('id', S.me.id);
+  if (!error) S.me.prefs = prefs;
+}
+/** Subscribe this device with a choice; `quiet`: no messages (restoring the account's choice by itself). */
+async function subscribeHere(want, quiet = false) {
   try {
-    if (await Notification.requestPermission() !== 'granted') { toast('Allow notifications when the browser asks, then choose again.', 'err'); return renderPush(); }
+    if (!quiet && await Notification.requestPermission() !== 'granted') { toast('Allow notifications when the browser asks, then choose again.', 'err'); return false; }
+    if (Notification.permission !== 'granted') return false;
     const reg = await navigator.serviceWorker.register('sw.js');
     await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
@@ -5216,15 +5318,24 @@ async function setPushMode() {
     }
     const j = sub.toJSON();
     const { error } = await S.sb.from('push_subs').upsert({
-      endpoint: j.endpoint, p256dh: j.keys.p256dh, auth: j.keys.auth, ...want, lang: LANG,
+      endpoint: j.endpoint, p256dh: j.keys.p256dh, auth: j.keys.auth, ...Object.fromEntries(PUSH_KEYS.map((k) => [k, want[k] ?? (k === 'mode' ? 'none' : false)])), lang: LANG,
       last_round: drawNo(addDays(currentDraw(), -7)),   // start with the next draw, not one already out
     }, { onConflict: 'endpoint' });
     if (error) throw new Error(/push_subs|schema cache/.test(error.message) ? 'The database needs an update: run supabase/schema.sql again.' : error.message);
-    toast(want.mode === 'none' ? 'Notifications saved.' : `Notifications on: ${PUSH_HELP[want.mode]}`, 'ok');
-  } catch (e) { fail(e, 'Could not turn notifications on.'); }
-  renderPush();
+    return true;
+  } catch (e) {
+    if (!quiet) fail(e, 'Could not turn notifications on.');
+    return false;
+  }
 }
 
+async function setPushMode() {
+  const want = pushChoice();
+  if (want.mode === 'none' && !want.remind && !want.tickets && !want.chat && !want.mention) return pushOff();
+  saveAccountPush(want);
+  if (await subscribeHere(want)) toast(want.mode === 'none' ? 'Notifications saved.' : `Notifications on: ${PUSH_HELP[want.mode]}`, 'ok');
+  renderPush();
+}
 // Before Saturday's draw, any member's open app asks the function to send the "starts in x minutes"
 // reminder too (the scheduled run may start late); each device still gets it only once.
 let _remindAsked = 0;
@@ -5634,6 +5745,7 @@ const ACTIONS = {
   'auth-tab': (el) => setAuthTab(el.dataset.tab),
   logout: async () => { await pushOff(true).catch(() => {}); S.sb?.auth.signOut(); },   // the next person on this phone gets no notifications of ours
   'push-test': () => pushTest(),
+  'push-here': async () => { const acct = accountPush(); if (acct && await subscribeHere(acct)) toast('🔔 Notifications are on for this device.', 'ok'); renderPush(); },
   'lock-unlock': () => unlock(),
   'lock-signout': async () => { _lock = null; saveLock(); showLock(false); await pushOff(true).catch(() => {}); S.sb?.auth.signOut(); },
   tab: (el) => goTab(el.dataset.tab),

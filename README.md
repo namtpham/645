@@ -134,6 +134,10 @@ with an invitation key from the admin.
   - **odd vs even draws (회차)**: spent, won, money back per ₩1,000 and how often we win, for
     odd- and even-numbered draws. It also reports how often a gap that big appears when the same
     draws are split into two groups at random, which tells luck from a real pattern.
+  - **✍️ 수동 vs 🎲 자동**: every game on our ticket photos, by how it was picked (the letter before
+    each game in the ticket's QR code: m 수동, q 자동, s 반자동): games, numbers matched per game,
+    games with a prize, prizes (before tax), back per ₩1,000 and the prizes won, with a running
+    "back per ₩1,000" line per kind over the draws, next to what chance gives (0.80 · 2.4% · ₩500).
 - **Picks tab** sections: **✍️ Picks** (our own numbers), **🛒 Buy** (who buys, and QR codes for
   the shop), **🎫 My QR** (below), **🎯 Suggestion** (the engine's ranked sets and
   backtest; a line says which draws they come from, and warns with **↻ Get the latest draw** when
@@ -277,6 +281,8 @@ with an invitation key from the admin.
   its own key pair on first use and keeps the private half in the `push_keys` table.
   **⏸ Pause** (admin, Settings → 🔔 Notifications): no phone notification at all is sent while it
   is on (it is on after the update, for testing); chat, the bot and the 🔔 bell keep working.
+  The choice is also kept on the account: a new device, or one whose push address changed, shows it
+  and restores it by itself (or with **🔔 Turn on here** where the phone needs a tap).
   Two more, each on or off per device: **📺 Before the draw** (Saturday about 20:30 KST: "the
   draw starts in x minutes", time to watch it live; sent by the scheduled workflow at 20:17 and
   20:27 KST and by any member's open app from 20:10, each device once) and **🎟️ New ticket
