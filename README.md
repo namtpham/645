@@ -37,7 +37,9 @@ with an invitation key from the admin.
   Photos are resized to keep QR codes sharp and stamped with the upload time by the
   server. Each one shows **"✓ before draw"** if it was uploaded before 20:35 KST on draw day.
 - **💬 Chat** (tab): every member can write; links open in a new tab. A row of quick emoji sends
-  one with a single tap, and 😊 opens a full emoji picker. Tap ☺ next to a message to react
+  one with a single tap, and 😊 opens a full emoji picker. Typing on a phone, the chat fills exactly
+  the screen above the keyboard (the title and quick emoji step aside until the keyboard closes);
+  tapping Send keeps the keyboard open. Tap ☺ next to a message to react
   (👍 ❤️ 😂 😮 😢 🎉 🍀, or ➕ for any emoji); tap a reaction again to take it back. Authors (and
   admins) can delete a message. Unread messages show a red count on the tab. **⋯** next to a
   message (or a long press on it; right click on a computer) opens the quick reactions and
@@ -69,8 +71,17 @@ with an invitation key from the admin.
   no prize in the week), the bot proposes deleting them, in 💬 Chat and with a phone notification
   to everyone. Members approve in 🎟️ Tickets (or the chat post, or 🔔); once **more than half** of
   the active members approve, the photo files are deleted. The tickets, their QR codes and results
-  stay (the photo shows as 🗑️). Table `photo_cleanups`, function `approve_cleanup()`, column
-  `tickets.photo_deleted_at`; the deleting is done by `check-tickets`.
+  stay (the photo shows as 🗑️). Several draws at once are one question: one 🔔 item, one phone
+  notification and **✓ Approve all**. Each draw's card says who already approved (and that your own
+  approval is saved); when someone approves, the members who haven't voted get a notification
+  naming them. Table `photo_cleanups` (`nudged` = approvals already announced), function
+  `approve_cleanup()`, column `tickets.photo_deleted_at`; the deleting is done by `check-tickets`.
+- **🤖 Prize from the ticket QR codes:** once every QR code of a recent draw (the last 8 weeks) has
+  its result, `check-tickets` writes what they won (after tax) into that draw's week entry, unless a
+  member typed the prize by hand, and posts it in 💬 Chat. The week, the last-draw card and 🔔 show
+  **✓ Confirm** / **✏️ Edit**; nobody confirming or editing it means it stands as the final result.
+  Typing a different prize in the week entry makes it a hand-typed prize, which the checker leaves
+  alone. Columns `weeks.prize_auto`, `prize_hand`, `prize_ok_by`, `prize_ok_at`.
 - **Week entry, pool money:** 5K / 10K / 15K / 20K / +1K / −1K add to the amount used from the pool
   (never more than the pool has); **0** and **All** set it.
 - **A small sum before important changes** (e.g. 7 × 8 = ?, answered on a number pad): saving
@@ -92,7 +103,9 @@ with an invitation key from the admin.
     warns when the books and the keepers disagree.
   - **🙈 Forgot to buy** (on the draw in 💰 Money) marks a buyer's tickets as not bought: before the
     draw give them to someone else in 🛒 Buy; after it, change the week entry to what was really
-    played. The refunds are worked out from that (**↩ They bought after all** takes it back).
+    played. The refunds are worked out from that (**↩ They bought after all** takes it back). A
+    buyer whose uploaded ticket photos already hold all their games shows **✓ bought (photos)**
+    instead of the button.
   - **↔ Hand over pool money:** a keeper hands pool money to someone else (e.g. whoever buys
     next); it is recorded as done and moves the money between keepers.
   - **Done:** after sending, the sender (or the receiver, or an admin) taps **✓ Done**. Done

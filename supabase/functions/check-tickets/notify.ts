@@ -13,6 +13,30 @@ export function prizeTax(gross: number): number {
   return Math.round(Math.min(gross, 300_000_000) * 0.22 + Math.max(0, gross - 300_000_000) * 0.33);
 }
 
+/** What one QR code's prize leaves after tax (the app's qrNet): tax is per winning game, so the total is split
+ *  back into games — 4등/5등 are fixed and tax-free, the rest belongs to the 1등–3등 games. */
+export function qrNetOf(it: { status?: string; prize?: number | null; games?: { nums: number[] }[] }, d: DrawLite | null): number {
+  const gross = Number(it.prize) || 0;
+  if (it.status !== 'win' || gross <= 2_000_000) return gross;
+  const ranks = d ? (it.games ?? []).map((g) => rankOf(g.nums, d)).filter((r) => r > 0) : [];
+  if (!ranks.length) return gross - prizeTax(gross);
+  const big = ranks.filter((r) => r <= 3), rest = gross - ranks.filter((r) => r > 3).reduce((t, r) => t + FIXED[r], 0);
+  if (big.length <= 1) return gross - prizeTax(rest);
+  const own = big.map((r) => Number(d?.prizes?.[String(r)]) || 0);
+  const each = own.every((v) => v > 0) && Math.abs(own.reduce((a, b) => a + b, 0) - rest) < 1000 ? own : big.map(() => rest / big.length);
+  return gross - each.reduce((t, v) => t + prizeTax(v), 0);
+}
+
+/** A week's prize from its ticket QR results (after tax), or null while some result is missing or unclear. */
+export function weekPrize(items: { url: string; status?: string; prize?: number | null; round?: number | null; games?: { nums: number[] }[] }[],
+  drawOf: (round: number) => DrawLite | null, round: number): number | null {
+  const byUrl = new Map(items.map((i) => [i.url, i]));
+  const list = [...byUrl.values()];
+  if (!list.length || list.some((i) => i.status !== 'win' && i.status !== 'lose')) return null;
+  if (list.some((i) => i.status === 'win' && !(Number(i.prize) > 0))) return null;
+  return Math.round(list.filter((i) => i.status === 'win').reduce((t, i) => t + qrNetOf(i, drawOf(i.round ?? round)), 0));
+}
+
 export function rankOf(nums: number[], d: DrawLite): number {
   const k = nums.filter((n) => d.numbers.includes(n)).length, b = nums.includes(d.bonus);
   return k === 6 ? 1 : k === 5 && b ? 2 : k === 5 ? 3 : k === 4 ? 4 : k === 3 ? 5 : 0;
@@ -183,11 +207,22 @@ export function buyerMessage(round: number, manual: number, auto: number, lang: 
 }
 
 /** 🧹 The bot proposes deleting the photos of a draw that won nothing. */
-export function cleanupMessage(round: number, photos: number, lang: Lang) {
+/** 🧹 Delete the photos of draws that won nothing? `approved` names who already said yes (a reminder). */
+export function cleanupMessage(rounds: number[], photos: number, approved: string[], lang: Lang, need = 0) {
+  const r = rounds.map((x) => `#${x}`).join(', '), many = rounds.length > 1, who = approved.join(', ');
   const t = {
-    en: { title: `🧹 Delete ${photos} ticket photo${photos === 1 ? '' : 's'} of draw #${round}?`, body: 'They won nothing. More than half of us need to approve: tap to vote in 645 → Tickets.' },
-    ko: { title: `🧹 제${round}회 복권 사진 ${photos}장을 지울까요?`, body: '당첨되지 않았습니다. 회원 과반수가 찬성해야 합니다: 645 → 복권에서 투표하세요.' },
-    vi: { title: `🧹 Xóa ${photos} ảnh vé của kỳ #${round}?`, body: 'Không trúng gì. Cần hơn một nửa thành viên đồng ý: chạm để bỏ phiếu trong 645 → Vé.' },
-  }[lang] ?? { title: `🧹 #${round}`, body: '' };
-  return { ...t, tag: `cleanup-${round}`, url: './#tickets' };
+    en: { title: `🧹 Delete ${photos} ticket photo${photos === 1 ? '' : 's'} of draw${many ? 's' : ''} ${r}?`,
+      body: approved.length ? `${who} already approved (${need} needed). Your vote? Tap to vote in 645 → Tickets.` : 'They won nothing. More than half of us need to approve: tap to vote in 645 → Tickets.' },
+    ko: { title: `🧹 ${r}회 복권 사진 ${photos}장을 지울까요?`,
+      body: approved.length ? `${who} 님이 이미 찬성했습니다 (${need}명 필요). 투표해 주세요: 645 → 복권.` : '당첨되지 않았습니다. 회원 과반수가 찬성해야 합니다: 645 → 복권에서 투표하세요.' },
+    vi: { title: `🧹 Xóa ${photos} ảnh vé của kỳ ${r}?`,
+      body: approved.length ? `${who} đã đồng ý (cần ${need} người). Bạn bỏ phiếu nhé: 645 → Vé.` : 'Không trúng gì. Cần hơn một nửa thành viên đồng ý: chạm để bỏ phiếu trong 645 → Vé.' },
+  }[lang] ?? { title: `🧹 ${r}`, body: '' };
+  return { ...t, tag: 'cleanup', url: './#tickets' };
+}
+
+/** The chat post when the checker records a week's prize (stored in English; the app shows it in each language). */
+export function prizeAutoText(round: number, prize: number) {
+  return `🤖 Draw #${round}: the ticket QR codes say we won ${money(prize, 'en')} (after tax). I recorded it as the week's prize. ` +
+    'Please check: ✓ confirm it or edit the week. Without changes it stays as the final result.';
 }

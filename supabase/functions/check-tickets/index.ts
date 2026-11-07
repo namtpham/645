@@ -35,7 +35,7 @@
 
 import { createClient } from 'npm:@supabase/supabase-js@2.117.2';
 import { newVapidKeys, sendPush, type Vapid } from './push.ts';
-import { buyerMessage, cleanupMessage, chatMessage, mentionedIds, mentionMessage, mentionText, message, moneyMessage, replyMessage, reminderMessage, resultPost, shouldNotify, summarize, testMessage, ticketsMessage, type Lang, type Mode } from './notify.ts';
+import { buyerMessage, cleanupMessage, prizeAutoText, weekPrize, type DrawLite, chatMessage, mentionedIds, mentionMessage, mentionText, message, moneyMessage, replyMessage, reminderMessage, resultPost, shouldNotify, summarize, testMessage, ticketsMessage, type Lang, type Mode } from './notify.ts';
 
 // The service key is provided to every Edge Function automatically (legacy or new key format).
 function serviceKey(): string | undefined {
@@ -365,7 +365,9 @@ async function handle(req: Request): Promise<Response> {
   let notified: unknown, cleanups: unknown;
   try { notified = await notifyResults(cache); } catch (e) { notified = { error: (e as Error).message }; }
   try { cleanups = await photoCleanups(); } catch (e) { cleanups = { error: (e as Error).message }; }
-  return json({ ok: true, checked, draws: [...cache.values()].filter(Boolean).map((d) => d!.round), history, historyError, updated, notified, cleanups });
+  let prizes: unknown;
+  try { prizes = await autoPrizes(); } catch (e) { prizes = { error: (e as Error).message }; }
+  return json({ ok: true, checked, draws: [...cache.values()].filter(Boolean).map((d) => d!.round), history, historyError, updated, notified, cleanups, prizes });
 }
 
 // ─── Notifications ──────────────────────────────────────────────────────────────
@@ -573,6 +575,7 @@ async function photoCleanups() {
   const weekAgo = new Date(Date.parse(today) - 7 * 864e5).toISOString().slice(0, 10);
   const since = new Date(Date.parse(today) - 70 * 864e5).toISOString().slice(0, 10);
   const proposed: number[] = [], deleted: Record<number, number> = {};
+  let photos = 0;
   // 1. propose: every photo of the draw has QR results, all "no win", and the week records no prize
   const { data: tickets } = await db.from('tickets').select('id, draw_date, qr_data, storage_path, thumb_path, photo_deleted_at')
     .gte('draw_date', since).lte('draw_date', weekAgo);
@@ -591,11 +594,13 @@ async function photoCleanups() {
       { onConflict: 'round', ignoreDuplicates: true }).select('round');
     if (!made?.length) continue;   // proposed before
     proposed.push(round);
+    photos += live.length;
     await db.from('chat_messages').upsert({ author: null, bot: 'cleanup', bot_key: `cleanup-${round}`,
       body: `🧹 The ${live.length} ticket photos of draw #${round} won nothing. Delete them?`, meta: { type: 'cleanup', round, photos: live.length } },
     { onConflict: 'bot_key', ignoreDuplicates: true });
-    await pushAll((lang) => cleanupMessage(round, live.length, lang));
   }
+  // one notification for everything proposed in this run (not one per draw)
+  if (proposed.length) await pushAll((lang) => cleanupMessage(proposed, photos, [], lang));
   // 2. delete what more than half of the active members approved
   const { count: members } = await db.from('profiles').select('id', { count: 'exact', head: true }).eq('status', 'active');
   const { data: open } = await db.from('photo_cleanups').select('*').is('done_at', null);
@@ -617,7 +622,66 @@ async function photoCleanups() {
     { onConflict: 'bot_key', ignoreDuplicates: true });
     deleted[c.round] = gone.length;
   }
-  return { proposed, deleted };
+  // 3. someone approved since the last reminder: tell those who haven't voted yet who already did
+  type Cleanup = { round: number; approvals: string[] | null; ticket_ids: string[] | null; nudged: number | null };
+  const nudge = ((open ?? []) as Cleanup[]).filter((c) => deleted[c.round] === undefined && (c.approvals?.length ?? 0) > (c.nudged ?? 0));
+  let nudged = 0;
+  if (nudge.length && !(await pushPaused())) {
+    const { data: names } = await db.from('profiles').select('id, display_name').eq('status', 'active');
+    const nameOf = new Map(((names ?? []) as { id: string; display_name: string }[]).map((p) => [p.id, p.display_name]));
+    const { data: subs } = await db.from('push_subs').select('*');
+    const v = subs?.length ? await vapid() : null;
+    for (const sub of subs ?? []) {
+      const mine = nudge.filter((c) => !(c.approvals ?? []).includes(sub.member));
+      if (!mine.length) continue;
+      const who = [...new Set(mine.flatMap((c) => c.approvals ?? []))].map((id) => nameOf.get(id) ?? '?');
+      const n = mine.reduce((t, c) => t + (c.ticket_ids?.length ?? 0), 0);
+      const r = await sendPush(sub, cleanupMessage(mine.map((c) => c.round), n, who, sub.lang as Lang, needed(members ?? 0)), v!, 24 * 3600).catch(() => null);
+      if (r?.gone) await db.from('push_subs').delete().eq('endpoint', sub.endpoint);
+      else if (r?.ok) nudged++;
+    }
+  }
+  for (const c of nudge) await db.from('photo_cleanups').update({ nudged: c.approvals?.length ?? 0 }).eq('round', c.round);
+  return { proposed, deleted, nudged };
+}
+const needed = (members: number) => Math.floor(members / 2) + 1;   // more than half
+
+/**
+ * 🤖 The week's prize from the ticket QR results: when nobody typed the prize of a recent week by hand
+ * (prize_hand), the checker records what the QR codes say (after tax), marks it prize_auto and asks the
+ * members to confirm (chat + the app's bell). Nobody confirming or editing it means it stands as final.
+ */
+async function autoPrizes() {
+  const today = new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10);
+  const since = new Date(Date.parse(today) - 56 * 864e5).toISOString().slice(0, 10);
+  const { data: weeks } = await db.from('weeks').select('id, result_date, prize_won, big_win, prize_auto, prize_hand')
+    .gte('result_date', since).eq('prize_hand', false);
+  const filled: Record<number, number> = {};
+  type WeekRow = { id: string; result_date: string; prize_won: number; big_win: boolean; prize_auto: boolean; prize_hand: boolean };
+  const due = ((weeks ?? []) as WeekRow[]).filter((w) => resultsOut(w.result_date));
+  if (!due.length) return { filled };
+  const { data: st } = await db.from('settings').select('big_win_threshold').eq('id', 1).maybeSingle();
+  const threshold = Number(st?.big_win_threshold ?? 100000);
+  for (const w of due) {
+    const { data: tix } = await db.from('tickets').select('qr_data').eq('draw_date', w.result_date);
+    const items = ((tix ?? []) as { qr_data: QrItem[] | null }[]).flatMap((t) => (Array.isArray(t.qr_data) ? t.qr_data : []));
+    if (!items.length) continue;
+    const round = roundOf(w.result_date);
+    const rounds = [...new Set([round, ...items.map((i) => i.round).filter((r): r is number => !!r)])];
+    const { data: draws } = await db.from('draws').select('round, numbers, bonus, prizes').in('round', rounds);
+    const byRound = new Map(((draws ?? []) as DrawLite[]).map((d) => [d.round, d]));
+    const prize = weekPrize(items.map((i) => ({ ...i, games: i.games ?? [] })), (r) => byRound.get(r) ?? null, round);
+    if (prize === null || prize === Math.round(Number(w.prize_won) || 0)) continue;
+    if (!w.prize_auto && !prize) continue;   // nothing won and nothing recorded: nothing to change
+    const { error } = await db.from('weeks').update({ prize_won: prize, big_win: prize > 0 && prize >= threshold, prize_auto: true,
+      prize_ok_at: null, prize_ok_by: null }).eq('id', w.id).eq('prize_hand', false);
+    if (error) continue;
+    filled[round] = prize;
+    if (prize > 0) await db.from('chat_messages').upsert({ author: null, bot: 'prize', bot_key: `prize-${round}-${prize}`,
+      body: prizeAutoText(round, prize), meta: { type: 'prize-auto', round, prize, week: w.id } },
+    { onConflict: 'bot_key', ignoreDuplicates: true });
+  }
+  return { filled };
 }
 
 /** 💰 "Please send B ₩5,000": a member reminds another (who allows personal notifications, like mentions). */

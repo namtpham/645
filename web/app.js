@@ -842,11 +842,34 @@ function renderLastCard() {
     <div class="lc-facts fhelp">${week ? `Invested ${esc(money(sum(Object.values(week.investments || {}))))}${week.pool_used > 0 ? ` + ${esc(money(week.pool_used))} from pool` : ''}` : 'No week entry'}
       · ${tix.length} ticket photo${tix.length === 1 ? '' : 's'}
       ${!week && (tix.length || qs.n) ? ` · <a href="#" data-act="week-add-date" data-date="${d}">add the week</a>` : ''}
-      ${qs.done && week && !qrMatches(qs, week) ? `<div class="red">⚠️ QR results say ${esc(moneyTax(qs.total, qs.net))}, the week records ${esc(money(+week.prize_won || 0))}</div>` : ''}</div>`;
+      ${qs.done && week && !qrMatches(qs, week) ? `<div class="red">⚠️ QR results say ${esc(moneyTax(qs.total, qs.net))}, the week records ${esc(money(+week.prize_won || 0))}${week.prize_hand ? ' (typed by hand)' : ''}</div>` : ''}</div>
+    ${prizeAutoNote(week)}`;
 }
 
 /** A week's recorded prize agrees with its QR results, before or after tax. */
 const qrMatches = (qs, w) => [qs.total, qs.net].some((v) => Math.round(v) === Math.round(+w.prize_won || 0));
+
+/** 🤖 A week whose prize the result checker filled in from the ticket QR codes: not confirmed yet? */
+const prizeToConfirm = (w) => !!w?.prize_auto && !w.prize_ok_at && +w.prize_won > 0;
+/** The checker's note on a week's prize, with ✓ Confirm / ✏️ Edit while nobody has confirmed it. */
+function prizeAutoNote(w) {
+  if (!w?.prize_auto) return '';
+  if (w.prize_ok_at) return `<div class="prize-auto ok">🤖 Prize from the ticket QR codes · ✓ confirmed by ${esc(userName(w.prize_ok_by))}</div>`;
+  return `<div class="prize-auto"><span>🤖 The result checker filled in this prize from the ticket QR codes. Not confirmed yet: it counts as the final result unless someone edits it.</span>
+    <span class="pa-btns"><button type="button" class="btn btn-primary btn-sm" data-act="prize-ok" data-id="${esc(w.id)}">✓ Confirm</button>
+    <button type="button" class="btn btn-ghost btn-sm" data-act="week-edit" data-id="${esc(w.id)}">✏️ Edit</button></span></div>`;
+}
+async function confirmPrize(id) {
+  const w = S.weeks.find((x) => x.id === id);
+  if (!w) return;
+  const { error } = await S.sb.from('weeks').update({ prize_ok_at: new Date().toISOString() }).eq('id', id);
+  if (error) return fail(error);
+  markOweSeen([prizeKey(w)]);
+  toast(`✓ Confirmed: draw #${drawNo(w.result_date)} won ${money(+w.prize_won)}.`, 'ok');
+  await loadAll({ draws: false });
+}
+const prizeKey = (w) => `prize-${w.id}-${Math.round(+w.prize_won || 0)}`;
+const prizesToConfirm = () => S.weeks.filter((w) => prizeToConfirm(w) && Date.now() - kstAt(w.result_date, RESULTS_TIME).getTime() < 21 * 864e5);
 
 const lastDraw = () => S.draws[Math.max(0, ...Object.keys(S.draws).map(Number))] || null;
 
@@ -1016,7 +1039,7 @@ function weekRow(w) {
   if (w.pool_used - (c.used || 0) > 0.005) warns.push(`entered ${money(w.pool_used)} from pool, only ${money(c.used || 0)} available (earlier weeks changed)`);
   const out = outOfPeriod(w);
   if (out.length) warns.push(`outside their dates: ${out.map((i) => i.nickname).join(', ')}`);
-  if (qs.done && !qrMatches(qs, w)) warns.push(`ticket QR results say ${moneyTax(qs.total, qs.net)}, but this week records ${money(+w.prize_won || 0)}`);
+  if (qs.done && !qrMatches(qs, w)) warns.push(`ticket QR results say ${moneyTax(qs.total, qs.net)}, but this week records ${money(+w.prize_won || 0)}${w.prize_hand ? ' (typed by hand)' : ''}`);
   if (qs.problem) warns.push(`${qs.problem} ticket QR result${qs.problem > 1 ? 's need' : ' needs'} checking by hand (Tickets tab)`);
   const n = drawNo(w.result_date);
   return `<div class="week-item">
@@ -1034,6 +1057,7 @@ function weekRow(w) {
       </div>
     </div>
     ${warns.length ? `<div class="wk-warn">${warns.map((x) => `<span>⚠️ ${esc(x)}</span>`).join('')}</div>` : ''}
+    ${prizeAutoNote(w)}
     <div class="week-body ${S.openWeeks.has(w.id) ? 'open' : ''}" id="wb-${esc(w.id)}">
       <div class="flbl mb8">Effective percentages &amp; amounts</div>
       ${pctRows(c.pcts, c.eff) || '<p class="fhelp">No investments recorded.</p>'}
@@ -1041,7 +1065,7 @@ function weekRow(w) {
       ${qs.n ? `<div class="fhelp" style="margin-top:10px">Ticket QR results: ${qs.n} code${qs.n > 1 ? 's' : ''} · ${qs.win} won · ${qs.lose} no win${qs.pending ? ` · ${qs.pending} waiting` : ''} ${qrBadge(qs)}</div>` : ''}
       ${tix.length ? `<div class="thumb-row">${tix.map((t) => thumbImg(t)).join('')}</div>` : ''}
       ${w.notes ? `<div class="week-notes">${esc(w.notes)}</div>` : ''}
-      <div class="fhelp" style="margin-top:10px">Last edited by ${esc(userName(w.updated_by))} · ${esc(fmtKST(w.updated_at))}</div>
+      <div class="fhelp" style="margin-top:10px">Last edited by ${esc(w.updated_by ? userName(w.updated_by) : w.prize_auto ? '🤖 Result checker' : userName(null))} · ${esc(fmtKST(w.updated_at))}</div>
     </div>
   </div>`;
 }
@@ -1201,6 +1225,12 @@ async function saveWeek() {
     big_win: prize_won > 0 && _wmShare,
     notes: $('wm-notes').value.trim(),
   };
+  // a prize typed (or changed) by hand: the result checker leaves it alone from now on
+  const before = id ? S.weeks.find((w) => w.id === id) : null;
+  if ((before || S.weeks[0] || {}).prize_hand !== undefined
+    && (before ? Math.round(prize_won) !== Math.round(+before.prize_won || 0) : prize_won > 0)) {
+    Object.assign(row, { prize_hand: true, prize_auto: false, prize_ok_at: null });
+  }
   if (id && !(await mathCheck(`Save the changes to the week of ${fmtD(result_date)} (draw #${drawNo(result_date)})?`))) return;
   $('wm-save-btn').disabled = true;
   try {
@@ -4019,27 +4049,50 @@ async function loadCleanups() {
 }
 const cleanupNeeds = () => Math.floor(S.profiles.filter((p) => p.status === 'active').length / 2) + 1;   // more than half
 const cleanupsToVote = () => S.cleanups.filter((c) => !c.done_at && !c.approvals.includes(S.me?.id));
-async function voteCleanup(round, yes) {
-  const { error } = await S.sb.rpc('approve_cleanup', { p_round: round, p_yes: yes });
-  if (error) return fail(error);
-  toast(yes ? '✓ Approved.' : 'Your approval is taken back.', 'ok');
+const namesOf = (ids) => ids.map((id) => memberName(id)).join(', ');
+/** Approve (or take back) one draw's clean-up, or several at once (Approve all). Saved before anything else
+ *  redraws: the card and the bell update right away, and the phone's 🧹 notifications are cleared. */
+async function voteCleanup(rounds, yes) {
+  rounds = [].concat(rounds);
+  for (const round of rounds) {
+    const { error } = await S.sb.rpc('approve_cleanup', { p_round: round, p_yes: yes });
+    if (error) { await loadCleanups(); return fail(error); }
+    const c = S.cleanups.find((x) => x.round === round);
+    if (c) c.approvals = [...c.approvals.filter((id) => id !== S.me.id), ...(yes ? [S.me.id] : [])];
+  }
+  renderCleanups();
+  clearSysNotifs('cleanup');
+  toast(yes ? (rounds.length > 1 ? `✓ Approved for ${rounds.length} draws. Saved.` : '✓ Approved. Saved.') : 'Your approval is taken back.', 'ok');
   await loadCleanups();
   if (yes) S.sb.functions.invoke('check-tickets', { body: { cleanup: 'run' }, region: 'ap-northeast-2' })
     .then(() => Promise.all([loadCleanups(), loadAll({ draws: false })])).catch(() => {});
 }
+/** Close this app's notifications on the phone whose tag starts with `prefix` (the question is answered). */
+function clearSysNotifs(prefix) {
+  navigator.serviceWorker?.getRegistration?.().then((r) => r?.getNotifications?.())
+    .then((list) => (list || []).filter((n) => String(n.tag || '').startsWith(prefix)).forEach((n) => n.close())).catch(() => {});
+}
 function cleanupCard(c) {
-  const n = cleanupNeeds(), mine = c.approvals.includes(S.me.id);
-  if (c.done_at) return `<div class="cleanup done">🗑️ The ${c.deleted} photos of draw #${c.round} were deleted (no win; approved by ${c.approvals.map((id) => esc(memberName(id))).join(', ')}). Their results stay.</div>`;
-  return `<div class="cleanup">
+  const n = cleanupNeeds(), mine = c.approvals.includes(S.me.id), left = Math.max(0, n - c.approvals.length);
+  if (c.done_at) return `<div class="cleanup done">🗑️ The ${c.deleted} photos of draw #${c.round} were deleted (no win; approved by ${esc(namesOf(c.approvals))}). Their results stay.</div>`;
+  const others = c.approvals.filter((id) => id !== S.me.id);
+  return `<div class="cleanup ${mine ? 'voted' : ''}">
     <div><strong>🧹 Delete the ${c.ticket_ids.length} ticket photos of draw #${c.round}?</strong>
-      <div class="fhelp">They won nothing. The QR results stay. More than half of the members must approve: ${c.approvals.length} of ${n} needed so far${c.approvals.length ? ` (${c.approvals.map((id) => esc(memberName(id))).join(', ')})` : ''}.</div></div>
+      <div class="fhelp">They won nothing. The QR results stay. More than half of the members must approve (${n}).</div>
+      ${mine ? `<div class="cleanup-st ok">✓ You approved (saved) · waiting for ${left} more</div>`
+        : others.length ? `<div class="cleanup-st">👍 ${esc(namesOf(others))} already approved · ${left} more needed</div>`
+        : '<div class="cleanup-st">Nobody has approved yet</div>'}</div>
     ${mine ? `<button type="button" class="btn btn-ghost btn-sm" data-act="cleanup-vote" data-round="${c.round}" data-no="1">↩ Take back my approval</button>`
       : `<button type="button" class="btn btn-primary btn-sm" data-act="cleanup-vote" data-round="${c.round}">✓ Approve</button>`}
   </div>`;
 }
 function renderCleanups() {
   const el = $('tickets-cleanups');
-  if (el) el.innerHTML = S.cleanups.filter((c) => !c.done_at || Date.now() - new Date(c.done_at) < 7 * 864e5).map(cleanupCard).join('');
+  const votes = cleanupsToVote();
+  if (el) el.innerHTML = (votes.length > 1 ? `<div class="cleanup cleanup-all"><div><strong>🧹 ${votes.length} draws won nothing: delete all their ticket photos?</strong>
+      <div class="fhelp">One tap approves every draw below. The QR results stay.</div></div>
+      <button type="button" class="btn btn-primary btn-sm" data-act="cleanup-vote-all">✓ Approve all (${votes.length})</button></div>` : '')
+    + S.cleanups.filter((c) => !c.done_at || Date.now() - new Date(c.done_at) < 7 * 864e5).map(cleanupCard).join('');
   renderBell();
   if (S.tab === 'chat') renderChat();
 }
@@ -4324,9 +4377,11 @@ function roundCard(it, V) {
       : '<span class="badge qr-win">✓ all settled</span>';
   const unlinked = [...new Set(Object.keys({ ...L.spend, ...L.net }).filter((k) => String(k).startsWith('m:')))];
   const canForget = it.settled || it.buyers.some((b) => b.forgot) || resultsOut(it.date);
+  // a buyer whose uploaded ticket photos hold all their games did buy: no "forgot" button next to them
+  const games = realGames(it.r), photoGames = (by) => games.filter((g) => g.by === by).length;
   const buyers = it.buyers.map((b, i) => (!b.by ? '' : `<span class="mr-buyer ${b.forgot ? 'forgot' : ''}">${esc(memberName(b.by))} <span class="fhelp">(${b.n} ticket${b.n === 1 ? '' : 's'}: ${b.n - (b.auto || 0)} ${esc(LT.manual)} + ${b.auto || 0} ${esc(LT.auto)}, ${esc(money(b.n * TICKET_PRICE))})</span>
-    ${b.forgot ? '<span class="badge bg-red">🙈 forgot</span>' : ''}
-    ${canForget ? `<button type="button" class="btn btn-ghost btn-sm" data-act="buy-forgot" data-round="${it.r}" data-i="${i}" data-undo="${b.forgot ? 1 : ''}">${b.forgot ? '↩ They bought after all' : '🙈 Forgot to buy'}</button>` : ''}</span>`)).filter(Boolean).join('');
+    ${b.forgot ? '<span class="badge bg-red">🙈 forgot</span>' : b.n > 0 && photoGames(b.by) >= b.n ? '<span class="badge qr-win">✓ bought (photos)</span>' : ''}
+    ${canForget && (b.forgot || !(b.n > 0 && photoGames(b.by) >= b.n)) ? `<button type="button" class="btn btn-ghost btn-sm" data-act="buy-forgot" data-round="${it.r}" data-i="${i}" data-undo="${b.forgot ? 1 : ''}">${b.forgot ? '↩ They bought after all' : '🙈 Forgot to buy'}</button>` : ''}</span>`)).filter(Boolean).join('');
   const fresh = Object.entries(L.fresh).map(([k, v]) => `${esc(partyName(k))} ${esc(money(v))}`).join(' · ');
   const pool = Object.entries(L.poolUse).map(([k, v]) => `${esc(partyName(k))} ${esc(money(v))}`).join(' · ');
   const donePrize = it.prize?.done || [];
@@ -4774,6 +4829,11 @@ function botPost(m) {
     const c = S.cleanups.find((x) => x.round === d.round);
     return c ? cleanupCard(c) : esc(m.body);
   }
+  if (d.type === 'prize-auto') {
+    const w = S.weeks.find((x) => x.id === d.week);
+    return `🤖 Draw #${d.round}: the ticket QR codes say we won ${esc(money(+d.prize))} (after tax). I recorded it as the week's prize.`
+      + (w && Math.round(+w.prize_won) === Math.round(+d.prize) ? prizeAutoNote(w) : '');
+  }
   if (d.type === 'cleanup-done') return `🗑️ Deleted the ${d.photos} ticket photos of draw #${d.round} (no win). Their results stay.`;
   if (d.type !== 'result') return esc(m.body);
   const list = Object.keys(d.ranks || {}).map(Number).sort((a, b) => a - b).map((r) => `${d.ranks[r]}× ${LT.rank(r)}`).join(', ');
@@ -4839,26 +4899,30 @@ function renderChat({ keepTop = false, noScroll = false } = {}) {
 let _chatShown = false;
 
 /** The chat fills the screen: messages scroll, the emoji row and the message box stay in view. */
+/** Is someone typing in the chat on a phone (the keyboard is, or is about to be, up)? */
+const chatTyping = () => !!document.activeElement?.closest?.('.chat-card') && document.activeElement.matches('textarea, input')
+  && (matchMedia('(pointer: coarse)').matches || (window.visualViewport?.height || innerHeight) < innerHeight - 120);
+
 function fitChat() {
   const list = $('chat-list');
-  if (!list || S.tab !== 'chat') { document.body.style.paddingBottom = ''; return; }
-  const below = ['chat-quick', 'chat-picker', 'chat-mentions', 'chat-replying'].reduce((h, id) => h + ($(id).hidden ? 0 : $(id).offsetHeight), 0)
-    + document.querySelector('.chat-compose').offsetHeight + 40;
+  const card = list?.closest('.chat-card');
+  if (!list || S.tab !== 'chat') { document.body.classList.remove('chat-typing'); return; }
   const keep = list.scrollHeight - list.scrollTop - list.clientHeight < 80;
-  const vv = window.visualViewport, vh = vv?.height || innerHeight;
-  // a phone keyboard is up: the chat fills exactly what is left above it (iPhone keeps the page as tall and only
-  // shrinks the visible part, then scrolls it by its own amount, which left a blank gap under the chat)
-  const typing = document.activeElement?.closest?.('.chat-card') && vh < innerHeight - 120;
+  const vv = window.visualViewport;
+  // typing on a phone: the chat takes exactly the visible part of the screen above the keyboard (fixed there,
+  // following the keyboard), so nothing is left blank and the messages get all the room
+  const typing = chatTyping();
+  document.body.classList.toggle('chat-typing', typing);
   if (typing) {
-    const card = list.closest('.chat-card'), cardTop = card.getBoundingClientRect().top + scrollY;
-    const above = list.getBoundingClientRect().top - card.getBoundingClientRect().top;
-    list.style.height = `${Math.max(120, vh - above - below + 16)}px`;
-    document.body.style.paddingBottom = `${Math.ceil(innerHeight - vh)}px`;   // room to scroll the card up to the top
-    window.scrollTo(0, Math.max(0, cardTop - (vv?.offsetTop || 0) - 4));
+    card.style.top = `${Math.round(vv?.offsetTop || 0)}px`;
+    card.style.height = `${Math.round(vv?.height || innerHeight)}px`;
+    list.style.height = '';
   } else {
-    document.body.style.paddingBottom = '';
+    card.style.top = card.style.height = '';
+    const below = ['chat-quick', 'chat-picker', 'chat-mentions', 'chat-replying'].reduce((h, id) => h + ($(id).hidden ? 0 : $(id).offsetHeight), 0)
+      + document.querySelector('.chat-compose').offsetHeight + 40;
     const top = list.getBoundingClientRect().top + scrollY;
-    list.style.height = `${Math.max(220, vh - top - below)}px`;
+    list.style.height = `${Math.max(220, (vv?.height || innerHeight) - top - below)}px`;
   }
   _chatAutoScroll = Date.now();
   if (keep) list.scrollTop = list.scrollHeight;
@@ -4867,8 +4931,15 @@ let _fitT = 0;
 const fitChatSoon = () => { cancelAnimationFrame(_fitT); _fitT = requestAnimationFrame(fitChat); };
 addEventListener('resize', fitChatSoon);
 visualViewport?.addEventListener('resize', fitChatSoon);
-// the keyboard opens and closes a moment after the message box gets or loses focus
-for (const ev of ['focusin', 'focusout']) document.addEventListener(ev, (e) => { if (e.target.closest?.('.chat-card')) setTimeout(fitChatSoon, 300); });
+visualViewport?.addEventListener('scroll', fitChatSoon);   // iPhone moves the visible part when the keyboard opens
+// the keyboard opens and closes a moment after the message box gets or loses focus: follow it while it moves
+for (const ev of ['focusin', 'focusout']) document.addEventListener(ev, (e) => {
+  if (!e.target.closest?.('.chat-card')) return;
+  for (const t of [0, 120, 300, 600]) setTimeout(fitChatSoon, t);
+});
+// tapping Send, an emoji or a suggestion keeps the message box focused (the keyboard stays, nothing jumps)
+for (const id of ['chat-send', 'chat-quick', 'chat-mentions']) $(id)?.addEventListener('mousedown', (e) => { if (e.target.closest('button')) e.preventDefault(); });
+document.querySelector('.chat-emoji-btn')?.addEventListener('mousedown', (e) => e.preventDefault());
 
 function openChat() {
   _chatShown = false;
@@ -5150,15 +5221,16 @@ const oweKey = (t) => `${t.round}-${t.kind}-${t.from}-${t.to}-${t.amount}`;
 function oweSeen() { try { return new Set(JSON.parse(localStorage.getItem('645-owe-seen') || '[]')); } catch { return new Set(); } }
 function markOweSeen(keys) {
   const seen = oweSeen(), d = myBuyDuty();
-  const now = new Set([...(S.moneyView?.toSend || []).map(oweKey), ...(d ? [`buy-${d.round}`] : []), ...cleanupsToVote().map((c) => `cleanup-${c.round}`)]);
+  const now = new Set([...(S.moneyView?.toSend || []).map(oweKey), ...(d ? [`buy-${d.round}`] : []), ...cleanupsToVote().map((c) => `cleanup-${c.round}`),
+    ...prizesToConfirm().map(prizeKey)]);
   keys.forEach((k) => seen.add(k));
   try { localStorage.setItem('645-owe-seen', JSON.stringify([...seen].filter((k) => now.has(k)))); } catch { /* private mode */ }
 }
 function renderBell() {
-  const owe = S.moneyView?.toSend || [], seen = oweSeen(), duty = myBuyDuty(), votes = cleanupsToVote();
+  const owe = S.moneyView?.toSend || [], seen = oweSeen(), duty = myBuyDuty(), votes = cleanupsToVote(), prizes = prizesToConfirm();
   const dutyKey = duty ? `buy-${duty.round}` : '';
   const unread = S.notifs.filter((n) => !n.read_at).length + owe.filter((t) => !seen.has(oweKey(t))).length
-    + (duty && !seen.has(dutyKey) ? 1 : 0) + votes.filter((c) => !seen.has(`cleanup-${c.round}`)).length;
+    + (duty && !seen.has(dutyKey) ? 1 : 0) + (votes.some((c) => !seen.has(`cleanup-${c.round}`)) ? 1 : 0) + prizes.filter((w) => !seen.has(prizeKey(w))).length;
   $('bell-badge').hidden = !unread;
   $('bell-badge').textContent = unread > 9 ? '9+' : String(unread);
   $('bell').classList.toggle('on', !$('bell-panel').hidden);
@@ -5170,15 +5242,20 @@ function renderBell() {
   const dutyHtml = duty ? `<button type="button" class="bn-item ${seen.has(dutyKey) ? '' : 'unread'}" data-act="goto-buy-bell" data-key="${dutyKey}">
       <span class="bn-ico">🛒</span><span class="bn-main"><div class="bn-title">You buy ${duty.games} game${duty.games > 1 ? 's' : ''} for draw #${duty.round} today (${duty.manual} ${esc(LT.manual)} + ${duty.auto} ${esc(LT.auto)})</div>
       <div class="bn-body">Sales close at ${SALES_CLOSE} KST: upload the ticket photos once bought</div></span></button>` : '';
-  const voteHtml = votes.map((c) => `<button type="button" class="bn-item ${seen.has(`cleanup-${c.round}`) ? '' : 'unread'}" data-act="goto-cleanup" data-key="cleanup-${c.round}">
-      <span class="bn-ico">🧹</span><span class="bn-main"><div class="bn-title">Delete the ${c.ticket_ids.length} ticket photos of draw #${c.round}?</div>
-      <div class="bn-body">They won nothing · ${c.approvals.length} of ${cleanupNeeds()} needed approve: vote in 🎟️ Tickets</div></span></button>`).join('');
-  $('bell-list').innerHTML = dutyHtml + voteHtml + oweHtml + (S.notifs.length ? S.notifs.map((n) => {
+  // all the draws waiting for my 🧹 vote in one item, naming who already approved
+  const voteKeys = votes.map((c) => `cleanup-${c.round}`), voters = [...new Set(votes.flatMap((c) => c.approvals))];
+  const voteHtml = votes.length ? `<button type="button" class="bn-item ${voteKeys.every((k) => seen.has(k)) ? '' : 'unread'}" data-act="goto-cleanup" data-key="${voteKeys.join(',')}">
+      <span class="bn-ico">🧹</span><span class="bn-main"><div class="bn-title">${votes.length > 1 ? `Delete the ticket photos of ${votes.length} draws (#${votes.map((c) => c.round).join(', #')})?` : `Delete the ${votes[0].ticket_ids.length} ticket photos of draw #${votes[0].round}?`}</div>
+      <div class="bn-body">${voters.length ? `${esc(namesOf(voters))} already approved · your vote in 🎟️ Tickets` : `They won nothing · vote in 🎟️ Tickets`}</div></span></button>` : '';
+  const prizeHtml = prizes.map((w) => `<button type="button" class="bn-item ${seen.has(prizeKey(w)) ? '' : 'unread'}" data-act="goto-prize" data-key="${prizeKey(w)}">
+      <span class="bn-ico">🤖</span><span class="bn-main"><div class="bn-title">Draw #${drawNo(w.result_date)}: the result checker recorded ${esc(money(+w.prize_won))}</div>
+      <div class="bn-body">From the ticket QR codes (after tax): ✓ confirm it or edit the week in 📅 Weeks</div></span></button>`).join('');
+  $('bell-list').innerHTML = dutyHtml + prizeHtml + voteHtml + oweHtml + (S.notifs.length ? S.notifs.map((n) => {
     const t = notifText(n);
     return `<button type="button" class="bn-item ${n.read_at ? '' : 'unread'}" data-act="notif-open" data-id="${n.id}">
       <span class="bn-ico">${t.ico}</span><span class="bn-main"><div class="bn-title">${esc(t.title)}</div>
       ${t.body ? `<div class="bn-body" ${n.kind === 'mention' ? 'data-no-i18n' : ''}>${esc(t.body)}</div>` : ''}<div class="bn-time">${esc(ago(n.created_at))}</div></span></button>`;
-  }).join('') : owe.length || duty || votes.length ? '' : '<div class="bn-empty">No notifications yet. You get one when someone mentions you in 💬 Chat or when we win.</div>');
+  }).join('') : owe.length || duty || votes.length || prizes.length ? '' : '<div class="bn-empty">No notifications yet. You get one when someone mentions you in 💬 Chat or when we win.</div>');
 }
 function toggleBell(open = $('bell-panel').hidden) {
   $('bell-panel').hidden = !open;
@@ -5403,7 +5480,7 @@ async function pushTest() {
 // ─── Activity log ─────────────────────────────────────────────────────────────
 const TABLE_LABEL = { weeks: 'week', investors: 'investor', tickets: 'ticket photo', settings: 'settings', profiles: 'member',
   money_transfers: 'money transfer', pool_holders: 'pool keepers' };
-const SKIP_FIELDS = new Set(['updated_at', 'updated_by', 'created_at', 'created_by', 'id', 'lang', 'prefs']);
+const SKIP_FIELDS = new Set(['updated_at', 'updated_by', 'created_at', 'created_by', 'id', 'lang', 'prefs', 'prize_ok_by', 'prize_hand']);
 /** An edit that changed nothing the group cares about (logged before the database learned to skip these). */
 function quietChange(r) {
   if (r.action !== 'UPDATE') return false;
@@ -5458,6 +5535,10 @@ function describeChange(r) {
           const a = o[k]?.[id] || 0, b = n[k]?.[id] || 0;
           if (a !== b) details.push(`${invName(id)}: ${money(a)} → ${money(b)}`);
         }
+      } else if (k === 'prize_ok_at') {
+        details.push(n[k] ? '✓ confirmed the prize from the ticket QR codes' : 'prize confirmation cleared');
+      } else if (k === 'prize_auto') {
+        details.push(n[k] ? '🤖 prize filled in from the ticket QR codes' : 'prize entered by hand');
       } else if (k === 'big_win') {
         details.push(`prize ${n[k] ? 'shared to investors' : 'added to pool'}`);
       } else if (['pool_used', 'prize_won', 'big_win_threshold'].includes(k)) {
@@ -5474,7 +5555,7 @@ function describeChange(r) {
     details.push(`fresh ${money(sum(Object.values(row.investments || {})))}, from pool ${money(row.pool_used)}, prize ${money(row.prize_won)}`);
   }
   // Changes without a logged-in user come from the result checker (tickets) or database upgrades
-  const auto = r.actor ? null : r.table_name === 'tickets' ? '🤖 Result checker' : '⚙️ System';
+  const auto = r.actor ? null : ['tickets', 'weeks'].includes(r.table_name) ? '🤖 Result checker' : '⚙️ System';
   return { head: `${verb} ${TABLE_LABEL[r.table_name] || r.table_name}`, subject, detail: details.join(' · '), auto };
 }
 
@@ -5797,8 +5878,11 @@ const ACTIONS = {
   'goto-buy': () => { goTab('picks'); setPicksSection('buy'); },
   link: () => {},
   'goto-buy-bell': (el) => { markOweSeen([el.dataset.key]); toggleBell(false); goTab('picks'); setPicksSection('buy'); },
-  'goto-cleanup': (el) => { markOweSeen([el.dataset.key]); toggleBell(false); goTab('tickets'); },
+  'goto-cleanup': (el) => { markOweSeen(el.dataset.key.split(',')); toggleBell(false); goTab('tickets'); },
   'cleanup-vote': (el) => voteCleanup(+el.dataset.round, !el.dataset.no),
+  'goto-prize': (el) => { markOweSeen([el.dataset.key]); toggleBell(false); goTab('weeks'); },
+  'prize-ok': (el, e) => { e?.stopPropagation?.(); confirmPrize(el.dataset.id); },
+  'cleanup-vote-all': () => voteCleanup(cleanupsToVote().map((c) => c.round), true),
   'goto-money': (el) => { if (el.dataset.key) markOweSeen([el.dataset.key]); toggleBell(false); goTab('money'); },
   'money-done': (el) => markTransfer(el),
   'money-undo': (el) => undoTransfer(el.dataset.id),
@@ -5832,7 +5916,7 @@ const ACTIONS = {
   'chat-jump': (el) => { chatSearchToggle(); chatJump(el.dataset.id); },
   'chat-latest': () => { _chatShown = false; loadChat(); },
   bell: () => toggleBell(),
-  'bell-read-all': () => { markOweSeen([...(S.moneyView?.toSend || []).map(oweKey), ...(myBuyDuty() ? [`buy-${myBuyDuty().round}`] : []), ...cleanupsToVote().map((c) => `cleanup-${c.round}`)]); markNotifs(S.notifs.filter((n) => !n.read_at).map((n) => String(n.id))); renderBell(); },
+  'bell-read-all': () => { markOweSeen([...(S.moneyView?.toSend || []).map(oweKey), ...(myBuyDuty() ? [`buy-${myBuyDuty().round}`] : []), ...cleanupsToVote().map((c) => `cleanup-${c.round}`), ...prizesToConfirm().map(prizeKey)]); markNotifs(S.notifs.filter((n) => !n.read_at).map((n) => String(n.id))); renderBell(); },
   'notif-open': (el) => openNotif(el.dataset.id),   // a link: the browser opens it (and the card it sits on doesn't open)
   'update-check': () => checkUpdate({ manual: true }),
   'update-now': () => applyUpdate(),

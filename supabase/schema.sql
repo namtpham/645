@@ -115,6 +115,19 @@ create table if not exists public.weeks (
   updated_by  uuid references public.profiles (id) on delete set null
 );
 create index if not exists weeks_result_date_idx on public.weeks (result_date);
+-- 🤖 The prize from the ticket QR results: check-tickets fills prize_won of a recent week whose prize nobody
+-- typed (prize_hand) and marks it prize_auto; a member confirms it (prize_ok_*) or edits it (prize_hand).
+-- Unconfirmed, it still counts as the final result.
+do $$
+begin
+  if not exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'weeks' and column_name = 'prize_hand') then
+    alter table public.weeks add column prize_hand boolean not null default false;
+    update public.weeks set prize_hand = true where prize_won > 0;   -- prizes typed before this existed stay as they are
+  end if;
+end $$;
+alter table public.weeks add column if not exists prize_auto  boolean not null default false;
+alter table public.weeks add column if not exists prize_ok_by uuid references public.profiles (id) on delete set null;
+alter table public.weeks add column if not exists prize_ok_at timestamptz;
 
 create table if not exists public.tickets (
   id           uuid primary key default gen_random_uuid(),
@@ -332,6 +345,8 @@ create table if not exists public.photo_cleanups (
   done_at    timestamptz,
   deleted    int not null default 0
 );
+-- how many approvals the members who haven't voted were last told about ("Nam already approved…")
+alter table public.photo_cleanups add column if not exists nudged int not null default 0;
 
 create or replace function public.approve_cleanup(p_round int, p_yes boolean default true)
 returns jsonb language plpgsql security definer set search_path = public as $$
@@ -525,6 +540,13 @@ begin
   if tg_table_name = 'weeks' then
     new.updated_at := now();
     new.updated_by := auth.uid();
+    -- ✓ confirming the checker's prize: who confirmed is the member saving it, never a chosen value
+    if new.prize_ok_at is not null and (tg_op = 'INSERT' or new.prize_ok_at is distinct from old.prize_ok_at) then
+      new.prize_ok_at := now();
+      new.prize_ok_by := auth.uid();
+    elsif tg_op = 'UPDATE' and new.prize_ok_at is not distinct from old.prize_ok_at then
+      new.prize_ok_by := old.prize_ok_by;
+    end if;
   end if;
   return new;
 end $$;
